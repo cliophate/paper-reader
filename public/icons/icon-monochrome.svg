@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Paper monochrome mask icon</title>
+  <path fill="currentColor" d="M256 48C329 48 388 107 388 180s-59 132-132 132V145c-36 0-65 31-65 71v248h-67V180c0-73 59-132 132-132Z"/>
+  <path fill="currentColor" d="M222 312h34v152h-34z"/>
+</svg>

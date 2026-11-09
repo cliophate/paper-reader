@@ -1,0 +1,661 @@
+import crypto from 'node:crypto'
+import path from 'node:path'
+import express, { type NextFunction, type Request, type Response } from 'express'
+import { BriefingService } from './briefing.js'
+import { runCodex } from './codex.js'
+import { createChatModel } from './chat-model.js'
+import { DiscussionService, discussionSource } from './discussion.js'
+import { HeadlineService } from './headlines.js'
+import { loadConfig } from './config.js'
+import { PaperDatabase } from './db.js'
+import { FreshRssClient } from './freshrss.js'
+import { KirbyPublisher } from './kirby.js'
+import { PaperRepository, switchingEntrySource } from './repository.js'
+import { requireSameOrigin } from './request-origin.js'
+import { previewFeed } from './feed-repair.js'
+import { ReaderService } from './reader.js'
+import { ReadwiseClient } from './readwise.js'
+import { entryMatchesSearch } from './search.js'
+import { FreshRssSynchronizer } from './sync.js'
+import { escapeHtml } from './text.js'
+import { TopicService } from './topics.js'
+import { PulseService } from './pulse.js'
+import { runOpenCode } from './opencode.js'
+import { streamXMedia } from './x-media.js'
+import { XThreadService } from './x-thread.js'
+import type { Entry } from './types.js'
+import type { StreamKind, StreamRef } from './types.js'
+
+const ENTRY_PAGE_SIZE = 80
+const SEARCH_SCAN_SIZE = 80
+const UNDO_LIFETIME_MS = 20_000
+
+const config = loadConfig()
+logMemory('database opening')
+const database = new PaperDatabase(config.databasePath)
+logMemory('database ready')
+const freshRss = new FreshRssClient(config.freshRss, config.trustedFeedOrigins)
+const repository = new PaperRepository(database)
+const synchronizer = new FreshRssSynchronizer(database, freshRss, config.sync.enabled, config.sync.minutes)
+const readwise = new ReadwiseClient(config.readwise)
+const kirby = new KirbyPublisher(config.kirby)
+const reader = new ReaderService(database, config.readerFallbackEnabled)
+const headlines = new HeadlineService(database, url => reader.fetch(url, 0), (stage, prompt, input, schema) =>
+  runCodex(config.codex, stage === 'write' ? config.headlines.writerModel : config.headlines.reviewerModel,
+    prompt, input, schema, 'medium'), config.headlines.enabled && config.codex.enabled,
+  `${config.headlines.writerModel}:${config.headlines.reviewerModel}`)
+const xThreads = new XThreadService(config.rssHub.baseUrl)
+let localReadsActive = config.sync.localReads && database.getSyncValue('backfill_complete') === 'true'
+const entriesSource = switchingEntrySource(() => localReadsActive, repository, freshRss)
+const pulse = new PulseService(database, (prompt, input, schema) => config.codex.enabled
+  ? runCodex(config.codex, config.collections.model, prompt, input, schema, 'medium')
+  : runOpenCode(config.openCode, `openai/${config.collections.model}`, prompt, input),
+  config.collections.enabled && (config.codex.enabled || config.openCode.enabled))
+const topics = new TopicService(database, entriesSource, () => pulse.list().collections)
+const briefings = new BriefingService(config, database, entriesSource, reader, topics)
+const app = express()
+const discussions = new DiscussionService(database, createChatModel(config.codex.bin, config.codex.discussionModel))
+logMemory('services ready')
+
+synchronizer.onSyncCompleted(() => {
+  localReadsActive = config.sync.localReads && database.getSyncValue('backfill_complete') === 'true'
+  void headlines.run()
+  void pulse.refresh()
+  topics.invalidate()
+  void topics.refresh().catch(error => console.error('Coverage index refresh failed', error))
+})
+synchronizer.start()
+headlines.start()
+logMemory('headlines started')
+pulse.start()
+logMemory('pulse started')
+const memoryTimer = setInterval(() => logMemory('running'), 60_000)
+memoryTimer.unref()
+
+app.disable('x-powered-by')
+app.use(requireSameOrigin(config.publicUrl))
+app.use(express.json({ limit: '2mb' }))
+app.use(express.urlencoded({ extended: false }))
+
+app.get('/health', (_request, response) => response.json({ status: 'ok' }))
+
+// Article discussion has no subscription, read-state or publishing capabilities.
+app.get('/api/discussion', (request, response) => response.json({ discussion: discussions.get(String(request.query.entryId || '')), enabled: config.codex.enabled }))
+app.get('/api/discussion/events', (request, response) => {
+  const id = String(request.query.entryId || '')
+  response.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
+  response.flushHeaders()
+  const send = (discussion: unknown) => response.write(`data: ${JSON.stringify(discussion)}\n\n`)
+  const unsubscribe = discussions.subscribe(id, send)
+  send(discussions.get(id))
+  const timer = setInterval(() => response.write(': keepalive\n\n'), 15000)
+  response.on('close', () => { clearInterval(timer); unsubscribe() })
+})
+app.post('/api/discussion', asyncRoute(async (request, response) => {
+  if (!config.codex.enabled) return response.status(503).json({ error: 'Article discussion needs the Codex connection.' })
+  const entry = database.localEntry(String(request.body?.entryId || ''))
+  if (!entry) return response.status(404).json({ error: 'Article is not available in Paper.' })
+  const full = request.body?.fullText === true ? database.getArticle(entry.url) : null
+  if (request.body?.fullText === true && !full) return response.status(409).json({ error: 'Reload the full article before starting its discussion.' })
+  try {
+    const source = discussionSource(entry.title, entry.author, entry.url, full?.contentHtml || entry.contentHtml, full ? 'fulltext' : 'feed')
+    response.json(discussions.create(entry.id, source))
+  } catch (error) { response.status(400).json({ error: error instanceof Error ? error.message : 'Could not open discussion' }) }
+}))
+app.post('/api/discussion/message', (request, response) => {
+  if (!config.codex.enabled) return response.status(503).json({ error: 'Article discussion is disabled.' })
+  try { response.json(discussions.send(String(request.body?.entryId || ''), String(request.body?.requestId || ''), String(request.body?.question || ''), String(request.body?.quote || ''))) }
+  catch (error) { response.status(409).json({ error: error instanceof Error ? error.message : 'Could not send message' }) }
+})
+app.post('/api/discussion/stop', (request, response) => { discussions.stop(String(request.body?.entryId || '')); response.json({ ok: true }) })
+app.delete('/api/discussion', (request, response) => {
+  try { discussions.remove(String(request.body?.entryId || '')); response.json({ ok: true }) }
+  catch (error) { response.status(409).json({ error: error instanceof Error ? error.message : 'Could not delete discussion' }) }
+})
+
+app.get('/api/status', (_request, response) => response.json({
+  discussionConfigured: config.codex.enabled,
+  rssHubConfigured: Boolean(config.rssHub.baseUrl),
+  readwiseConfigured: readwise.configured,
+  kirbyConfigured: kirby.configured,
+  briefingConfigured: config.codex.enabled || config.openCode.enabled,
+  localReadsConfigured: config.sync.localReads,
+  localReadsActive,
+  sync: synchronizer.status(),
+  storage: database.storageStatus(),
+  muteFilters: database.muteFilters().length,
+  openReports: database.openArticleReportCount(),
+  headlines: headlines.status(),
+}))
+
+app.get('/api/events', (request, response) => {
+  response.status(200)
+  response.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+  })
+  response.flushHeaders()
+  response.write('retry: 3000\n\n')
+
+  const unsubscribe = synchronizer.onSyncCompleted(completedAt => {
+    response.write(`event: sync\ndata: ${JSON.stringify({ completedAt })}\n\n`)
+  })
+  const unsubscribeState = synchronizer.onStateChanged(change => response.write(`event: state\ndata: ${JSON.stringify(change)}\n\n`))
+  const unsubscribePulse = pulse.onUpdated(() => { response.write('event: pulse\ndata: {}\n\n') })
+  const keepAlive = setInterval(() => response.write(': keep-alive\n\n'), 25_000)
+  keepAlive.unref()
+  request.on('close', () => {
+    clearInterval(keepAlive)
+    unsubscribe()
+    unsubscribePulse()
+    unsubscribeState()
+  })
+})
+
+app.get('/api/navigation', asyncRoute(async (_request, response) => {
+  response.json(await entriesSource.navigation())
+}))
+
+app.post('/api/sync', asyncRoute(async (_request, response) => {
+  await synchronizer.syncNow('manual')
+  response.json({ ok: true, sync: synchronizer.status() })
+}))
+
+app.get('/api/sync/parity', asyncRoute(async (_request, response) => {
+  response.json(await synchronizer.parity())
+}))
+
+app.get('/api/sync/history', (request, response) => {
+  response.json(database.syncAudit(Number(request.query.limit) || 100))
+})
+
+app.get('/api/activity', (request, response) => {
+  response.json(database.activity(Number(request.query.limit) || 100))
+})
+
+app.get('/api/filters', (_request, response) => {
+  response.json(database.muteFilters())
+})
+
+app.post('/api/filters', (request, response) => {
+  const phrase = String(request.body?.phrase || '').trim().slice(0, 240)
+  const scope = String(request.body?.scope || 'title')
+  const feedId = String(request.body?.feedId || '').trim()
+  if (phrase.length < 2) return response.status(400).json({ error: 'Enter at least two characters to mute' })
+  if (!['title', 'content', 'any'].includes(scope)) return response.status(400).json({ error: 'Unknown filter scope' })
+  if (feedId && !feedId.startsWith('feed/')) return response.status(400).json({ error: 'Unknown feed' })
+  const filter = database.createMuteFilter(phrase, scope as import('./db.js').MuteFilterScope, feedId)
+  database.recordActivity({ kind: 'filter', origin: 'settings', summary: `Muted "${phrase}"`, count: filter.matchCount, details: { filterId: filter.id, scope, feedId } })
+  response.status(201).json(filter)
+})
+
+app.delete('/api/filters/:id', (request, response) => {
+  const id = String(request.params.id)
+  const filter = database.muteFilters().find(item => item.id === id)
+  if (!filter || !database.deleteMuteFilter(id)) return response.status(404).json({ error: 'Filter not found' })
+  database.recordActivity({ kind: 'filter', origin: 'settings', summary: `Removed mute filter "${filter.phrase}"`, count: filter.matchCount, details: { filterId: id } })
+  response.json({ ok: true })
+})
+
+app.post('/api/filters/preview', (request, response) => {
+  const phrase = String(request.body?.phrase || '').trim().slice(0, 240)
+  const scope = String(request.body?.scope || 'title')
+  if (phrase.length < 2 || !['title', 'content', 'any'].includes(scope)) return response.status(400).json({ error: 'Enter a phrase and choose where to match it.' })
+  response.json(database.previewMuteFilter(phrase, scope as 'title' | 'content' | 'any', String(request.body?.feedId || '')))
+})
+
+app.get('/api/reading', (_request, response) => response.json(database.recentReading()))
+app.post('/api/reading', (request, response) => {
+  const position = Number(request.body?.position)
+  if (!Number.isFinite(position) || position < 0 || position > 1) return response.status(400).json({ error: 'Invalid reading position' })
+  database.saveReadingProgress(String(request.body?.id || ''), position)
+  response.json({ ok: true })
+})
+
+app.get('/api/reports', (request, response) => {
+  response.json(database.articleReports(Number(request.query.limit) || 100))
+})
+
+app.post('/api/reports', asyncRoute(async (request, response) => {
+  const entryId = String(request.body?.entryId || '')
+  const issue = String(request.body?.issue || 'other')
+  const note = String(request.body?.note || '').trim().slice(0, 4000)
+  if (!['content', 'media', 'metadata', 'social', 'other'].includes(issue)) return response.status(400).json({ error: 'Choose a report type' })
+  const entry = database.localEntry(entryId) || await entriesSource.entry(entryId)
+  if (!entry) return response.status(404).json({ error: 'Paper could not find that article' })
+  const rawClient = request.body?.client && typeof request.body.client === 'object' ? request.body.client as Record<string, unknown> : {}
+  const client = {
+    location: String(rawClient.location || '').slice(0, 1000),
+    viewport: String(rawClient.viewport || '').slice(0, 80),
+    userAgent: String(rawClient.userAgent || '').slice(0, 500),
+    theme: String(rawClient.theme || '').slice(0, 80),
+    fullText: Boolean(rawClient.fullText),
+  }
+  const report = database.createArticleReport({ entry, issue: issue as import('./db.js').ArticleReportIssue, note, client })
+  database.recordActivity({ kind: 'report', origin: 'reader', summary: `Reported ${entry.feedTitle}: ${entry.title}`, count: 1, details: { reportId: report.id, entryId, issue } })
+  response.status(201).json(report)
+}))
+
+app.patch('/api/reports/:id', (request, response) => {
+  const id = String(request.params.id)
+  const status = String(request.body?.status || '')
+  if (!['open', 'resolved'].includes(status)) return response.status(400).json({ error: 'Unknown report status' })
+  if (!database.setArticleReportStatus(id, status as 'open' | 'resolved')) return response.status(404).json({ error: 'Report not found' })
+  response.json({ ok: true })
+})
+
+app.get('/api/briefings', (_request, response) => {
+  response.json(database.listBriefings().map(briefingSummary))
+})
+
+app.get('/api/topics', asyncRoute(async (request, response) => {
+  response.json(await topics.list(Number(request.query.hours) || 24))
+}))
+
+// Tabs loaded before the collections update use the hours query and old payload.
+app.get('/api/pulse', asyncRoute(async (request, response) => {
+  response.json(request.query.hours !== undefined ? await topics.list(Number(request.query.hours) || 24) : pulse.list())
+}))
+
+app.post('/api/pulse/visit', (request, response) => {
+  try { response.json(pulse.visit(String(request.body?.collectionId || ''), Number(request.body?.sequence))) }
+  catch (error) { response.status(400).json({ error: error instanceof Error ? error.message : 'Could not save visit' }) }
+})
+
+app.post('/api/pulse/feedback', asyncRoute(async (request, response) => {
+  const action = String(request.body?.action || '')
+  const clusterId = String(request.body?.clusterId || '')
+  const entryId = String(request.body?.entryId || '')
+  const targetClusterId = String(request.body?.targetClusterId || '')
+  if (!['not_same', 'not_useful', 'merge'].includes(action)) return response.status(400).json({ error: 'Unknown Pulse feedback' })
+  if (!clusterId) return response.status(400).json({ error: 'Choose a Pulse cluster' })
+  try {
+    const input = { action: action as import('./db.js').CoverageFeedbackAction, clusterId, entryId, targetClusterId }
+    response.status(201).json(clusterId.startsWith('collection-') ? pulse.feedback(input) : await topics.feedback(input))
+  }
+  catch (error) { response.status(400).json({ error: error instanceof Error ? error.message : 'Could not save correction' }) }
+}))
+
+app.delete('/api/pulse/feedback/:id', (request, response) => {
+  if (!pulse.removeFeedback(String(request.params.id))) return response.status(404).json({ error: 'Pulse feedback not found' })
+  response.json({ ok: true })
+})
+
+app.get('/api/briefings/:id', (request, response) => {
+  const briefing = database.getBriefing(String(request.params.id))
+  if (!briefing) return response.status(404).json({ error: 'Briefing not found' })
+  response.json({ ...briefingSummary(briefing), html: briefing.html, text: briefing.text })
+})
+
+app.post('/api/briefings/:id/feedback', (request, response) => {
+  const id = String(request.params.id)
+  if (!database.getBriefing(id)) return response.status(404).json({ error: 'Briefing not found' })
+  const feedback = String(request.body?.feedback || '')
+  if (!['useful', 'too_broad', 'missed'].includes(feedback)) return response.status(400).json({ error: 'Unknown briefing feedback' })
+  database.setBriefingFeedback(id, feedback as import('./db.js').BriefingFeedback)
+  response.json({ ok: true, feedback })
+})
+
+app.post('/api/streams/order', (request, response) => {
+  const input = request.body?.stream
+  if (!input || !['all', 'starred', 'feed', 'category'].includes(input.kind) || typeof input.id !== 'string' || !input.id || input.id.length > 512) return response.status(400).json({ error: 'Choose a feed or folder' })
+  const order = request.body?.order
+  if (!['newest', 'oldest'].includes(order)) return response.status(400).json({ error: 'Unknown article order' })
+  if (!localReadsActive) return response.status(409).json({ error: 'Article ordering needs the local Paper index' })
+  database.setStreamOrder(parseStreamBody(input), order)
+  response.json({ ok: true, order })
+})
+
+app.get('/api/entries', asyncRoute(async (request, response) => {
+  const stream = parseStream(request)
+  const unreadOnly = (stream.kind !== 'starred' || Boolean(request.query.q)) && request.query.unread !== '0'
+  const query = String(request.query.q || '').trim().toLowerCase()
+  let continuation = String(request.query.continuation || '')
+  if (!localReadsActive && (request.query.after || request.query.before)) return response.status(409).json({ error: 'Date filters need the local Paper index.' })
+  if (localReadsActive) {
+    const order = database.streamOrder(stream)
+    // Scope continuation tokens to their order, including changes from another device.
+    if (continuation) {
+      const prefix = `${order}|`
+      if (!continuation.startsWith(prefix)) return response.status(409).json({ error: 'Article order changed. Refresh this list to continue.' })
+      continuation = continuation.slice(prefix.length)
+    }
+    const page = await repository.entriesPage(stream, {
+      unreadOnly,
+      limit: ENTRY_PAGE_SIZE,
+      continuation,
+      query,
+      after: String(request.query.after || ''),
+      before: String(request.query.before || ''),
+    })
+    return response.json({ ...headlines.page(page), order, continuation: page.continuation ? `${order}|${page.continuation}` : '' })
+  }
+  if (!query) {
+    const page = await freshRss.entriesPage(stream, { unreadOnly, limit: ENTRY_PAGE_SIZE, continuation })
+    return response.json(headlines.page(page))
+  }
+
+  const items: Entry[] = []
+  const seenContinuations = new Set<string>()
+  while (items.length < ENTRY_PAGE_SIZE) {
+    const page = await freshRss.entriesPage(stream, { unreadOnly, limit: SEARCH_SCAN_SIZE, continuation })
+    items.push(...page.items.filter(entry => entryMatchesSearch(entry, query)))
+    if (!page.continuation || page.continuation === continuation || seenContinuations.has(page.continuation)) {
+      continuation = ''
+      break
+    }
+    seenContinuations.add(page.continuation)
+    continuation = page.continuation
+  }
+  response.json(headlines.page({ items, continuation }))
+}))
+
+app.post('/api/entries/item', asyncRoute(async (request, response) => {
+  const entry = await entriesSource.entry(String(request.body?.id || ''))
+  if (!entry) return response.status(404).json({ error: 'FreshRSS could not find this article' })
+  response.json({ entry: headlines.decorate(entry) })
+}))
+
+app.post('/api/entries/state', asyncRoute(async (request, response) => {
+  const ids = stringArray(request.body?.ids).slice(0, 1000)
+  const operation = String(request.body?.operation || '')
+  if (!['read', 'unread', 'star', 'unstar'].includes(operation)) return response.status(400).json({ error: 'Unknown state operation' })
+  const origin = ['reader', 'pulse', 'automatic'].includes(String(request.body?.origin)) ? String(request.body.origin) : 'reader'
+  await synchronizer.editEntries(ids, operation as 'read' | 'unread' | 'star' | 'unstar', origin)
+  response.json({ ok: true })
+}))
+
+const bulkPreviews = new Map<string, { ids: string[]; expires: number }>()
+app.post('/api/streams/preview-read', asyncRoute(async (request, response) => {
+  const input = request.body || {}
+  const stream = parseStreamBody(input.stream)
+  if (!localReadsActive && (input.query || input.after || input.before)) return response.status(409).json({ error: 'Search actions need the local Paper index.' })
+  const ids = localReadsActive ? database.matchingEntryIds(stream, { unreadOnly: true, query: String(input.query || ''), after: String(input.after || ''), before: String(input.before || '') }) : await freshRss.entryIds(stream, true)
+  for (const [key, preview] of bulkPreviews) if (preview.expires < Date.now()) bulkPreviews.delete(key)
+  const token = crypto.randomUUID()
+  bulkPreviews.set(token, { ids, expires: Date.now() + 60000 })
+  response.json({ token, count: ids.length })
+}))
+app.post('/api/streams/confirm-read', asyncRoute(async (request, response) => {
+  const token = String(request.body?.token || '')
+  const preview = bulkPreviews.get(token)
+  if (!preview || preview.expires < Date.now()) return response.status(409).json({ error: 'The preview expired. Check the count again.' })
+  bulkPreviews.delete(token)
+  const ids = localReadsActive ? preview.ids.filter(id => database.localEntry(id)?.read === false) : preview.ids
+  await synchronizer.editEntries(ids, 'read', 'stream')
+  const undoToken = crypto.randomBytes(24).toString('base64url')
+  database.createUndo({ token: undoToken, operation: 'unread', entryIds: ids, expiresAt: new Date(Date.now() + UNDO_LIFETIME_MS).toISOString() })
+  response.json({ count: ids.length, undoToken })
+}))
+
+app.post('/api/streams/mark-read', asyncRoute(async (request, response) => {
+  const stream = parseStreamBody(request.body)
+  const remoteIds = await freshRss.entryIds(stream, true)
+  const localIds = localReadsActive ? database.localEntryIds(stream, true) : []
+  const ids = [...new Set([...remoteIds, ...localIds])]
+  await synchronizer.editEntries(ids, 'read', 'stream')
+  const undoToken = ids.length ? crypto.randomBytes(24).toString('base64url') : ''
+  if (undoToken) database.createUndo({
+    token: undoToken,
+    operation: 'unread',
+    entryIds: ids,
+    expiresAt: new Date(Date.now() + UNDO_LIFETIME_MS).toISOString(),
+  })
+  response.json({ ok: true, count: ids.length, undoToken })
+}))
+
+app.post('/api/streams/mark-relative-read', asyncRoute(async (request, response) => {
+  const stream = parseStreamBody(request.body?.stream)
+  const anchorId = String(request.body?.anchorId || '')
+  const direction = String(request.body?.direction || '')
+  const unreadOnly = (stream.kind !== 'starred' || Boolean(request.body?.query)) && request.body?.unreadOnly !== false
+  const query = String(request.body?.query || '').trim().toLowerCase()
+  if (request.body?.order && request.body.order !== database.streamOrder(stream)) return response.status(409).json({ error: 'Article order changed. Refresh before marking above or below.' })
+  if (!anchorId) return response.status(400).json({ error: 'An article is required' })
+  if (!['above', 'below'].includes(direction)) return response.status(400).json({ error: 'Unknown relative direction' })
+
+  let ids: string[]
+  if (localReadsActive) {
+    ids = database.localRelativeUnreadEntryIds(stream, anchorId, direction as 'above' | 'below', { unreadOnly, query, after: String(request.body?.after || ''), before: String(request.body?.before || '') })
+  } else {
+    if (query) return response.status(409).json({ error: 'Relative read actions need the local Paper index while searching' })
+    const [orderedIds, unreadIds] = await Promise.all([
+      freshRss.entryIds(stream, false),
+      freshRss.entryIds(stream, true),
+    ])
+    const anchorIndex = orderedIds.indexOf(anchorId)
+    const candidates = anchorIndex < 0 ? [] : direction === 'above' ? orderedIds.slice(0, anchorIndex) : orderedIds.slice(anchorIndex + 1)
+    const unreadSet = new Set(unreadIds)
+    ids = candidates.filter(id => unreadSet.has(id))
+  }
+
+  await synchronizer.editEntries(ids, 'read', 'stream')
+  const undoToken = ids.length ? crypto.randomBytes(24).toString('base64url') : ''
+  if (undoToken) database.createUndo({
+    token: undoToken,
+    operation: 'unread',
+    entryIds: ids,
+    expiresAt: new Date(Date.now() + UNDO_LIFETIME_MS).toISOString(),
+  })
+  response.json({ ok: true, count: ids.length, ids, undoToken })
+}))
+
+app.post('/api/undo', asyncRoute(async (request, response) => {
+  const token = String(request.body?.token || '')
+  const undo = database.getUndo(token)
+  if (!undo) return response.status(410).json({ error: 'That undo has expired' })
+  await synchronizer.editEntries(undo.entryIds, undo.operation, 'undo')
+  database.deleteUndo(token)
+  response.json({ ok: true, count: undo.entryIds.length })
+}))
+
+app.post('/api/readwise', asyncRoute(async (request, response) => {
+  if (!readwise.configured) return response.status(503).json({ error: 'Readwise is not configured.' })
+  const url = String(request.body?.url || '')
+  const title = String(request.body?.title || '')
+  if (!/^https?:\/\//i.test(url)) return response.status(400).json({ error: 'A valid article URL is required' })
+  const result = await readwise.save(url, title)
+  database.recordReadwiseSave(url)
+  response.json({ ok: true, result, savedAt: new Date().toISOString() })
+}))
+
+app.post('/api/notes', asyncRoute(async (request, response) => {
+  if (!kirby.configured) return response.status(503).json({ error: 'Kirby note publishing is not configured.' })
+  const title = String(request.body?.title || '').trim().slice(0, 240)
+  const sourceUrl = String(request.body?.sourceUrl || '').trim()
+  const quote = String(request.body?.quote || '').trim().slice(0, 50_000)
+  if (!title) return response.status(400).json({ error: 'The source article needs a title' })
+  if (!/^https?:\/\//i.test(sourceUrl)) return response.status(400).json({ error: 'The source article needs a valid URL' })
+  if (!quote) return response.status(400).json({ error: 'Select some article text first' })
+  response.status(201).json({ ok: true, result: await kirby.createNote({ title, sourceUrl, quote }) })
+}))
+
+app.post('/api/fulltext', asyncRoute(async (request, response) => {
+  response.json(await reader.fetch(String(request.body?.url || ''), request.body?.refresh === true ? 0 : undefined))
+}))
+
+app.post('/api/x/thread', asyncRoute(async (request, response) => {
+  if (!config.rssHub.baseUrl) return response.status(503).json({ error: 'X threads need an RSSHub connection.' })
+  response.json({ posts: await xThreads.load(String(request.body?.url || '')) })
+}))
+
+app.get('/api/x/media', asyncRoute(async (request, response) => {
+  await streamXMedia(String(request.query.url || ''), String(request.header('range') || ''), response)
+}))
+
+app.post('/api/feeds/preview', asyncRoute(async (request, response) => {
+  response.json(await previewFeed(String(request.body?.url || ''), config.trustedFeedOrigins))
+}))
+app.post('/api/feeds/repair', asyncRoute(async (request, response) => {
+  const id = String(request.body?.id || '')
+  if (!/^feed\/\d+$/.test(id)) return response.status(400).json({ error: 'Choose a FreshRSS feed' })
+  const preview = await previewFeed(String(request.body?.url || ''), config.trustedFeedOrigins)
+  await synchronizer.repairFeed(id, preview.url, String(request.body?.expectedUrl || ''))
+  response.json({ ok: true })
+}))
+
+app.post('/api/feeds', asyncRoute(async (request, response) => {
+  const url = String(request.body?.url || '').trim()
+  const title = String(request.body?.title || '').trim().slice(0, 240)
+  const folder = String(request.body?.folder || '').trim().slice(0, 120)
+  if (!/^https?:\/\//i.test(url)) return response.status(400).json({ error: 'Enter a complete feed URL' })
+  await synchronizer.addFeed(url, title, folder)
+  response.status(201).json({ ok: true })
+}))
+
+app.patch('/api/feeds', asyncRoute(async (request, response) => {
+  const id = String(request.body?.id || '').trim()
+  const title = String(request.body?.title || '').trim().slice(0, 240)
+  const folder = String(request.body?.folder || '').trim().slice(0, 120)
+  const currentFolder = String(request.body?.currentFolder || '').trim().slice(0, 120)
+  if (!id.startsWith('feed/')) return response.status(400).json({ error: 'A FreshRSS feed ID is required' })
+  if (!title) return response.status(400).json({ error: 'The feed needs a title' })
+  await synchronizer.editFeed(id, title, folder, currentFolder)
+  response.json({ ok: true })
+}))
+
+app.delete('/api/feeds', asyncRoute(async (request, response) => {
+  const id = String(request.body?.id || '').trim()
+  if (!id.startsWith('feed/')) return response.status(400).json({ error: 'A FreshRSS feed ID is required' })
+  await synchronizer.removeFeed(id)
+  response.json({ ok: true })
+}))
+
+app.post('/api/internal/briefings/generate', requireInternalSecret, asyncRoute(async (request, response) => {
+  const kind = request.body?.kind === 'evening' ? 'evening' : 'morning'
+  const briefing = await briefings.generate(kind)
+  response.json({
+    id: briefing.id,
+    subject: briefing.subject,
+    html: briefing.html,
+    text: briefing.text,
+    entryCount: database.entryIdsForBriefing(briefing.id).length,
+    cutoff: briefing.cutoff,
+  })
+}))
+
+app.post('/api/internal/briefings/:id/render', requireInternalSecret, asyncRoute(async (request, response) => {
+  const rendered = await briefings.renderExisting(String(request.params.id))
+  if (!rendered) return response.status(404).json({ error: 'Briefing not found' })
+  response.json({
+    id: String(request.params.id),
+    subject: rendered.subject,
+    html: rendered.html,
+    text: rendered.text,
+    entryCount: database.entryIdsForBriefing(String(request.params.id)).length,
+  })
+}))
+
+app.post('/api/internal/briefings/:id/delivered', requireInternalSecret, asyncRoute(async (request, response) => {
+  const briefing = database.getBriefing(String(request.params.id))
+  if (!briefing) return response.status(404).json({ error: 'Briefing not found' })
+  database.markDelivered(briefing.id)
+  response.json({ ok: true })
+}))
+
+app.get('/briefings/:id/confirm', (request, response) => {
+  const briefing = database.getBriefing(String(request.params.id))
+  const token = String(request.query.token || '')
+  if (!briefing || !token || !briefings.verifyToken(briefing, token)) return response.status(404).send(messagePage('This link is not valid.', 'Paper could not find this briefing.'))
+  const count = database.entryIdsForBriefing(briefing.id).length
+  if (briefing.acknowledgedAt) return response.send(messagePage('Already marked read.', `${count} entries from this briefing are read in FreshRSS.`))
+  response.send(confirmPage(briefing.id, token, count, briefing.kind))
+})
+
+app.post('/briefings/:id/confirm', asyncRoute(async (request, response) => {
+  const briefing = database.getBriefing(String(request.params.id))
+  const token = String(request.body?.token || '')
+  if (!briefing || !token || !briefings.verifyToken(briefing, token)) return response.status(404).send(messagePage('This link is not valid.', 'Paper did not change FreshRSS.'))
+  if (!briefing.acknowledgedAt) {
+    const ids = database.entryIdsForBriefing(briefing.id)
+    await synchronizer.editEntries(ids, 'read', 'briefing')
+    database.markAcknowledged(briefing.id)
+  }
+  response.send(messagePage('You are caught up.', 'Paper marked the entries in this briefing as read.'))
+}))
+
+const clientPath = path.resolve('dist')
+app.use(express.static(clientPath, { index: false, maxAge: '1h' }))
+app.get('*splat', (_request, response) => response.sendFile(path.join(clientPath, 'index.html')))
+
+app.use((error: Error, request: Request, response: Response, _next: NextFunction) => {
+  console.error(`${request.method} ${request.path}`, error)
+  response.status(500).json({ error: error.message || 'Paper could not complete the request' })
+})
+
+app.listen(config.port, config.host, () => {
+  console.log(`Paper is listening on port ${config.port}`)
+  logMemory('listening')
+})
+
+function logMemory(stage: string) {
+  const { rss, heapUsed, heapTotal } = process.memoryUsage()
+  const mb = (bytes: number) => Math.round(bytes / 1024 / 1024)
+  console.log(`Paper memory ${stage}: rss=${mb(rss)}MB heap=${mb(heapUsed)}/${mb(heapTotal)}MB`)
+}
+
+function parseStream(request: Request): StreamRef {
+  return parseStreamBody({ kind: request.query.kind, id: request.query.id, title: request.query.title })
+}
+
+function parseStreamBody(input: Record<string, unknown> | undefined): StreamRef {
+  const kind = String(input?.kind || 'all') as StreamKind
+  if (!['all', 'starred', 'category', 'feed'].includes(kind)) throw new Error('Unknown stream')
+  return { kind, id: String(input?.id || kind), title: String(input?.title || '') }
+}
+
+function stringArray(input: unknown): string[] {
+  return Array.isArray(input) ? input.map(String).filter(Boolean) : []
+}
+
+function briefingSummary(briefing: import('./db.js').BriefingRecord) {
+  return {
+    id: briefing.id,
+    kind: briefing.kind,
+    subject: briefing.subject,
+    status: briefing.status,
+    windowStart: briefing.windowStart,
+    cutoff: briefing.cutoff,
+    createdAt: briefing.createdAt,
+    deliveredAt: briefing.deliveredAt,
+    acknowledgedAt: briefing.acknowledgedAt,
+    feedback: database.getBriefingFeedback(briefing.id),
+    entryCount: database.entryIdsForBriefing(briefing.id).length,
+  }
+}
+
+function requireInternalSecret(request: Request, response: Response, next: NextFunction) {
+  const supplied = String(request.header('x-paper-secret') || '')
+  const actual = Buffer.from(supplied)
+  const expected = Buffer.from(config.internalSecret)
+  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return response.status(401).json({ error: 'Unauthorized' })
+  next()
+}
+
+function asyncRoute(handler: (request: Request, response: Response, next: NextFunction) => Promise<unknown>) {
+  return (request: Request, response: Response, next: NextFunction) => void handler(request, response, next).catch(next)
+}
+
+function confirmPage(id: string, token: string, count: number, kind: string): string {
+  return pageShell(`
+    <p class="eyebrow">Paper ${escapeHtml(kind)} briefing</p>
+    <h1>Mark this briefing read?</h1>
+    <p>Paper will mark ${count} represented ${count === 1 ? 'entry' : 'entries'} as read in FreshRSS. Other unread entries will stay untouched.</p>
+    <form method="post" action="/briefings/${escapeHtml(id)}/confirm">
+      <input type="hidden" name="token" value="${escapeHtml(token)}">
+      <button type="submit">Mark ${count} ${count === 1 ? 'entry' : 'entries'} read</button>
+    </form>
+    <a class="quiet" href="/">Go to Paper</a>
+  `)
+}
+
+function messagePage(title: string, copy: string): string {
+  return pageShell(`<p class="eyebrow">Paper</p><h1>${escapeHtml(title)}</h1><p>${escapeHtml(copy)}</p><a class="button" href="/">Open Paper</a>`)
+}
+
+function pageShell(content: string): string {
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Paper</title><style>
+    *{box-sizing:border-box}body{margin:0;background:#efeee9;color:#171714;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(560px,100%);background:#fbfaf7;border:1px solid #d9d8d2;border-radius:24px;padding:42px;box-shadow:0 20px 60px rgba(30,30,25,.1)}.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.14em;font-weight:800;margin:0 0 28px}h1{font-size:36px;line-height:1.05;letter-spacing:-.04em;margin:0 0 16px}p{font-size:17px;line-height:1.55;color:#55544e}button,.button{display:inline-block;border:0;border-radius:9px;background:#171714;color:white;font:700 15px inherit;padding:14px 18px;text-decoration:none;cursor:pointer;margin:16px 0}.quiet{display:block;color:#66655f;margin-top:8px}@media(max-width:600px){.card{padding:30px 24px}h1{font-size:31px}}
+  </style></head><body><main class="card">${content}</main></body></html>`
+}

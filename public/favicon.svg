@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Paper favicon</title>
+  <rect width="64" height="64" rx="14" fill="#1D1D1B"/>
+  <path fill="#F3F0E8" d="M32 9c10 0 18 8 18 18s-8 18-18 18V22c-4.5 0-8 4-8 9v23h-9V27c0-10 7-18 17-18Z"/>
+  <path fill="#F3F0E8" d="M28 45h4v9h-4z"/>
+</svg>

@@ -1,0 +1,56 @@
+{
+  "name": "paper",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,green \"node --env-file=.env --import tsx --watch src/server/index.ts\" \"vite --host 127.0.0.1\"",
+    "build": "npm run build:web && npm run build:server",
+    "build:web": "vite build",
+    "build:server": "tsc -p tsconfig.server.json",
+    "start": "node dist-server/index.js",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "briefing": "tsx src/server/briefing-cli.ts",
+    "init": "node scripts/init-config.mjs",
+    "licenses": "node scripts/collect-licenses.mjs",
+    "test:smoke": "node scripts/smoke-test.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.2.6",
+    "@fontsource-variable/jetbrains-mono": "^5.2.6",
+    "@fontsource-variable/literata": "^5.2.6",
+    "@fontsource/source-sans-3": "^5.2.6",
+    "@mozilla/readability": "^0.6.0",
+    "entities": "^7.0.1",
+    "express": "^5.1.0",
+    "jsdom": "^30.0.1",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "sanitize-html": "^2.17.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@types/sanitize-html": "^2.16.0",
+    "@vitejs/plugin-react": "^5.0.2",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "^7.3.7",
+    "vitest": "^5.1.0"
+  },
+  "license": "MIT",
+  "description": "A self-hosted FreshRSS reader. Entirely AI-coded. If this steals kittens, don't blame me.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cliophate/paper-reader.git"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

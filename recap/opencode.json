@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "share": "disabled",
+  "permission": {
+    "*": "deny"
+  },
+  "agent": {
+    "paper-recap": {
+      "description": "Select and summarize articles for the private Paper briefing",
+      "mode": "primary",
+      "permission": {
+        "*": "deny"
+      }
+    }
+  }
+}

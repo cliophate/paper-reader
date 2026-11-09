@@ -1,0 +1,126 @@
+import assert from 'node:assert/strict'
+import { spawn, spawnSync } from 'node:child_process'
+import { once } from 'node:events'
+import fs from 'node:fs/promises'
+import http from 'node:http'
+import os from 'node:os'
+import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
+
+// Exercise the built server with an isolated Google Reader protocol fixture.
+// No production environment, credentials, database, feeds, or model accounts.
+const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'paper-smoke-'))
+const readTag = 'user/-/state/com.google/read'
+const starTag = 'user/-/state/com.google/starred'
+const rows = [1, 2].map(n => ({
+  id: `tag:google.com,2005:reader/item/${String(n).padStart(16, '0')}`,
+  title: `Synthetic compositor article ${n}`, published: Math.floor(Date.now() / 1000) - n,
+  categories: [], author: 'Synthetic writer',
+  canonical: [{ href: `https://example.test/${n}` }],
+  origin: { streamId: 'feed/1', title: 'Synthetic feed', htmlUrl: 'https://example.test/' },
+  summary: { content: '<p>A compositor and its synthetic integration fixture.</p>' },
+}))
+const fixture = http.createServer(async (req, res) => {
+  const url = new URL(req.url, 'http://fixture')
+  const body = new URLSearchParams(await Array.fromAsync(req).then(chunks => Buffer.concat(chunks).toString()))
+  const send = value => { res.setHeader('Content-Type', typeof value === 'string' ? 'text/plain' : 'application/json'); res.end(typeof value === 'string' ? value : JSON.stringify(value)) }
+  if (url.pathname.endsWith('/accounts/ClientLogin')) return send('Auth=fixture/synthetic-token\n')
+  if (req.headers.authorization !== 'GoogleLogin auth=fixture/synthetic-token') { res.statusCode = 401; return send('Unauthorized') }
+  const selected = () => rows.filter(row => (!url.searchParams.get('xt') || !row.categories.includes(readTag)) && (!`${url.pathname} ${url.searchParams.get('s')}`.includes('starred') || row.categories.includes(starTag)))
+  if (url.pathname.endsWith('/subscription/list')) return send({ subscriptions: [{ id: 'feed/1', title: 'Synthetic feed', url: 'https://example.test/feed.xml', htmlUrl: 'https://example.test/', categories: [] }] })
+  if (url.pathname.endsWith('/unread-count')) return send({ unreadcounts: ['feed/1', 'user/-/state/com.google/reading-list'].map(id => ({ id, count: rows.filter(row => !row.categories.includes(readTag)).length })) })
+  if (url.pathname.includes('/stream/items/ids')) return send({ itemRefs: selected().map(row => ({ id: String(parseInt(row.id.split('/').at(-1), 16)) })) })
+  if (url.pathname.includes('/stream/contents/')) return send({ items: selected() })
+  if (url.pathname.includes('/stream/items/contents')) return send({ items: rows.filter(row => body.getAll('i').includes(row.id)) })
+  if (url.pathname.endsWith('/token')) return send('synthetic-edit-token')
+  if (url.pathname.endsWith('/edit-tag')) {
+    for (const row of rows.filter(row => body.getAll('i').includes(row.id))) {
+      if (body.get('a') && !row.categories.includes(body.get('a'))) row.categories.push(body.get('a'))
+      if (body.get('r')) row.categories = row.categories.filter(tag => tag !== body.get('r'))
+    }
+    return send('OK')
+  }
+  res.statusCode = 404; send({ error: 'Optional helper is not installed in this fixture' })
+})
+fixture.listen(0, '127.0.0.1'); await once(fixture, 'listening')
+let child, logs = ''
+async function availablePort() {
+  const server = http.createServer().listen(0, '127.0.0.1'); await once(server, 'listening')
+  const port = server.address().port; await new Promise(resolve => server.close(resolve)); return port
+}
+const port = await availablePort(), base = `http://127.0.0.1:${port}`
+const request = async (route, body, headers = {}) => {
+  const response = await fetch(`${base}${route}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body) })
+  return { status: response.status, data: await response.json().catch(() => null) }
+}
+async function until(check) {
+  for (let n = 0; n < 100; n++) { try { if (await check()) return } catch {} await delay(100) }
+  throw new Error('Timed out waiting for synthetic Paper instance')
+}
+async function start(state) {
+  child = spawn(process.execPath, ['dist-server/index.js'], {
+    cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'], env: {
+      PATH: process.env.PATH, HOME: temporary, NODE_ENV: 'test',
+      HOST: '127.0.0.1', PORT: String(port), PUBLIC_URL: base, STATE_DIR: state, TZ: 'UTC',
+      FRESHRSS_BASE_URL: `http://127.0.0.1:${fixture.address().port}`,
+      FRESHRSS_USERNAME: 'fixture', FRESHRSS_API_PASSWORD: 'synthetic-password',
+      PAPER_INTERNAL_SECRET: 'synthetic-internal-secret-only-for-tests', PAPER_SIGNING_SECRET: 'synthetic-signing-secret-only-for-tests',
+      PAPER_SYNC_MINUTES: '28,58', PAPER_SYNC_ENABLED: 'true', PAPER_LOCAL_READS: 'true',
+      CODEX_ENABLED: 'false', OPENCODE_ENABLED: 'false',
+    },
+  })
+  child.stdout.on('data', chunk => { logs += chunk }); child.stderr.on('data', chunk => { logs += chunk })
+  await until(async () => (await request('/health')).status === 200)
+}
+async function stop() {
+  if (child && child.exitCode === null) { const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited }
+  child = undefined
+}
+try {
+  await start(path.join(temporary, 'data'))
+  await until(async () => (await request('/api/status')).data.localReadsActive === true)
+  const status = (await request('/api/status')).data
+  assert.equal(status.readwiseConfigured, false); assert.equal(status.kirbyConfigured, false)
+  assert.equal(status.briefingConfigured, false); assert.equal(status.discussionConfigured, false)
+  assert.equal((await request('/api/sync/parity')).data.ready, true)
+  const page = (await request('/api/entries?kind=all&id=all&unread=0&q=compositor')).data
+  assert.equal(page.items.length, 2)
+  const id = page.items[0].id
+  assert.equal((await request('/api/entries/state', { ids: [id], operation: 'read' }, { Origin: 'https://untrusted.example' })).status, 403)
+  assert.equal((await request('/api/entries/state', { ids: [id], operation: 'read' })).status, 200)
+  assert.equal((await request('/api/entries/state', { ids: [id], operation: 'star' })).status, 200)
+  assert(rows.find(row => row.id === id).categories.includes(readTag))
+  assert(rows.find(row => row.id === id).categories.includes(starTag))
+  assert.equal((await request('/api/reading', { id, position: 0.37 })).status, 200)
+  assert.equal((await request('/api/readwise', { id })).status, 503)
+  assert.equal((await request('/api/notes', {})).status, 503)
+  assert.equal((await request('/api/discussion/message', {})).status, 503)
+  assert.equal((await request('/api/internal/briefings/generate', { kind: 'morning' })).status, 401)
+  const manifest = await fetch(`${base}/offline-assets.json`).then(response => response.json())
+  for (const asset of manifest) assert.equal((await fetch(`${base}${asset}`)).status, 200)
+  assert((await fetch(`${base}/sw.js`).then(response => response.text())).includes('paper-shell-v3-'))
+  await stop()
+  await fs.cp(path.join(temporary, 'data'), path.join(temporary, 'restored'), { recursive: true })
+  await start(path.join(temporary, 'restored'))
+  const restored = (await request('/api/entries/item', { id })).data.entry
+  assert.equal(restored.read, true); assert.equal(restored.starred, true)
+  assert.equal(restored.readingPosition, 0.37)
+  assert.equal((await request('/api/sync/parity')).data.ready, true)
+  await stop()
+  // Run configuration initialization only against a disposable copy.
+  const setup = path.join(temporary, 'setup'); await fs.mkdir(path.join(setup, 'scripts'), { recursive: true })
+  await fs.copyFile('scripts/init-config.mjs', path.join(setup, 'scripts/init-config.mjs'))
+  await fs.copyFile('.env.example', path.join(setup, '.env.example'))
+  const run = () => spawnSync(process.execPath, [path.join(setup, 'scripts/init-config.mjs')], { encoding: 'utf8' })
+  assert.equal(run().status, 0)
+  const first = await fs.readFile(path.join(setup, '.env'), 'utf8')
+  assert.equal((await fs.stat(path.join(setup, '.env'))).mode & 0o777, 0o600)
+  assert(!first.includes('PAPER_SIGNING_SECRET=replace-me'))
+  assert.equal(run().status, 1); assert.equal(await fs.readFile(path.join(setup, '.env'), 'utf8'), first)
+  console.log('Smoke checks passed: first import activation, FreshRSS parity, search, state writes, disabled integrations, origin checks, offline assets, restart/restore, and configuration initialization.')
+} catch (error) {
+  console.error(logs.slice(-4000)); throw error
+} finally {
+  await stop(); await new Promise(resolve => fixture.close(resolve))
+  await fs.rm(temporary, { recursive: true, force: true })
+}

@@ -1,0 +1,11 @@
+{$PAPER_DOMAIN} {
+    basic_auth {
+        {$PAPER_AUTH_USER} {$PAPER_AUTH_PASSWORD_HASH}
+    }
+    header {
+        Cache-Control "private, no-store"
+        X-Content-Type-Options "nosniff"
+        X-Robots-Tag "noindex, noarchive"
+    }
+    reverse_proxy paper:8080
+}

@@ -1,0 +1,107 @@
+{
+  "repository": "https://github.com/feathericons/feather",
+  "commit": "1b002399e8758fb2bccea4d07312dc9e0f43dcb8",
+  "version": "4.29.2",
+  "icons": [
+    {
+      "name": "archive",
+      "source": "icons/archive.svg",
+      "sha256": "ee38593b95022410828aa9a470993081c9975631b39b99e32190f197a1841519"
+    },
+    {
+      "name": "back",
+      "source": "icons/chevron-left.svg",
+      "sha256": "a40f90f5da06f7262eb42f7926e85737853ac0db5ad6a71e88a19dff3b0cfb7e"
+    },
+    {
+      "name": "bookmark",
+      "source": "icons/bookmark.svg",
+      "sha256": "cc25f3f32004c76d1821efc019ea8ff229f771efb7ab2fc20650d4aca9f53b3b"
+    },
+    {
+      "name": "check",
+      "source": "icons/check.svg",
+      "sha256": "1df722c1758fb0cb4868c38eb038fecf64c3717fe09ceaeb43783b70d027a1c4"
+    },
+    {
+      "name": "chevron",
+      "source": "icons/chevron-right.svg",
+      "sha256": "e37a663fc7cc5d1a0540e27ecb567d70e4706eb32f07e47f212369881bd999bc"
+    },
+    {
+      "name": "close",
+      "source": "icons/x.svg",
+      "sha256": "9d855cf8aab176e80a0448bee43c56338d28c59ec91637ce034cced006e282a2"
+    },
+    {
+      "name": "copy",
+      "source": "icons/copy.svg",
+      "sha256": "a32de6b675efb2d05a19455cde9d7350706257069e0a52d0a99fdf51a565fe91"
+    },
+    {
+      "name": "external",
+      "source": "icons/external-link.svg",
+      "sha256": "7fcd915bcba5fee19051b4200c4e3de485fe11c8c261feb167f34b5c3bb26122"
+    },
+    {
+      "name": "feed",
+      "source": "icons/rss.svg",
+      "sha256": "f54763360c3d1f86be7fa2b8b6a26f17621d0b1181f16a7ddd2cc810873f5afa"
+    },
+    {
+      "name": "folder",
+      "source": "icons/folder.svg",
+      "sha256": "d479596013ee6703bb7bb30515c5306e8624499643d947d9b9576d9003650b33"
+    },
+    {
+      "name": "moon",
+      "source": "icons/moon.svg",
+      "sha256": "ff41660bed6944d45049192d789b6c453ec133bd3e3ccb232907013c1a5ac2af"
+    },
+    {
+      "name": "plus",
+      "source": "icons/plus.svg",
+      "sha256": "85779cf0106427ed7943bf3a296243b1cfa5dacc13d0f7683e96a0aa4e3176a8"
+    },
+    {
+      "name": "reader",
+      "source": "icons/file-text.svg",
+      "sha256": "2d2602aaaf18c691bd579bdc7fb07604cb70ff8b5b1db1e5e7997975824a9446"
+    },
+    {
+      "name": "refresh",
+      "source": "icons/refresh-cw.svg",
+      "sha256": "919af710371124a9af7bd719ca7cffa725011bb07431ae4345f4499c6d316b73"
+    },
+    {
+      "name": "report",
+      "source": "icons/flag.svg",
+      "sha256": "07104ec4551b0d83a24d27d2b2f729c91ef0a1ed04532dfcfaa34495108f8df0"
+    },
+    {
+      "name": "search",
+      "source": "icons/search.svg",
+      "sha256": "5f27d6498c8d1746ef65458aedc42b51052a4ef1c52fb5d0cd900c19676a9db3"
+    },
+    {
+      "name": "settings",
+      "source": "icons/settings.svg",
+      "sha256": "8fe83a7900335105bedd742225ac0d96454a96670a186774532df41414c9cfbb"
+    },
+    {
+      "name": "star",
+      "source": "icons/star.svg",
+      "sha256": "270f826c022a34610f8ce0d608503ecadfe8b6e5a873ee06006a9838e3a512e5"
+    },
+    {
+      "name": "sun",
+      "source": "icons/sun.svg",
+      "sha256": "6c346fdb49a8af368b91a07fb43a8b8d9419af84ca005a06ac075679a9ee2380"
+    },
+    {
+      "name": "topics",
+      "source": "icons/layers.svg",
+      "sha256": "4803c6dfbe4b6440e8695d86aefc2fdd98392e51fae2e590e993d94f8ce59d1c"
+    }
+  ]
+}

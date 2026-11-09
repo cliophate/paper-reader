@@ -1,0 +1,51 @@
+# Remote access
+
+The default Compose file binds Paper to 127.0.0.1:8080. There is no login in
+Paper. Every user allowed through a proxy shares the same reading account.
+Use a current Docker Compose version supporting !reset, version 2.24.4 or newer.
+
+## Authenticated Caddy example
+
+Generate a password hash with the same Caddy image used by the example:
+
+```sh
+docker run --rm -it caddy:2.11.9 caddy hash-password
+```
+
+Enter the password interactively. Add these settings to your private .env:
+
+```dotenv
+PUBLIC_URL=https://paper.example.com
+PAPER_DOMAIN=paper.example.com
+PAPER_AUTH_USER=reader
+PAPER_AUTH_PASSWORD_HASH='paste-the-generated-hash-here'
+PAPER_PROXY_BIND=127.0.0.1
+```
+
+Single quotes preserve the dollar signs in the hash. Set PAPER_PROXY_BIND to the
+intended private interface if you want tailnet or LAN access. Internet access is
+a separate deliberate routing decision. The hostname must resolve to that
+interface, and the client must be able to reach it. Caddy needs a certificate
+issuance method that works for your DNS and routing arrangement. Private-only
+hostnames may require DNS challenges or an existing trusted TLS proxy.
+
+Validate before starting the proxy:
+
+```sh
+docker compose -f compose.yaml -f compose.proxy.yaml config --quiet
+docker compose -f compose.yaml -f compose.proxy.yaml run --rm --no-deps proxy caddy validate --config /etc/caddy/Caddyfile
+docker compose -f compose.yaml -f compose.proxy.yaml up -d
+```
+
+This override removes Paper's host port. The proxy connects to paper:8080 on
+the project network. Authentication covers the application and every API route.
+Proxy requests must return 401 without credentials and succeed with valid
+credentials. Verify both after setup. Always use HTTPS for remote basic auth.
+
+If you already have a proxy, adapt examples/Caddyfile and connect it through a
+private Docker network. Avoid publishing a second unauthenticated route to Paper.
+The provided proxy state directories hold certificates and other private state;
+protect them along with the configuration when backing up the deployment.
+
+All client connections must preserve server-sent events for sync and discussion
+updates. Do not cache API responses or buffer event streams.

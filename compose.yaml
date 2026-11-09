@@ -1,0 +1,27 @@
+services:
+  paper:
+    image: ghcr.io/cliophate/paper-reader:0.1.0-alpha.1
+    build:
+      context: .
+      target: runtime
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION:-unknown}
+    restart: unless-stopped
+    user: ${PAPER_UID:-1000}:${PAPER_GID:-1000}
+    env_file: ${PAPER_ENV_FILE:-.env}
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8080
+      STATE_DIR: /data
+      CODEX_BRIEFING_CONFIG_DIR: /app/recap
+      OPENCODE_CONFIG_DIR: /app/recap
+    ports:
+      - 127.0.0.1:${PAPER_PORT:-8080}:8080
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3

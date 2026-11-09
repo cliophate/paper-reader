@@ -1,0 +1,32 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated output
+node_modules/
+dist/
+dist-server/
+coverage/
+*.log
+
+# Runtime state and deployment snapshots
+data/
+deploy-backups/
+
+# Local migration inputs and source asset archives
+opml/*.opml
+opml/*.zip
+
+# Editor and operating-system files
+.DS_Store
+*.swp
+*~
+
+ai-auth/
+proxy-data/
+proxy-config/
+*.tar
+*.tar.gz
+*.sqlite*
+.validation/

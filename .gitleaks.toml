@@ -1,0 +1,8 @@
+title = "Paper source scan"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated build output and installed dependencies"
+paths = ['''(^|/)(node_modules|dist|dist-server)(/|$)''']
