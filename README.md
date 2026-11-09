@@ -46,7 +46,7 @@ container otherwise. It refuses to overwrite an existing .env.
 
 ```sh
 docker compose config --quiet
-docker compose pull paper
+sh scripts/pull-image.sh
 docker compose up -d --no-build paper
 ```
 
@@ -55,6 +55,10 @@ The reader switches to its local index when that import completes. Search
 needs the local index. Check /api/status for import status and /api/sync/parity
 for a comparison with FreshRSS. Do not treat a health response as proof that
 synchronization succeeded.
+
+The image helper tries the versioned registry image first. If it is unavailable,
+it downloads the public release archive, verifies its SHA-256 checksum, and
+loads the image locally. It needs curl or wget and a SHA-256 utility.
 
 The default port binds only to loopback. To use another local port, set
 PAPER_PORT and update PUBLIC_URL. A FreshRSS service running on the same Docker
