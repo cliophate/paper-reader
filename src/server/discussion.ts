@@ -45,6 +45,7 @@ export class DiscussionService {
     return discussion
   }
   stop(id: string) { this.running.get(id)?.abort() }
+  stopAll() { for (const controller of this.running.values()) controller.abort() }
   remove(id: string) {
     if (this.running.has(id)) throw new Error('Stop the response before deleting this discussion.')
     this.db.deleteDiscussion(id)

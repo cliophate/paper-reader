@@ -35,6 +35,21 @@ function save(entries: Entry[], id = 'collection-one') {
 }
 
 describe('continuing Pulse collections', () => {
+  it('stops before review and further batches when disabled during grouping', async () => {
+    const entries = [article('one')]
+    db.upsertEntries(entries)
+    const review = vi.fn(acceptReview)
+    const model: PulseModel = vi.fn(async (_prompt, input) => {
+      service.setEnabled(false)
+      return proposal((input as { articles: Entry[] }).articles)
+    })
+    const service = new RealPulseService(db, model, true, () => now, review)
+    await service.refresh()
+    await service.refresh()
+    expect(model).toHaveBeenCalledOnce()
+    expect(review).not.toHaveBeenCalled()
+    expect(service.list()).toMatchObject({ collections: [], status: { enabled: false, failed: false } })
+  })
   it('discovers collections from one publisher, retains identity, and never changes article read state', async () => {
     const first = [article('1'), article('2', undefined, { read: true }), article('3')]
     db.upsertEntries(first)

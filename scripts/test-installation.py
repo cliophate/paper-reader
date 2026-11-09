@@ -42,9 +42,9 @@ def address(name, port):
     return 'http://' + binding
 
 
-def request(url, data=None, headers=None):
+def request(url, data=None, headers=None, method=None):
     payload = None if data is None else json.dumps(data).encode()
-    req = urllib.request.Request(url, payload, {'Content-Type': 'application/json', **(headers or {})})
+    req = urllib.request.Request(url, payload, {'Content-Type': 'application/json', **(headers or {})}, method=method)
     try:
         with urllib.request.urlopen(req, timeout=10) as res:
             body = res.read()
@@ -113,6 +113,12 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         for operation in ['read', 'star']:
             assert request(base + '/api/entries/state', {'ids': [entry['id']], 'operation': operation})[0] == 200
         assert request(base + '/api/reading', {'id': entry['id'], 'position': 0.42})[0] == 200
+        connection_settings = {'readwise': {'enabled': False, 'token': 'synthetic-installation-reader-token', 'location': 'archive'}, 'ai': {'enabled': False}}
+        status, settings = request(base + '/api/settings/connections', connection_settings, method='PATCH')
+        assert status == 200 and settings['readwise']['tokenConfigured']
+        assert 'synthetic-installation-reader-token' not in json.dumps(settings)
+        assert (temporary / 'data/connections.json').stat().st_mode & 0o777 == 0o600
+        assert not request(base + '/api/status')[1]['readwiseConfigured']
         edit_token = urllib.request.urlopen(urllib.request.Request(upstream + '/api/greader.php/reader/api/0/token', headers=auth)).read().decode()
         form(upstream + '/api/greader.php/reader/api/0/edit-tag', {'i': entry['id'], 'r': 'user/-/state/com.google/read', 'T': edit_token}, auth)
         assert request(base + '/api/sync', {})[0] == 200
@@ -127,8 +133,10 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         protected = address(proxy, 80)
         until(lambda: request(protected + '/health', headers={'Host': 'localhost'})[0] == 401)
         assert request(protected + '/api/navigation', headers={'Host': 'localhost'})[0] == 401
+        assert request(protected + '/api/settings/connections', headers={'Host': 'localhost'})[0] == 401
         credentials = base64.b64encode(b'fixture:synthetic-proxy-password').decode()
         assert request(protected + '/api/navigation', headers={'Host': 'localhost', 'Authorization': 'Basic ' + credentials})[0] == 200
+        assert request(protected + '/api/settings/connections', headers={'Host': 'localhost', 'Authorization': 'Basic ' + credentials})[1]['readwise']['tokenConfigured']
         docker('exec', proxy, 'caddy', 'validate', '--config', '/etc/caddy/Caddyfile')
         for helper in ['paper-feed-health.php', 'paper-feed-repair.php']:
             docker('exec', fresh, 'php', '-l', '/var/www/FreshRSS/p/api/' + helper)
@@ -141,7 +149,14 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         until(lambda: request(base + '/health')[0] == 200)
         saved = request(base + '/api/entries/item', {'id': entry['id']})[1]['entry']
         assert saved['starred'] and not saved['read'] and saved['readingPosition'] == 0.42
-        print('Installation checks passed with FreshRSS 1.30.4: import/search, two-way state sync, helper authentication/repair, proxy 401/200, PHP syntax, and backup restoration.')
+        restored_settings = request(base + '/api/settings/connections')[1]
+        assert restored_settings['readwise']['location'] == 'archive' and restored_settings['readwise']['tokenConfigured']
+        assert not restored_settings['readwise']['enabled'] and not restored_settings['ai']['enabled']
+        assert request(base + '/api/settings/connections', {'readwise': {'enabled': True}}, method='PATCH')[0] == 200
+        assert request(base + '/api/status')[1]['readwiseConfigured']
+        assert request(base + '/api/settings/connections', {'readwise': {'token': None}}, method='PATCH')[0] == 200
+        assert not request(base + '/api/status')[1]['readwiseConfigured']
+        print('Installation checks passed with FreshRSS 1.30.4: import/search, two-way state sync, helper authentication/repair, private connection settings, proxy 401/200, PHP syntax, and backup restoration.')
     except Exception:
         for name in dict.fromkeys(containers):
             logs = docker('logs', '--tail', '12', name, check=False)

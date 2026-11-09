@@ -74,6 +74,7 @@ export function loadConfig() {
       token: value('KIRBY_PUBLISH_TOKEN'),
     },
     internalSecret: required('PAPER_INTERNAL_SECRET'),
+    ai: { discussionEnabled: true, briefingsEnabled: true },
     collections: {
       enabled: value('PAPER_COLLECTIONS_ENABLED', 'true') === 'true',
       model: value('PAPER_COLLECTION_MODEL', value('CODEX_SHORTLIST_MODEL', 'gpt-5.6-luna')),

@@ -257,8 +257,15 @@ export class PulseService {
   private retryAfter = 0
   private listeners = new Set<() => void>()
 
-  constructor(private readonly db: PaperDatabase, private readonly model: PulseModel, private readonly enabled = true,
+  constructor(private readonly db: PaperDatabase, private readonly model: PulseModel, private enabled = true,
     private readonly now: () => number = Date.now, private readonly reviewModel: PulseModel = model) { this.model = shortPulseReferences(model) }
+
+  setEnabled(enabled: boolean) {
+    if (enabled === this.enabled) return
+    this.enabled = enabled
+    if (enabled) { this.retryAfter = 0; this.start() } else this.stop()
+    this.notify()
+  }
 
   start() {
     if (!this.enabled || this.timer) return
@@ -307,6 +314,7 @@ export class PulseService {
     if (this.running) return this.running
     if (!this.enabled || this.now() < this.retryAfter) return Promise.resolve()
     this.running = this.run().catch(error => {
+      if (!this.enabled) return
       // Do not log model output or article data. A failed batch remains pending.
       this.failed = true
       this.retryAfter = this.now() + 15 * 60_000
@@ -318,6 +326,7 @@ export class PulseService {
   private async run() {
     // Bound each run. Remaining backlog is picked up by the timer or next sync.
     for (let batch = 0; batch < 4; batch += 1) {
+      if (!this.enabled) return
       const now = this.now()
       const fresh = this.db.pulseCandidates(now - 7 * DAY, now + 60_000, false, BATCH_SIZE)
       if (!fresh.length) return
@@ -337,8 +346,13 @@ export class PulseService {
         collections: existing.map(collection => ({ collectionId: collection.id, title: collection.headline, scope: collection.scope,
           quiet: collection.quiet, recentTitles: collection.sources.slice(0, 6).map(source => source.title) })),
       }, PULSE_SCHEMA)
+      if (!this.enabled) return
       const checked = validatePulseBatch(raw, articles, existing)
-      const groups = await reviewPulseGroups(this.reviewModel, checked.groups, articles, existing)
+      const groups = await reviewPulseGroups((...args) => {
+        if (!this.enabled) throw new Error('Pulse is disabled')
+        return this.reviewModel(...args)
+      }, checked.groups, articles, existing)
+      if (!this.enabled) return
       // Corrections may have arrived while the model was running. Do not recreate a hidden or merged collection.
       const current = new Set(correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now(), true).map(collection => collection.id))
       const valid = groups.filter(group => !all.some(collection => collection.id === group.id) || current.has(group.id))

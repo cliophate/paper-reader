@@ -75,7 +75,13 @@ export class HeadlineService {
   private lastErrorAt: string | null = null
   private lastCompletedAt: string | null = null
   constructor(private readonly db: PaperDatabase, private readonly fetchArticle: (url: string) => Promise<{ contentHtml: string }>,
-    private readonly model: HeadlineModel, private readonly enabled = true, private readonly modelVersion = '') {}
+    private readonly model: HeadlineModel, private enabled = true, private readonly modelVersion = '') {}
+
+  setEnabled(enabled: boolean) {
+    if (enabled === this.enabled) return
+    this.enabled = enabled
+    if (enabled) this.start(); else this.stop()
+  }
 
   start() {
     if (!this.enabled || this.timer) return
@@ -118,14 +124,16 @@ export class HeadlineService {
       }
       const input: Array<{ id: string; original: string; body: string }> = []
       for (const item of pending) {
+        if (!this.enabled) return
         try {
           const body = plainText((await this.fetchArticle(item.entry.url)).contentHtml)
           if (body.length < 500 || body.length > 35_000) { save(item, 'unchanged'); continue }
           input.push({ id: item.entry.id, original: item.entry.title, body })
         } catch { save(item, 'error'); this.lastErrorAt = new Date().toISOString() }
       }
-      if (!input.length) return
+      if (!input.length || !this.enabled) return
       const proposals = results(await this.model('write', WRITE_PROMPT, input, WRITE_SCHEMA))
+      if (!this.enabled) return
       if (proposals.size !== input.length || [...proposals.keys()].some(id => !input.some(item => item.id === id))) throw new Error('Mismatched headline IDs')
       const review: Array<typeof input[number] & { proposal: string }> = []
       for (const item of input) {
@@ -145,6 +153,7 @@ export class HeadlineService {
       }
       this.lastCompletedAt = new Date().toISOString()
     } catch {
+      if (!this.enabled) return
       this.lastErrorAt = new Date().toISOString()
       console.warn('Headline processing failed; original titles remain available')
       for (const item of pending) {

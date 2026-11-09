@@ -8,6 +8,7 @@ import { clearOffline, offlineArticles, removeOffline, saveOffline } from './off
 import { fullTextMode, setFullTextMode, type FullTextMode } from './fullTextPreferences'
 import { FeedRepair } from './components/FeedRepair'
 import { ArticleDiscussion } from './components/ArticleDiscussion'
+import { ConnectionSettings } from './components/ConnectionSettings'
 import { isDarkTheme, toggledTheme } from './appearance'
 import { removeBrokenArticleImage, shouldShowArticleLeadImage } from './articleImages'
 import { Icon } from './components/Icon'
@@ -254,7 +255,7 @@ export default function App() {
   useEffect(() => { const update = () => setFullMode(selected ? fullTextMode(selected.feedId) : 'auto'); update(); window.addEventListener('paper-preferences', update); return () => window.removeEventListener('paper-preferences', update) }, [selected?.feedId])
   const loadStatus = useCallback(async () => {
     const next = await api.status()
-    setStatus(next); setLastSync(next.sync?.lastCompletedAt || null); setSyncError(next.sync?.lastError || '')
+    setStatus(next); if (!next.discussionConfigured) setDiscussionTarget(null); setLastSync(next.sync?.lastCompletedAt || null); setSyncError(next.sync?.lastError || '')
   }, [])
 
   const loadNavigation = useCallback(async () => {
@@ -526,10 +527,12 @@ export default function App() {
     const pulseUpdated = () => setTopicsRefreshKey(current => current + 1)
     events.addEventListener('pulse', pulseUpdated)
     events.addEventListener('sync', synced)
+    events.addEventListener('connections', synced)
     events.addEventListener('state', stateChanged as EventListener)
     return () => {
       events.removeEventListener('pulse', pulseUpdated)
       events.removeEventListener('sync', synced)
+      events.removeEventListener('connections', synced)
       events.removeEventListener('state', stateChanged as EventListener)
       events.close()
     }
@@ -1179,7 +1182,7 @@ export default function App() {
   }, [entryOrder, loadEntries, loadNavigation, notify, query, stream, streamUnreadOnly, searchStream, dates, libraryMode, online])
 
   const saveEntryReadwise = useCallback(async (entry: Entry) => {
-    if (!status.readwiseConfigured) return notify('Readwise is not configured on the server')
+    if (!status.readwiseConfigured) return notify('Enable Readwise Reader in Settings > Reading & connections')
     if (readwiseBusy || entry.readwiseSavedAt) return
     setReadwiseBusy(true)
     try {
@@ -1197,7 +1200,7 @@ export default function App() {
 
   const createKirbyNote = useCallback(async (quote: string) => {
     if (!selected) return
-    if (!status.kirbyConfigured) return notify('Kirby note publishing is not configured on the server')
+    if (!status.kirbyConfigured) return notify('Enable Kirby notes in Settings > Reading & connections')
     setSelectionContext(null)
     const editor = window.open('about:blank', '_blank')
     if (editor) editor.opener = null
@@ -1467,6 +1470,7 @@ export default function App() {
           fullTextError={fullTextError?.id === selected.id ? fullTextError.message : ''}
           backLabel={pulseContext ? 'Back to collection' : 'Back to stories'}
           readwiseBusy={readwiseBusy}
+          readwiseConfigured={status.readwiseConfigured}
           online={online}
           fullMode={fullMode}
           onFullMode={mode => { setFullMode(mode); setFullTextMode(selected.feedId, mode); automaticFullTextAttempts.current.delete(selected.id) }}
@@ -1483,6 +1487,7 @@ export default function App() {
           onFullText={() => { const full = fullVersions.current.get(selected.id); if (full) updateEntry(selected.id, articleContent(full)); else void fetchFullText() }}
           onReport={() => setReportEntry(selected)}
           discussionConfigured={status.discussionConfigured}
+          selectionActionsConfigured={status.discussionConfigured || status.kirbyConfigured}
           onDiscuss={() => setDiscussionTarget({ entry: selected, quote: '' })}
           fullTextBusy={fetchingFullTextId === selected.id}
           onAppearance={() => setOverlays({ ...closedOverlays, appearance: true })}
@@ -1516,9 +1521,9 @@ export default function App() {
       {folderContext && <FolderContextMenu state={folderContext} onClose={() => setFolderContext(null)} onOpen={() => openStream({ kind: 'category', id: folderContext.folder.id, title: folderContext.folder.title })} onMarkRead={() => void markFolderRead(folderContext.folder)} />}
       {feedContext && <FeedContextMenu state={feedContext} onClose={() => setFeedContext(null)} onOpen={() => openStream({ kind: 'feed', id: feedContext.feed.id, title: feedContext.feed.title })} onMarkRead={() => void markFeedRead(feedContext.feed)} onManage={() => manageFeed(feedContext.feed)} onUnsubscribe={() => void unsubscribeFeed(feedContext.feed)} onCopy={() => void navigator.clipboard.writeText(feedContext.feed.url).then(() => { setFeedContext(null); notify('Feed URL copied') })} />}
       {entryContext && <EntryContextMenu key={entryContext.entry.id} state={entryContext} relativeAvailable={libraryMode === 'stream' && online} onClose={() => setEntryContext(null)} onOpen={() => { setEntryContext(null); openEntry(entryContext.entry) }} onCopyUrl={() => { void copyArticleUrl(entryContext.entry); setEntryContext(null) }} onToggleRead={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.read ? 'unread' : 'read') }} onToggleStar={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.starred ? 'unstar' : 'star') }} onReport={() => { setReportEntry(entryContext.entry); setEntryContext(null) }} onMarkAbove={() => void markRelativeRead(entryContext.entry, 'above')} onMarkBelow={() => void markRelativeRead(entryContext.entry, 'below')} onUnsubscribe={() => void unsubscribeFeed({ id: entryContext.entry.feedId, title: entryContext.entry.feedTitle })} />}
-      {selectionContext && <SelectionContextMenu state={selectionContext} onClose={() => setSelectionContext(null)} onCreate={() => void createKirbyNote(selectionContext.quote)} onDiscuss={() => { if (!status.discussionConfigured) return notify('Article discussion is not configured'); if (selected) setDiscussionTarget({ entry: selected, quote: selectionContext.quote }); setSelectionContext(null) }} />}
+      {selectionContext && (status.kirbyConfigured || status.discussionConfigured) && <SelectionContextMenu state={selectionContext} kirbyConfigured={status.kirbyConfigured} discussionConfigured={status.discussionConfigured} onClose={() => setSelectionContext(null)} onCreate={() => void createKirbyNote(selectionContext.quote)} onDiscuss={() => { if (!status.discussionConfigured) return notify('Article discussion is not configured'); if (selected) setDiscussionTarget({ entry: selected, quote: selectionContext.quote }); setSelectionContext(null) }} />}
       {discussionTarget && <ArticleDiscussion key={discussionTarget.entry.id} entry={discussionTarget.entry} initialQuote={discussionTarget.quote} onClose={() => setDiscussionTarget(null)} />}
-      {overlays.settings && <Settings section={settingsSection} setSection={setSettingsSection} initialFeedId={settingsFeedId} navigation={navigation} onChanged={loadNavigation} onFiltersChanged={reloadFilteredLibrary} notify={notify} status={status} autoRead={autoRead} setAutoRead={value => { setAutoRead(value); localStorage.setItem('paper-auto-read', value ? 'automatic' : 'manual') }} onOpenEntry={id => { setOverlays(closedOverlays); void openTopicEntry(id) }} onClose={() => setOverlays(closedOverlays)} />}
+      {overlays.settings && <Settings section={settingsSection} setSection={setSettingsSection} initialFeedId={settingsFeedId} navigation={navigation} onChanged={loadNavigation} onFiltersChanged={reloadFilteredLibrary} notify={notify} onConnectionsChanged={loadStatus} autoRead={autoRead} setAutoRead={value => { setAutoRead(value); localStorage.setItem('paper-auto-read', value ? 'automatic' : 'manual') }} onOpenEntry={id => { setOverlays(closedOverlays); void openTopicEntry(id) }} onClose={() => setOverlays(closedOverlays)} />}
       {overlays.appearance && <AppearancePopover theme={theme} setTheme={setTheme} readerFont={readerFont} setReaderFont={setReaderFont} readerSize={readerSize} setReaderSize={setReaderSize} readerSpacing={readerSpacing} setReaderSpacing={setReaderSpacing} readerWidth={readerWidth} setReaderWidth={setReaderWidth} onClose={() => setOverlays(closedOverlays)} />}
       {reportEntry && <ReportProblemModal entry={reportEntry} onClose={() => setReportEntry(null)} onSaved={() => { setReportEntry(null); notify('Problem reported') }} />}
       {toast && <div className="toast" role="status"><span>{toast.message}</span>{toast.action && <button onClick={() => { toast.action?.(); setToast(null) }}>{toast.actionLabel}</button>}</div>}
@@ -1788,7 +1793,9 @@ function EntryContextMenu({ state, relativeAvailable, onClose, onOpen, onCopyUrl
   </div>
 }
 
-function SelectionContextMenu({ state, onClose, onCreate, onDiscuss }: {
+function SelectionContextMenu({ state, onClose, onCreate, onDiscuss, kirbyConfigured, discussionConfigured }: {
+  kirbyConfigured: boolean
+  discussionConfigured: boolean
   state: SelectionContextState
   onClose: () => void
   onCreate: () => void
@@ -1814,8 +1821,8 @@ function SelectionContextMenu({ state, onClose, onCreate, onDiscuss }: {
   }, [onClose])
 
   return <div ref={ref} className="feed-context-menu selection-context-menu" role="menu" aria-label="Selected text options" style={{ left: state.left, top: state.top }}>
-    <button role="menuitem" onClick={onDiscuss}><Icon name="reader" /> Ask about this</button>
-    <button role="menuitem" onClick={onCreate}><Icon name="plus" /> Create note in Kirby</button>
+    {discussionConfigured && <button role="menuitem" onClick={onDiscuss}><Icon name="reader" /> Ask about this</button>}
+    {kirbyConfigured && <button role="menuitem" onClick={onCreate}><Icon name="plus" /> Create note in Kirby</button>}
   </div>
 }
 
@@ -1987,6 +1994,7 @@ const ArticleView = forwardRef<HTMLElement, {
   onRetryAction: () => void
   fullTextError: string
   readwiseBusy: boolean
+  readwiseConfigured: boolean
   online: boolean
   fullMode: FullTextMode
   onFullMode: (mode: FullTextMode) => void
@@ -2005,6 +2013,7 @@ const ArticleView = forwardRef<HTMLElement, {
   onReport: () => void
   onDiscuss: () => void
   discussionConfigured: boolean
+  selectionActionsConfigured: boolean
   fullTextBusy: boolean
   onAppearance: () => void
   onScroll: (event: React.UIEvent<HTMLDivElement>) => void
@@ -2017,7 +2026,7 @@ const ArticleView = forwardRef<HTMLElement, {
   previousTitle: string
   nextTitle: string
   onSelectionContext: (state: SelectionContextState | null) => void
-}>(function ArticleView({ entry, feedIconUrl, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, readwiseBusy, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onReadwise, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, transition, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext }, ref) {
+}>(function ArticleView({ entry, feedIconUrl, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, readwiseBusy, readwiseConfigured, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onReadwise, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, selectionActionsConfigured, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, transition, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext }, ref) {
   const content = useRef<HTMLDivElement>(null)
   const [hasSelection, setHasSelection] = useState(false)
   useEffect(() => {
@@ -2030,6 +2039,7 @@ const ArticleView = forwardRef<HTMLElement, {
     if (quote) onSelectionContext({ quote, left: Math.max(8, Math.min(24, window.innerWidth - 240)), top: Math.min(160, window.innerHeight - 130) })
   }
   const openSelectionContext = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!selectionActionsConfigured) return
     const quote = selectedTextWithin(event.currentTarget)
     if (!quote) return
     event.preventDefault()
@@ -2047,7 +2057,7 @@ const ArticleView = forwardRef<HTMLElement, {
       <div className="reader-actions">
         <button className={entry.starred ? 'active' : ''} onClick={onToggleStar} disabled={!online} aria-label={entry.starred ? 'Remove star' : 'Star article'} title={entry.starred ? 'Remove star' : 'Star article'}><Icon name="star" className={entry.starred ? 'filled' : ''} /><span>{entry.starred ? 'Starred' : 'Star'}</span></button>
         <button onClick={onToggleRead} disabled={!online} aria-label={entry.read ? 'Mark unread' : 'Mark read'} title={entry.read ? 'Mark unread' : 'Mark read'}><Icon name={entry.read ? 'archive' : 'check'} /><span>{entry.read ? 'Mark unread' : 'Mark read'}</span></button>
-        <button onClick={onReadwise} disabled={!online || readwiseBusy || Boolean(entry.readwiseSavedAt)} aria-label={entry.readwiseSavedAt ? "Saved to Readwise" : "Save to Readwise"} title={entry.readwiseSavedAt ? "Saved to Readwise" : "Save to Readwise"}><Icon name="bookmark" /><span>{entry.readwiseSavedAt ? "Saved" : readwiseBusy ? "Saving..." : "Readwise"}</span></button>
+        {readwiseConfigured && <button onClick={onReadwise} disabled={!online || readwiseBusy || Boolean(entry.readwiseSavedAt)} aria-label={entry.readwiseSavedAt ? "Saved to Readwise" : "Save to Readwise"} title={entry.readwiseSavedAt ? "Saved to Readwise" : "Save to Readwise"}><Icon name="bookmark" /><span>{entry.readwiseSavedAt ? "Saved" : readwiseBusy ? "Saving..." : "Readwise"}</span></button>}
         {entry.kind === 'article' && <button className={entry.fullText ? 'active' : ''} onClick={onFullText} disabled={fullTextBusy || !online} aria-label={fullTextBusy ? 'Fetching full article' : entry.fullText ? 'Showing full article' : 'Fetch full article'} title={entry.fullText ? 'Showing full article' : 'Fetch full article'}><Icon name="reader" /><span>{fullTextBusy ? 'Fetching...' : entry.fullText ? 'Full text' : 'Full article'}</span></button>}
         <a href={entry.url} target="_blank" rel="noopener noreferrer" aria-label="Open original" title="Open original"><Icon name="external" /><span>Original</span></a>
         <button onClick={onCopyUrl} aria-label="Copy article URL" title="Copy article URL"><Icon name="copy" /><span>Copy URL</span></button>
@@ -2382,7 +2392,7 @@ function ShortcutHelp({ onClose }: { onClose: () => void }) {
   return <Modal title="Keyboard shortcuts" onClose={onClose} className="help-modal"><dl>{shortcuts.map(([key, label]) => <div key={key}><dt>{key}</dt><dd>{label}</dd></div>)}</dl></Modal>
 }
 
-function Settings({ section, setSection, initialFeedId, navigation, onChanged, onFiltersChanged, notify, status, autoRead, setAutoRead, onOpenEntry, onClose }: {
+function Settings({ section, setSection, initialFeedId, navigation, onChanged, onFiltersChanged, notify, onConnectionsChanged, autoRead, setAutoRead, onOpenEntry, onClose }: {
   section: SettingsSection
   setSection: (value: SettingsSection) => void
   initialFeedId: string
@@ -2392,7 +2402,7 @@ function Settings({ section, setSection, initialFeedId, navigation, onChanged, o
   notify: (message: string) => void
   autoRead: boolean
   setAutoRead: (value: boolean) => void
-  status: { readwiseConfigured: boolean; kirbyConfigured: boolean; briefingConfigured: boolean }
+  onConnectionsChanged: () => Promise<void>
   onOpenEntry: (id: string) => void
   onClose: () => void
 }) {
@@ -2406,11 +2416,7 @@ function Settings({ section, setSection, initialFeedId, navigation, onChanged, o
           ? <ActivitySettings />
           : <div className="connections-settings">
             <h3>Reading</h3><label className="reading-preference">Mark articles read<select value={autoRead ? 'automatic' : 'manual'} onChange={event => setAutoRead(event.target.value === 'automatic')}><option value="automatic">After opening for one second</option><option value="manual">Only when I mark them read</option></select></label>
-            <h3>Connections</h3>
-            <p className="settings-intro">Paper uses these services for saving articles and writing the morning and evening briefings.</p>
-            <div className="connection-row"><StatusDot active={status.readwiseConfigured} /><div><strong>Readwise Reader</strong><span>{status.readwiseConfigured ? 'Ready to save articles' : 'Disabled. Configure this optional connection on the server.'}</span></div></div>
-            <div className="connection-row"><StatusDot active={status.kirbyConfigured} /><div><strong>Kirby notes</strong><span>{status.kirbyConfigured ? 'Ready to create note drafts' : 'Disabled. Configure this optional connection on the server.'}</span></div></div>
-            <div className="connection-row"><StatusDot active={status.briefingConfigured} /><div><strong>Briefings</strong><span>{status.briefingConfigured ? 'Generation is configured' : 'No writer is configured'}</span></div></div>
+            <ConnectionSettings onChanged={onConnectionsChanged} />
           </div>
   return <Modal title="Settings" onClose={onClose} className="settings-modal">
     <div className="settings-layout">
@@ -2474,7 +2480,6 @@ function ReadingChoice({ label, values, active, onChange }: { label: string; val
   return <div className="reading-choice"><span>{label}</span><ChoiceRow values={values} active={active} onChange={onChange} /></div>
 }
 
-function StatusDot({ active }: { active: boolean }) { return <span className={`status-dot ${active ? 'active' : ''}`} /> }
 
 function FeedManager({ initialFeedId, navigation, onChanged, notify }: {
   initialFeedId: string

@@ -96,17 +96,60 @@ try {
   assert.equal((await request('/api/notes', {})).status, 503)
   assert.equal((await request('/api/discussion/message', {})).status, 503)
   assert.equal((await request('/api/internal/briefings/generate', { kind: 'morning' })).status, 401)
+  assert.equal((await request('/api/internal/briefings/generate', { kind: 'morning' }, { 'x-paper-secret': 'synthetic-internal-secret-only-for-tests' })).status, 503)
+  const settingsUrl = `${base}/api/settings/connections`
+  const patchSettings = async (value, origin = base) => {
+    const response = await fetch(settingsUrl, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify(value) })
+    return { status: response.status, data: await response.json() }
+  }
+  const initialSettings = await fetch(settingsUrl)
+  assert.equal(initialSettings.headers.get('cache-control'), 'no-store')
+  assert.equal((await initialSettings.json()).ai.enabled, false)
+  assert.equal((await patchSettings({ readwise: { enabled: true, token: 'synthetic-smoke-reader-token' } }, 'https://untrusted.example')).status, 403)
+  assert.equal((await patchSettings({ kirby: { publishUrl: 'https://example.test/?token=synthetic-smoke-secret' } })).status, 400)
+  const malformed = await fetch(settingsUrl, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{"readwise":{"token":"synthetic-smoke-secret"}, broken}' })
+  assert.equal(malformed.status, 400)
+  assert(!(await malformed.text()).includes('synthetic-smoke-secret'))
+  const saved = await patchSettings({ readwise: { enabled: true, token: 'synthetic-smoke-reader-token', location: 'archive' }, kirby: { enabled: false, publishUrl: 'https://example.test/publish', token: 'synthetic-smoke-kirby-token' } })
+  assert.equal(saved.status, 200)
+  assert(!JSON.stringify(saved.data).includes('synthetic-smoke-'))
+  assert.equal(saved.data.readwise.tokenConfigured, true)
+  assert.equal((await request('/api/status')).data.readwiseConfigured, true)
+  await patchSettings({ readwise: { enabled: false }, ai: { enabled: false, briefingsEnabled: false } })
+  assert.equal((await request('/api/readwise', { url: 'https://example.test/', title: 'Fixture' })).status, 503)
+  assert.equal((await request('/api/status')).data.readwiseConfigured, false)
+  assert.equal((await fs.stat(path.join(temporary, 'data', 'connections.json'))).mode & 0o777, 0o600)
   const manifest = await fetch(`${base}/offline-assets.json`).then(response => response.json())
   for (const asset of manifest) assert.equal((await fetch(`${base}${asset}`)).status, 200)
   assert((await fetch(`${base}/sw.js`).then(response => response.text())).includes('paper-shell-v3-'))
   await stop()
   await fs.cp(path.join(temporary, 'data'), path.join(temporary, 'restored'), { recursive: true })
   await start(path.join(temporary, 'restored'))
+  const restoredSettings = await fetch(settingsUrl).then(response => response.json())
+  assert.equal(restoredSettings.readwise.enabled, false)
+  assert.equal(restoredSettings.readwise.location, 'archive')
+  assert.equal(restoredSettings.readwise.tokenConfigured, true)
+  assert.equal(restoredSettings.ai.briefingsEnabled, false)
+  await patchSettings({ readwise: { enabled: true, token: '' } })
+  assert.equal((await request('/api/status')).data.readwiseConfigured, true)
+  await patchSettings({ readwise: { token: null }, kirby: { token: null } })
+  assert.equal((await request('/api/status')).data.readwiseConfigured, false)
+  assert.equal((await fetch(settingsUrl).then(response => response.json())).kirby.tokenConfigured, false)
   const restored = (await request('/api/entries/item', { id })).data.entry
   assert.equal(restored.read, true); assert.equal(restored.starred, true)
   assert.equal(restored.readingPosition, 0.37)
   assert.equal((await request('/api/sync/parity')).data.ready, true)
   await stop()
+  const cli = spawnSync(process.execPath, ['dist-server/briefing-cli.js', 'morning'], { encoding: 'utf8', env: {
+    PATH: process.env.PATH, HOME: temporary, STATE_DIR: path.join(temporary, 'restored'),
+    FRESHRSS_BASE_URL: 'https://example.test', FRESHRSS_USERNAME: 'fixture', FRESHRSS_API_PASSWORD: 'synthetic-password',
+    PAPER_INTERNAL_SECRET: 'synthetic-internal', PAPER_SIGNING_SECRET: 'synthetic-signing', CODEX_ENABLED: 'true',
+  } })
+  assert.equal(cli.status, 1)
+  assert(cli.stderr.includes('Briefing generation is disabled'))
+  assert(!logs.includes('synthetic-smoke-secret'))
+  assert(!logs.includes('synthetic-smoke-reader-token'))
+  assert(!logs.includes('synthetic-smoke-kirby-token'))
   // Run configuration initialization only against a disposable copy.
   const setup = path.join(temporary, 'setup'); await fs.mkdir(path.join(setup, 'scripts'), { recursive: true })
   await fs.copyFile('scripts/init-config.mjs', path.join(setup, 'scripts/init-config.mjs'))
@@ -117,7 +160,7 @@ try {
   assert.equal((await fs.stat(path.join(setup, '.env'))).mode & 0o777, 0o600)
   assert(!first.includes('PAPER_SIGNING_SECRET=replace-me'))
   assert.equal(run().status, 1); assert.equal(await fs.readFile(path.join(setup, '.env'), 'utf8'), first)
-  console.log('Smoke checks passed: first import activation, FreshRSS parity, search, state writes, disabled integrations, origin checks, offline assets, restart/restore, and configuration initialization.')
+  console.log('Smoke checks passed: FreshRSS import and parity, state writes, private connection settings, disabled integrations and briefing CLI, token masking and removal, origin checks, offline assets, restart/restore, and configuration initialization.')
 } catch (error) {
   console.error(logs.slice(-4000)); throw error
 } finally {

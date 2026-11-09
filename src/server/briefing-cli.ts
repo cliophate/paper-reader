@@ -1,5 +1,6 @@
 import { BriefingService } from './briefing.js'
 import { loadConfig } from './config.js'
+import { ConnectionSettings } from './connections.js'
 import { PaperDatabase } from './db.js'
 import { FreshRssClient } from './freshrss.js'
 import { PaperRepository } from './repository.js'
@@ -8,6 +9,7 @@ import { PulseService } from './pulse.js'
 import { TopicService } from './topics.js'
 
 const config = loadConfig()
+new ConnectionSettings(config)
 const database = new PaperDatabase(config.databasePath)
 const freshRss = new FreshRssClient(config.freshRss, config.trustedFeedOrigins)
 const repository = new PaperRepository(database)

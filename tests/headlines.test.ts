@@ -28,6 +28,18 @@ beforeEach(() => {
 afterEach(() => { service.stop(); db.close(); vi.restoreAllMocks() })
 
 describe('clear headlines', () => {
+  it('does not start a review or decorate titles when disabled during a model request', async () => {
+    model.mockImplementationOnce(async () => {
+      service.setEnabled(false)
+      return { results: [{ id: 'one', action: 'rewrite', title, evidence: ['Samsung Notes supports the S Pen'] }] }
+    })
+    await service.run()
+    await service.run()
+    expect(model).toHaveBeenCalledOnce()
+    expect(service.status().enabled).toBe(false)
+    expect(service.decorate(entry()).displayTitle).toBeUndefined()
+    expect(db.getHeadline('one')).toBeNull()
+  })
   it('only accepts articles from the two exact source hosts', () => {
     expect(headlineEligible(entry())).toBe(true)
     expect(headlineEligible(entry({ url: 'https://androidauthority.com/post', feedUrl: 'https://androidauthority.com/feed/' }))).toBe(true)

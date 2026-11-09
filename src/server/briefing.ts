@@ -114,6 +114,7 @@ export class BriefingService {
   ) {}
 
   async generate(kind: 'morning' | 'evening', force = false): Promise<BriefingRecord> {
+    if (!this.config.ai.briefingsEnabled || !(this.config.codex.enabled || this.config.openCode.enabled)) throw new Error('Briefing generation is disabled. Enable it in Settings.')
     const recent = force ? null : this.db.recentGeneratedBriefing(kind, new Date(Date.now() - 15 * 60_000))
     if (recent) return recent
 
@@ -308,6 +309,7 @@ export class BriefingService {
   }
 
   private runModel(stage: 'shortlist' | 'editor', instruction: string, input: unknown, schema: Record<string, unknown>): Promise<unknown> {
+    if (!this.config.ai.briefingsEnabled) throw new Error('Briefing generation is disabled.')
     if (this.config.codex.enabled) {
       const model = stage === 'shortlist' ? this.config.codex.shortlistModel : this.config.codex.editorModel
       return runCodex(this.config.codex, model, instruction, input, schema)

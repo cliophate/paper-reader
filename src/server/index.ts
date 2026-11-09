@@ -7,6 +7,7 @@ import { createChatModel } from './chat-model.js'
 import { DiscussionService, discussionSource } from './discussion.js'
 import { HeadlineService } from './headlines.js'
 import { loadConfig } from './config.js'
+import { ConnectionSettings, SettingsValidationError } from './connections.js'
 import { PaperDatabase } from './db.js'
 import { FreshRssClient } from './freshrss.js'
 import { KirbyPublisher } from './kirby.js'
@@ -31,6 +32,9 @@ const SEARCH_SCAN_SIZE = 80
 const UNDO_LIFETIME_MS = 20_000
 
 const config = loadConfig()
+const connectionSettings = new ConnectionSettings(config)
+const connectionListeners = new Set<() => void>()
+const discussionEnabled = () => config.codex.enabled && config.ai.discussionEnabled
 logMemory('database opening')
 const database = new PaperDatabase(config.databasePath)
 logMemory('database ready')
@@ -76,11 +80,16 @@ app.disable('x-powered-by')
 app.use(requireSameOrigin(config.publicUrl))
 app.use(express.json({ limit: '2mb' }))
 app.use(express.urlencoded({ extended: false }))
+app.use('/api/settings/connections', (error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+  // Body-parser errors can quote submitted JSON. Do not log or return tokens.
+  const tooLarge = (error as { status?: number })?.status === 413
+  response.status(tooLarge ? 413 : 400).set('Cache-Control', 'no-store').json({ error: tooLarge ? 'Connection settings are too large.' : 'Could not read connection settings. Send valid JSON.' })
+})
 
 app.get('/health', (_request, response) => response.json({ status: 'ok' }))
 
 // Article discussion has no subscription, read-state or publishing capabilities.
-app.get('/api/discussion', (request, response) => response.json({ discussion: discussions.get(String(request.query.entryId || '')), enabled: config.codex.enabled }))
+app.get('/api/discussion', (request, response) => response.json({ discussion: discussions.get(String(request.query.entryId || '')), enabled: discussionEnabled() }))
 app.get('/api/discussion/events', (request, response) => {
   const id = String(request.query.entryId || '')
   response.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
@@ -92,7 +101,7 @@ app.get('/api/discussion/events', (request, response) => {
   response.on('close', () => { clearInterval(timer); unsubscribe() })
 })
 app.post('/api/discussion', asyncRoute(async (request, response) => {
-  if (!config.codex.enabled) return response.status(503).json({ error: 'Article discussion needs the Codex connection.' })
+  if (!discussionEnabled()) return response.status(503).json({ error: 'Enable article discussions and Codex in Settings.' })
   const entry = database.localEntry(String(request.body?.entryId || ''))
   if (!entry) return response.status(404).json({ error: 'Article is not available in Paper.' })
   const full = request.body?.fullText === true ? database.getArticle(entry.url) : null
@@ -103,7 +112,7 @@ app.post('/api/discussion', asyncRoute(async (request, response) => {
   } catch (error) { response.status(400).json({ error: error instanceof Error ? error.message : 'Could not open discussion' }) }
 }))
 app.post('/api/discussion/message', (request, response) => {
-  if (!config.codex.enabled) return response.status(503).json({ error: 'Article discussion is disabled.' })
+  if (!discussionEnabled()) return response.status(503).json({ error: 'Article discussion is disabled.' })
   try { response.json(discussions.send(String(request.body?.entryId || ''), String(request.body?.requestId || ''), String(request.body?.question || ''), String(request.body?.quote || ''))) }
   catch (error) { response.status(409).json({ error: error instanceof Error ? error.message : 'Could not send message' }) }
 })
@@ -114,11 +123,11 @@ app.delete('/api/discussion', (request, response) => {
 })
 
 app.get('/api/status', (_request, response) => response.json({
-  discussionConfigured: config.codex.enabled,
+  discussionConfigured: discussionEnabled(),
   rssHubConfigured: Boolean(config.rssHub.baseUrl),
   readwiseConfigured: readwise.configured,
   kirbyConfigured: kirby.configured,
-  briefingConfigured: config.codex.enabled || config.openCode.enabled,
+  briefingConfigured: config.ai.briefingsEnabled && (config.codex.enabled || config.openCode.enabled),
   localReadsConfigured: config.sync.localReads,
   localReadsActive,
   sync: synchronizer.status(),
@@ -127,6 +136,25 @@ app.get('/api/status', (_request, response) => response.json({
   openReports: database.openArticleReportCount(),
   headlines: headlines.status(),
 }))
+
+app.get('/api/settings/connections', (_request, response) => {
+  response.set('Cache-Control', 'no-store').json(connectionSettings.view())
+})
+app.patch('/api/settings/connections', (request, response) => {
+  response.set('Cache-Control', 'no-store')
+  try {
+    const settings = connectionSettings.update(request.body)
+    headlines.setEnabled(config.headlines.enabled && config.codex.enabled)
+    pulse.setEnabled(config.collections.enabled && (config.codex.enabled || config.openCode.enabled))
+    if (!discussionEnabled()) discussions.stopAll()
+    for (const listener of connectionListeners) listener()
+    response.json(settings)
+  } catch (error) {
+    response.status(error instanceof SettingsValidationError ? 400 : 500).json({
+      error: error instanceof SettingsValidationError ? error.message : 'Could not save connection settings. Check the data directory permissions.',
+    })
+  }
+})
 
 app.get('/api/events', (request, response) => {
   response.status(200)
@@ -143,12 +171,15 @@ app.get('/api/events', (request, response) => {
   })
   const unsubscribeState = synchronizer.onStateChanged(change => response.write(`event: state\ndata: ${JSON.stringify(change)}\n\n`))
   const unsubscribePulse = pulse.onUpdated(() => { response.write('event: pulse\ndata: {}\n\n') })
+  const connectionsChanged = () => response.write('event: connections\ndata: {}\n\n')
+  connectionListeners.add(connectionsChanged)
   const keepAlive = setInterval(() => response.write(': keep-alive\n\n'), 25_000)
   keepAlive.unref()
   request.on('close', () => {
     clearInterval(keepAlive)
     unsubscribe()
     unsubscribePulse()
+    connectionListeners.delete(connectionsChanged)
     unsubscribeState()
   })
 })
@@ -523,6 +554,7 @@ app.delete('/api/feeds', asyncRoute(async (request, response) => {
 }))
 
 app.post('/api/internal/briefings/generate', requireInternalSecret, asyncRoute(async (request, response) => {
+  if (!config.ai.briefingsEnabled || !(config.codex.enabled || config.openCode.enabled)) return response.status(503).json({ error: 'Briefing generation is disabled. Enable it in Settings.' })
   const kind = request.body?.kind === 'evening' ? 'evening' : 'morning'
   const briefing = await briefings.generate(kind)
   response.json({

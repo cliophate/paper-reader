@@ -7,6 +7,12 @@ Paper's data directory contains paper.sqlite and potentially its SQLite WAL
 and shared-memory files. It includes reading positions, cached full text,
 discussions, filters, briefing history, Pulse collections, and feedback.
 An empty database can resync articles but cannot recover that additional state.
+The same directory also holds connections.json when connections have been edited
+in Settings. It contains enable switches and any Readwise or Kirby tokens saved
+there, without encryption at rest. Keep its permissions at 0600 and include it
+in private backups. A database-only backup does not include these settings.
+AI login files live separately under ai-auth when using compose.ai.yaml. Protect
+that directory separately or authenticate the CLIs again after a restore.
 
 ## Consistent backup
 
@@ -31,6 +37,8 @@ backup into the application directory so the resulting path is data/paper.sqlite
 Restore access for the container's node user, UID 1000 by default. Start the same
 image version used for the backup, then verify health, articles, reading positions,
 and saved discussions before upgrading.
+Check connection switches after restoring connections.json. Restore its owner-only
+permissions and keep the service's data directory private.
 
 Test restoration in a separate directory and on another port. Do not point a
 restore test at a production FreshRSS account, because user actions in the test

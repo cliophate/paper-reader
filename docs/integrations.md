@@ -2,8 +2,23 @@
 
 Paper's reader needs a FreshRSS instance with the Google Reader API enabled.
 All other connections can be left disabled. Never commit authentication files,
-tokens, or a real .env. Settings reports whether server-side connections exist;
-it does not provide a credential editor.
+tokens, or a real .env. Open Settings > Reading & connections to enable or disable
+AI, Readwise Reader, and Kirby notes. Changes take effect without restarting
+Paper. The same settings apply to every device using this server.
+
+Settings accepts Readwise and Kirby tokens. Password fields stay blank after
+saving; blank means keep the current token. Remove token clears it when you
+save and prevents fallback to an environment token. Turning a connection off
+keeps its credentials so you can enable it again later.
+
+Paper saves overrides in STATE_DIR/connections.json, normally data/connections.json,
+with owner-only permissions, mode 0600. Tokens are not encrypted at rest.
+Settings responses never include tokens. Protect the data directory and its
+backups as secret material. Environment values remain the defaults for fields
+you have not saved. Saved fields take precedence after a restart, including
+for the briefing CLI. To return entirely to environment configuration, stop
+Paper, preserve a private copy of connections.json, then move it out of STATE_DIR
+before starting Paper again.
 
 ## FreshRSS helpers
 
@@ -24,13 +39,30 @@ it is absent. The integration test uses FreshRSS 1.30.4.
 
 ## Readwise and Kirby
 
-Set READWISE_TOKEN to enable saving articles to Readwise Reader. READWISE_LOCATION
-defaults to later. Saving sends the article URL and title to Readwise.
+In Settings, enable Readwise Reader, paste a token from
+[your Readwise token page](https://readwise.io/access_token), choose a destination,
+and save. Use the Readwise button on an article to save its URL and title.
+Paper does not import your Reader library or highlights. The
+[Reader API documentation](https://readwise.io/reader_api) describes token access
+and supported locations. Reader uses your default destination when the selected
+one is unavailable in your account.
 
-Set both KIRBY_PUBLISH_URL and KIRBY_PUBLISH_TOKEN to enable note drafts with a
-compatible Kirby publishing endpoint. There is no default publishing host.
-The endpoint must accept the notes payload used by src/server/kirby.ts.
-Selecting a quote sends it with the article title and URL to that endpoint.
+READWISE_TOKEN and READWISE_LOCATION also work as server-side defaults.
+READWISE_LOCATION defaults to later.
+
+For Kirby, install a compatible publishing endpoint on your own site, then enter
+its URL and bearer token in Settings and enable Kirby notes. Kirby's standard API
+alone is not compatible. Obtain the token from your publishing plugin's
+configuration, not an unrelated Kirby account credential. There is no default
+publishing host. Use HTTPS unless you control the private network.
+
+Selecting a quote and choosing Create note in Kirby sends it with the article
+title and URL. The endpoint must accept multipart form data with a payload field
+containing JSON with title, destination set to notes, and Markdown text, using
+Authorization: Bearer <token>. Return JSON with ok set to true and a page id or
+slug, plus an optional url. Configure that endpoint to create drafts.
+src/server/kirby.ts defines the payload. KIRBY_PUBLISH_URL and KIRBY_PUBLISH_TOKEN
+remain available as environment defaults.
 
 ## RSSHub and private feed proxies
 
@@ -46,7 +78,12 @@ and full-text requests reject private network destinations.
 
 ## AI
 
-CODEX_ENABLED and OPENCODE_ENABLED default to false. There are no AI credentials
+CODEX_ENABLED and OPENCODE_ENABLED default to false. Settings provides a master
+AI switch, provider switches, and individual switches for discussions, headline
+cleanup, Pulse grouping, and briefing generation. Turning AI off stops new model
+requests and cancels active discussions. A batch request already running may
+finish; disabled features do not start its next review or batch. Existing
+discussions, briefings, and collections remain stored. There are no AI credentials
 or CLI tools in the default reader image. AI model calls send article text to
 the selected provider. Enabling grouping or headline cleanup can make background
 requests after synchronization. Enabling a CLI does not itself enable every
@@ -67,9 +104,11 @@ docker compose -f compose.yaml -f compose.ai.yaml run --rm --no-deps paper codex
 
 Its authentication directory is ./ai-auth/codex, separate from your host login.
 It is private writable state so the CLI can refresh its login. Authenticate
-OpenCode separately with its official CLI if you use that fallback. Enable the
-provider in .env only after authentication, then start Paper with both Compose
-files. The CLI package installation is checked during image building; this
+OpenCode separately with its official CLI if you use that fallback. Its login
+command inside the same container is opencode auth login. Start Paper with both
+Compose files, then enable the provider and desired features in Settings.
+Paper uses the CLI login stores; it does not accept AI tokens in Settings.
+Switches do not verify login or model access. The CLI package installation is checked during image building; this
 release does not exercise a live provider account or make billable model calls.
 
 The default editorial profile is in recap/editorial-profile.md. Mount a private

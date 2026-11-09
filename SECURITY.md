@@ -12,6 +12,12 @@ Paper port alongside an authenticated proxy.
 
 Cross-site browser writes are rejected using PUBLIC_URL. This check is not a
 login system. Set PUBLIC_URL to the origin your browser actually uses.
+Anyone with access to Paper can also change integration switches, replace tokens,
+and set a Kirby publishing endpoint, including an endpoint on its private network.
+Limit access to trusted administrators. Settings never returns tokens to clients.
+Tokens entered there are stored without encryption in data/connections.json with
+mode 0600. Treat the data directory and backups as credentials. AI authentication
+remains in each CLI's separate login store.
 
 Feed/article HTML is sanitized before display. Private network checks reduce
 the risk from URL fetching but are not a complete network-isolation boundary.

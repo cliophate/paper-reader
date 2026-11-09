@@ -1,4 +1,5 @@
 import type { PulsePayload } from '../shared/pulse'
+import type { ConnectionsSettings, ConnectionsUpdate } from '../shared/connections'
 import type { ActivityRecord, ArticleReport, BriefingDetail, BriefingSummary, CoverageFeedback, Entry, EntryPage, FullArticle, MuteFilter, NavigationPayload, StreamRef, XThreadPost } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -13,6 +14,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  connections: () => request<ConnectionsSettings>('/api/settings/connections'),
+  updateConnections: (settings: ConnectionsUpdate) => request<ConnectionsSettings>('/api/settings/connections', { method: 'PATCH', body: JSON.stringify(settings) }),
   recentReading: () => request<Entry[]>('/api/reading'),
   saveProgress: (id: string, position: number) => request<{ ok: boolean }>('/api/reading', { method: 'POST', body: JSON.stringify({ id, position }), keepalive: true }),
   previewFilter: (phrase: string, scope: string, feedId: string) => request<{ count: number; items: Entry[] }>('/api/filters/preview', { method: 'POST', body: JSON.stringify({ phrase, scope, feedId }) }),

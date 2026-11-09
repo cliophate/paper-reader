@@ -545,6 +545,26 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .connection-row > div { display: flex; flex-direction: column; gap: 4px; }
 .connection-row strong { font-size: 14px; }
 .connection-row span { color: var(--muted); font-size: 12px; }
+.connection-settings { margin-top: 30px; }
+.connection-card { margin-top: 20px; border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+.connection-card h4 { margin: 0 0 14px; font-size: 16px; }
+.connection-card fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.connection-card fieldset fieldset { margin: 14px 0; }
+.connection-card legend { padding: 8px 0; font-size: 12px; font-weight: 650; color: var(--muted); }
+.connection-toggle { display: flex; align-items: center; gap: 9px; margin: 10px 0; font-size: 13px; }
+.connection-toggle input { accent-color: var(--accent-ink); }
+.connection-field { display: grid; gap: 7px; margin: 14px 0; font-size: 13px; }
+.connection-field input, .connection-field select { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 6px; padding: 9px; color: var(--ink); background: var(--panel); font: inherit; }
+.connection-help, .connection-setup { color: var(--muted); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.connection-help button { padding: 2px 5px; font-size: inherit; }
+.connection-setup { margin: 16px 0; }
+.connection-setup summary { cursor: pointer; color: var(--ink); }
+.connection-setup a { color: var(--accent-ink); text-decoration: underline; }
+.connection-setup pre { overflow: auto; border: 1px solid var(--line); padding: 10px; border-radius: 6px; font-size: 11px; }
+.connection-setup ol { padding-left: 20px; }
+.connection-save { margin-top: 12px; }
+.connection-card [role='status'] { font-size: 12px; color: var(--muted); }
+.connection-error { font-size: 12px; color: var(--ink); }
 .appearance-layer { position: fixed; z-index: 120; inset: 0; }
 .appearance-popover { position: absolute; top: 66px; right: 16px; width: min(410px, calc(100% - 32px)); max-height: calc(100vh - 82px); overflow: auto; border: 1px solid var(--line); border-radius: 15px; background: var(--panel-strong); box-shadow: var(--shadow); padding: 18px; }
 .appearance-popover > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }
