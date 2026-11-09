@@ -1,23 +1,29 @@
-The first public Paper alpha is a single-user reader for an existing FreshRSS
-account. It includes local search, reading positions, full-text extraction,
-filters, and offline article copies. AI, Readwise, Kirby, and RSSHub connections
-are optional and disabled until configured.
+Paper is a self-hosted reader for an existing FreshRSS account. This early alpha
+includes full-text articles, local search, reading positions, filters, keyboard
+shortcuts, and offline article copies.
 
-Use the README's setup instructions. The default reader image is Linux amd64
-and binds to loopback in Compose. Protect remote access with an authenticated
-HTTPS proxy. There is no built-in login or account isolation.
+This release adds optional AI, Readwise Reader, and Kirby controls in
+Settings > Reading & connections, with setup instructions and token storage
+and removal for Readwise and Kirby. AI uses the separate AI image and a CLI
+login. Readwise saves articles. Kirby drafts require a compatible publishing
+plugin on your site.
 
-This release includes a versioned Docker image archive and its SHA-256 checksum.
-The pull-image helper tries the registry first and can load the public archive
-after checksum verification. The optional AI image can also be built from source.
+The sync diagnostic now compares entries in FreshRSS arrival order, independently
+of publication dates and your reading order. This fixes false mismatches for
+articles that arrive late. Reader sorting is unchanged.
 
-Validation covers unit/component tests, type checks, production builds,
-dependency audits, secret scans, a synthetic protocol smoke test, and a real
-disposable FreshRSS 1.30.4 installation with proxy authentication and restoration.
-AI CLI startup is checked; no live provider account or billable model request
-is used in validation. This alpha has not had an independent security audit.
+Follow the [quick start](https://github.com/cliophate/paper-reader#quick-start).
+The published images support Linux amd64. The standard reader image also has a
+downloadable archive and SHA-256 checksum; the pull-image helper uses that
+archive if the registry is unavailable.
 
-Paper is entirely AI-coded. Code provenance is not fully verified. The project
-uses MIT where those rights can be granted and preserves third-party licenses.
-See the provenance record and third-party notices. If this steals kittens,
-don't blame me.
+Paper is for one user and has no built-in login. Keep it local or use an
+authenticated HTTPS proxy. Back up your data directory and configuration before
+upgrading, and keep FreshRSS backed up separately.
+
+Validation covers automated tests, builds, dependency and secret checks, and
+disposable FreshRSS installations with both image variants. It includes settings
+persistence, token removal, proxy authentication, and backup restoration. AI CLI
+startup is checked without making live model calls.
+
+Entirely AI-coded. If this steals kittens, don't blame me.

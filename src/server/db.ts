@@ -942,6 +942,14 @@ export class PaperDatabase {
       .all(...parameters).map(row => String(row.id))
   }
 
+  syncEntryIds(stream: StreamRef, unreadOnly = false, limit = 80): string[] {
+    const { clauses, parameters } = this.pageScope(stream, { unreadOnly, includeMuted: true })
+    // FreshRSS's API orders by arrival ID, encoded as fixed-width hexadecimal.
+    // Reader pages use publication dates and the user's preferred direction.
+    return this.db.prepare(`SELECT entries.id FROM entries ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY entries.id DESC LIMIT ?`)
+      .all(...parameters, Math.min(Math.max(limit, 1), 250)).map(row => String(row.id))
+  }
+
   localEntriesPage(stream: StreamRef, options: PageOptions = {}): LocalEntryPage {
     const limit = Math.min(Math.max(options.limit || 80, 1), 250)
     const { clauses, parameters, search, join } = this.pageScope(stream, options)

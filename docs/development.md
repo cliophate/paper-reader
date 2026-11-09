@@ -39,7 +39,7 @@ behavior without using your `.env`, reading data, or provider accounts.
 This test requires Docker and Python 3. Build the image, then run:
 
 ```sh
-docker build --target runtime -t paper-public:0.1.0-alpha.1 .
+docker build --target runtime -t paper-public:test .
 python3 scripts/test-installation.py
 ```
 

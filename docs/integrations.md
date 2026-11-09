@@ -94,19 +94,24 @@ its official instructions, then set its executable path. The Codex connection
 uses its batch CLI and app-server; OpenCode is a briefing/grouping fallback.
 Article discussions and headline review currently require Codex.
 
-The optional compose.ai.yaml builds an image with pinned CLI packages. Run:
+The optional compose.ai.yaml uses the AI image with pinned CLI packages. Run:
 
 ```sh
 mkdir -p ai-auth/codex ai-auth/opencode
-docker compose -f compose.yaml -f compose.ai.yaml build paper
+docker compose -f compose.yaml -f compose.ai.yaml pull paper
 docker compose -f compose.yaml -f compose.ai.yaml run --rm --no-deps paper codex login --device-auth
 ```
 
 Its authentication directory is ./ai-auth/codex, separate from your host login.
 It is private writable state so the CLI can refresh its login. Authenticate
 OpenCode separately with its official CLI if you use that fallback. Its login
-command inside the same container is opencode auth login. Start Paper with both
-Compose files, then enable the provider and desired features in Settings.
+command inside the same container is opencode auth login. Start Paper:
+
+```sh
+docker compose -f compose.yaml -f compose.ai.yaml up -d --no-build paper
+```
+
+Enable the provider and desired features in Settings.
 Paper uses the CLI login stores; it does not accept AI tokens in Settings.
 Switches do not verify login or model access. The CLI package installation is checked during image building; this
 release does not exercise a live provider account or make billable model calls.

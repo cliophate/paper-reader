@@ -20,6 +20,43 @@ afterEach(() => {
 })
 
 describe('FreshRSS synchronization', () => {
+  it('compares arrival order independently of publication dates and reader sort preferences', async () => {
+    const entries = Array.from({ length: 100 }, (_, index) => entry({
+      id: `tag:google.com,2005:reader/item/${index.toString(16).padStart(16, '0')}`,
+      timestamp: 1000 - index,
+      crawledAt: 1000 + index,
+      starred: true,
+    }))
+    database.replaceNavigation(navigation)
+    database.upsertEntries(entries)
+    database.setSyncValue('backfill_complete', 'true')
+    const newest = [...entries].reverse().slice(0, 80)
+    const source = new FakeFreshRss(Array.from({ length: 6 }, () => ({ items: newest, continuation: '' })))
+    source.navigation = async () => ({ ...navigation, unread: 100, starred: 100 })
+    const sync = new FreshRssSynchronizer(database, source, true, [28, 58])
+
+    expect((await sync.parity()).ready).toBe(true)
+    for (const kind of ['all', 'starred'] as const) database.setStreamOrder({ kind, id: kind, title: kind }, 'oldest')
+    expect((await sync.parity()).ready).toBe(true)
+  })
+
+  it('still reports a missing arrival when total unread and starred counts agree', async () => {
+    database.replaceNavigation(navigation)
+    database.upsertEntries([entry({ id: 'local-only' })])
+    database.setSyncValue('backfill_complete', 'true')
+    const source = new FakeFreshRss([
+      { items: [entry({ id: 'remote-only' })], continuation: '' },
+      { items: [entry({ id: 'remote-only' })], continuation: '' },
+      { items: [], continuation: '' },
+    ])
+    source.navigation = async () => ({ ...navigation, unread: 1 })
+    const result = await new FreshRssSynchronizer(database, source, true, [28, 58]).parity()
+
+    expect(result.unread.match).toBe(true)
+    expect(result.ready).toBe(false)
+    expect(result.latestAll).toMatchObject({ match: false, missingLocal: ['remote-only'], missingRemote: ['local-only'] })
+  })
+
   it('backfills continuation pages and reconciles FreshRSS state', async () => {
     const source = new FakeFreshRss([
       { items: [entry({ id: 'one', timestamp: 20 })], continuation: '10' },

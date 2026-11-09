@@ -47,30 +47,34 @@ jobs:
           context: .
           target: runtime
           load: true
-          tags: paper-public:0.1.0-alpha.1
+          tags: paper-public:test
           build-args: SOURCE_REVISION=${{ github.sha }}
       - run: python3 scripts/test-installation.py
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
-          target: runtime
-          push: true
-          tags: ghcr.io/cliophate/paper-reader:${{ steps.version.outputs.value }}
-          build-args: SOURCE_REVISION=${{ github.sha }}
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
-        with:
-          context: .
           target: ai
-          push: true
-          tags: ghcr.io/cliophate/paper-reader:${{ steps.version.outputs.value }}-ai
+          load: true
+          tags: paper-public:ai-test
           build-args: SOURCE_REVISION=${{ github.sha }}
+      - run: docker run --rm --network none paper-public:ai-test codex --version
+      - run: docker run --rm --network none paper-public:ai-test opencode --version
+      - run: PAPER_TEST_IMAGE=paper-public:ai-test python3 scripts/test-installation.py
+      - name: Push verified images
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          docker tag paper-public:test "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION"
+          docker tag paper-public:ai-test "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION-ai"
+          docker push "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION"
+          docker push "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION-ai"
       - name: Publish public release archive
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
           archive="paper-reader-$RELEASE_VERSION-linux-amd64.tar.gz"
-          docker tag paper-public:0.1.0-alpha.1 "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION"
+          docker tag paper-public:test "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION"
           docker save "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION" | gzip -1 > "$archive"
           sha256sum "$archive" > "$archive.sha256"
           gh release create "$GITHUB_REF_NAME" "$archive" "$archive.sha256" --verify-tag --prerelease --title "Paper $RELEASE_VERSION" --notes-file .github/alpha-release-notes.md

@@ -134,9 +134,9 @@ export class FreshRssSynchronizer {
         this.freshRss.entriesPage(STARRED, { unreadOnly: false, limit: 80 }),
       ])
       const localNavigation = this.db.localNavigation(true)
-      const localAll = this.db.localEntriesPage(ALL, { unreadOnly: false, limit: 80, includeMuted: true })
-      const localUnread = this.db.localEntriesPage(ALL, { unreadOnly: true, limit: 80, includeMuted: true })
-      const localStarred = this.db.localEntriesPage(STARRED, { unreadOnly: false, limit: 80, includeMuted: true })
+      const localAll = this.db.syncEntryIds(ALL)
+      const localUnread = this.db.syncEntryIds(ALL, true)
+      const localStarred = this.db.syncEntryIds(STARRED)
       const remoteFeeds = navigationFeedIds(remoteNavigation)
       const localFeeds = navigationFeedIds(localNavigation)
       const remoteFolders = remoteNavigation.folders.map(folder => folder.id)
@@ -147,9 +147,9 @@ export class FreshRssSynchronizer {
         starred: comparison(remoteNavigation.starred, localNavigation.starred),
         feeds: setComparison(remoteFeeds, localFeeds),
         folders: listComparison(remoteFolders, localFolders),
-        latestAll: setComparison(remoteAll.items.map(entry => entry.id), localAll.items.map(entry => entry.id)),
-        latestUnread: setComparison(remoteUnread.items.map(entry => entry.id), localUnread.items.map(entry => entry.id)),
-        latestStarred: setComparison(remoteStarred.items.map(entry => entry.id), localStarred.items.map(entry => entry.id)),
+        latestAll: setComparison(remoteAll.items.map(entry => entry.id), localAll),
+        latestUnread: setComparison(remoteUnread.items.map(entry => entry.id), localUnread),
+        latestStarred: setComparison(remoteStarred.items.map(entry => entry.id), localStarred),
       }
       return { ready: Object.values(result).every(value => typeof value === 'boolean' ? value : value.match), ...result }
     })

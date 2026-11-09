@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FRESHRSS = 'freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df'
 NODE = 'node:24.22.2-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9'
 CADDY = 'caddy:2.11.9@sha256:0c2243efcf437ab7f7a978f1027fcf0d4f9be8a75df27b1b3fbc5dbe0ffa8cf0'
-IMAGE = os.environ.get('PAPER_TEST_IMAGE', 'paper-public:0.1.0-alpha.1')
+IMAGE = os.environ.get('PAPER_TEST_IMAGE', 'paper-public:test')
 PREFIX = 'paper-release-' + uuid.uuid4().hex[:10]
 containers = []
 
@@ -102,11 +102,17 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         auth = {'Authorization': 'GoogleLogin auth=' + token}
         result = json.loads(form(upstream + '/api/greader.php/reader/api/0/subscription/quickadd', {'quickadd': 'http://fixture:8080/feed.xml'}, auth))
         assert result.get('numResults') == 1, result
+        result = json.loads(form(upstream + '/api/greader.php/reader/api/0/subscription/quickadd', {'quickadd': 'http://fixture:8080/backdated.xml'}, auth))
+        assert result.get('numResults') == 1, result
         assert request(upstream + '/api/paper-feed-health.php', headers=auth)[0] == 200
         paper = start_paper(temporary / 'data')
         base = address(paper, 8080)
         until(lambda: request(base + '/api/status')[1].get('localReadsActive'))
         assert request(base + '/api/sync/parity')[1]['ready']
+        assert request(base + '/api/status')[1]['sync']['entryCount'] == 92
+        for order in ['oldest', 'newest']:
+            assert request(base + '/api/streams/order', {'stream': {'kind': 'all', 'id': 'all', 'title': 'All'}, 'order': order})[0] == 200
+            assert request(base + '/api/sync/parity')[1]['ready']
         page = request(base + '/api/entries?kind=all&id=all&unread=0&q=compositor')[1]
         assert len(page['items']) == 2
         entry = page['items'][0]
