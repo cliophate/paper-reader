@@ -26,7 +26,7 @@ def docker(*args, check=True):
     result = subprocess.run(['docker', *args], capture_output=True, text=True, timeout=60)
     if check and result.returncode:
         raise RuntimeError('Docker test operation failed: ' + result.stderr.strip())
-    return result.stdout.strip()
+    return (result.stdout + (result.stderr if args[0] == 'logs' else '')).strip()
 
 
 def run(name, *args):
@@ -73,8 +73,8 @@ def until(check):
 
 def start_paper(state):
     state.mkdir(exist_ok=True)
-    state.chmod(0o777)
-    return run('paper', '-p', '127.0.0.1::8080', '-v', f'{state}:/data',
+    state.chmod(0o700)
+    return run('paper', '--user', f'{os.getuid()}:{os.getgid()}', '-p', '127.0.0.1::8080', '-v', f'{state}:/data',
                '-e', 'HOST=0.0.0.0', '-e', 'PUBLIC_URL=http://localhost',
                '-e', 'FRESHRSS_BASE_URL=http://freshrss', '-e', 'FRESHRSS_USERNAME=fixture',
                '-e', 'FRESHRSS_API_PASSWORD=synthetic-api-password',
