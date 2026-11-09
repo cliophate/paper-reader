@@ -35,4 +35,16 @@ describe('standalone configuration', () => {
     vi.stubEnv('FRESHRSS_API_PASSWORD', '')
     expect(loadConfig).toThrow('Missing required environment variable FRESHRSS_API_PASSWORD')
   })
+  it('uses the documented sync schedule when the setting is empty', () => {
+    configured()
+    vi.stubEnv('PAPER_SYNC_MINUTES', '')
+    expect(loadConfig().sync.minutes).toEqual([28, 58])
+  })
+  it('validates the configured email time zone before running a briefing', () => {
+    configured()
+    vi.stubEnv('TZ', 'Pacific/Auckland')
+    expect(loadConfig().timeZone).toBe('Pacific/Auckland')
+    vi.stubEnv('TZ', 'not-a-time-zone')
+    expect(loadConfig).toThrow('TZ must be a supported IANA time zone')
+  })
 })

@@ -37,6 +37,13 @@ function feedOrigins(): string[] {
   })
 }
 
+function timeZone(): string {
+  const result = value('TZ', 'UTC')
+  try { new Intl.DateTimeFormat('en', { timeZone: result }) }
+  catch { throw new Error('TZ must be a supported IANA time zone') }
+  return result
+}
+
 export type Config = ReturnType<typeof loadConfig>
 
 export function loadConfig() {
@@ -45,7 +52,7 @@ export function loadConfig() {
     port: Number(value('PORT', '8080')),
     host: value('HOST', '127.0.0.1'),
     readerFallbackEnabled: value('PAPER_READER_FALLBACK_ENABLED', 'false') === 'true',
-    timeZone: value('TZ', 'UTC'),
+    timeZone: timeZone(),
     trustedFeedOrigins: feedOrigins(),
     publicUrl: value('PUBLIC_URL', 'http://localhost:8080').replace(/\/$/, ''),
     stateDir,

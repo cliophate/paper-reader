@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { extractChannelImage, isRssHubXUserFeed, isTrustedSocialFeed } from '../src/server/social-avatar'
 
 describe('social avatars', () => {
+  it('does not trust an administrator feed origin until explicitly configured', () => {
+    expect(isTrustedSocialFeed('https://feeds.example.test/twitter/user/example')).toBe(false)
+  })
   it('extracts and decodes the channel image before the first item', () => {
     const xml = '<rss><channel><image><url>https://pbs.twimg.com/profile_images/123/avatar.jpg?x=1&amp;y=2</url></image><item><image><url>wrong</url></image></item></channel></rss>'
     expect(extractChannelImage(xml)).toBe('https://pbs.twimg.com/profile_images/123/avatar.jpg?x=1&y=2')
