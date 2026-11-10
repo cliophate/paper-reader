@@ -1,3 +1,4 @@
+import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import { organizationRouter } from './organization-routes.js'
 import crypto from 'node:crypto'
 import path from 'node:path'
@@ -7,10 +8,12 @@ import { runCodex } from './codex.js'
 import { createChatModel } from './chat-model.js'
 import { DiscussionService, discussionSource } from './discussion.js'
 import { HeadlineService } from './headlines.js'
-import { loadConfig } from './config.js'
+import { openRuntimeStorage } from './runtime-storage.js'
+import { StandaloneBackend } from './standalone-backend.js'
+import { StandaloneRuntime } from './standalone-runtime.js'
+import { localImportStore } from './subscription-import-local.js'
+import { asyncRoute, drainRequests } from './request-work.js'
 import { ConnectionSettings, SettingsValidationError } from './connections.js'
-import { PaperDatabase } from './db.js'
-import { createReaderBackend } from './create-backend.js'
 import { KirbyPublisher } from './kirby.js'
 import { PaperRepository, switchingEntrySource } from './repository.js'
 import { requireSameOrigin } from './request-origin.js'
@@ -36,16 +39,18 @@ const ENTRY_PAGE_SIZE = 80
 const SEARCH_SCAN_SIZE = 80
 const UNDO_LIFETIME_MS = 20_000
 
-const config = loadConfig()
+const storage = await openRuntimeStorage()
+const { config, database, backend } = storage
+let shuttingDown = false
+const eventResponses = new Set<Response>()
 const connectionSettings = new ConnectionSettings(config)
 const connectionListeners = new Set<() => void>()
 const discussionEnabled = () => config.codex.enabled && config.ai.discussionEnabled
-logMemory('database opening')
-const database = new PaperDatabase(config.databasePath)
 logMemory('database ready')
-const backend = createReaderBackend(config)
 const repository = new PaperRepository(database)
-const synchronizer = new BackendSynchronizer(database, backend, config.sync.enabled, config.sync.minutes)
+const standalone = backend instanceof StandaloneBackend ? backend : null
+const synchronizer = standalone ? new StandaloneRuntime(database, standalone, config.sync.enabled, config.trustedFeedOrigins)
+  : new BackendSynchronizer(database, backend, config.sync.enabled, config.sync.minutes)
 const readwise = new ReadwiseClient(config.readwise)
 const kirby = new KirbyPublisher(config.kirby)
 const reader = new ReaderService(database, config.readerFallbackEnabled)
@@ -54,7 +59,7 @@ const headlines = new HeadlineService(database, url => reader.fetch(url, 0), (st
     prompt, input, schema, 'medium'), config.headlines.enabled && config.codex.enabled,
   `${config.headlines.writerModel}:${config.headlines.reviewerModel}`)
 const xThreads = new XThreadService(config.rssHub.baseUrl)
-let localReadsActive = config.sync.localReads && database.getSyncValue('backfill_complete') === 'true'
+let localReadsActive = Boolean(standalone) || config.sync.localReads && database.getSyncValue('backfill_complete') === 'true'
 const entriesSource = switchingEntrySource(() => localReadsActive, repository, backend)
 const pulse = new PulseService(database, (prompt, input, schema) => config.codex.enabled
   ? runCodex(config.codex, config.collections.model, prompt, input, schema, 'medium')
@@ -67,7 +72,8 @@ const discussions = new DiscussionService(database, createChatModel(config.codex
 logMemory('services ready')
 
 synchronizer.onSyncCompleted(() => {
-  localReadsActive = config.sync.localReads && database.getSyncValue('backfill_complete') === 'true'
+  if (shuttingDown) return
+  localReadsActive = Boolean(standalone) || config.sync.localReads && database.getSyncValue('backfill_complete') === 'true'
   void headlines.run()
   void pulse.refresh()
   topics.invalidate()
@@ -82,8 +88,12 @@ const memoryTimer = setInterval(() => logMemory('running'), 60_000)
 memoryTimer.unref()
 
 app.disable('x-powered-by')
+app.use((_request, response, next) => {
+  if (shuttingDown) return response.status(503).json({ error: 'Paper is shutting down.' })
+  next()
+})
 app.use(requireSameOrigin(config.publicUrl))
-app.use('/api/subscription-tools', subscriptionToolsRoutes(freshRssImportStore(backend, synchronizer), discoveryTransport(config.trustedFeedOrigins)))
+app.use('/api/subscription-tools', subscriptionToolsRoutes(standalone ? localImportStore(database, backend.identity.id) : freshRssImportStore(backend, synchronizer), discoveryTransport(config.trustedFeedOrigins)))
 app.use(express.json({ limit: '2mb' }))
 app.use(express.urlencoded({ extended: false }))
 app.use('/api/settings/connections', (error: unknown, _request: Request, response: Response, _next: NextFunction) => {
@@ -100,6 +110,8 @@ app.get('/api/discussion/events', (request, response) => {
   const id = String(request.query.entryId || '')
   response.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
   response.flushHeaders()
+  eventResponses.add(response)
+  response.on('close', () => eventResponses.delete(response))
   const send = (discussion: unknown) => response.write(`data: ${JSON.stringify(discussion)}\n\n`)
   const unsubscribe = discussions.subscribe(id, send)
   send(discussions.get(id))
@@ -129,6 +141,8 @@ app.delete('/api/discussion', (request, response) => {
 })
 
 app.get('/api/status', (_request, response) => response.json({
+  backend: backend.identity.kind,
+  backendInstance: backend.identity.id,
   discussionConfigured: discussionEnabled(),
   rssHubConfigured: Boolean(config.rssHub.baseUrl),
   readwiseConfigured: readwise.configured,
@@ -170,6 +184,8 @@ app.get('/api/events', (request, response) => {
     Connection: 'keep-alive',
   })
   response.flushHeaders()
+  eventResponses.add(response)
+  response.on('close', () => eventResponses.delete(response))
   response.write('retry: 3000\n\n')
 
   const unsubscribe = synchronizer.onSyncCompleted(completedAt => {
@@ -225,7 +241,9 @@ app.post('/api/filters', (request, response) => {
   if (!['title', 'content', 'any'].includes(scope)) return response.status(400).json({ error: 'Unknown filter scope' })
   try { if (feedId) backend.validateFeedId(feedId, 'filter') }
   catch (error) {
-    if (error instanceof BackendValidationError) return response.status(400).json({ error: 'Unknown feed' })
+    if (error instanceof StateConflictError) return response.status(409).json({ code: 'state-conflict', error: error.message, states: error.states })
+  if (error instanceof UndoExpiredError) return response.status(410).json({ error: error.message })
+  if (error instanceof BackendValidationError) return response.status(400).json({ error: 'Unknown feed' })
     throw error
   }
   const filter = database.createMuteFilter(phrase, scope as import('./db.js').MuteFilterScope, feedId)
@@ -396,7 +414,7 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
 
 app.post('/api/entries/item', asyncRoute(async (request, response) => {
   const entry = await entriesSource.entry(String(request.body?.id || ''))
-  if (!entry) return response.status(404).json({ error: 'FreshRSS could not find this article' })
+  if (!entry) return response.status(404).json({ error: 'Paper could not find this article' })
   response.json({ entry: headlines.decorate(entry) })
 }))
 
@@ -405,11 +423,17 @@ app.post('/api/entries/state', asyncRoute(async (request, response) => {
   const operation = String(request.body?.operation || '')
   if (!['read', 'unread', 'star', 'unstar'].includes(operation)) return response.status(400).json({ error: 'Unknown state operation' })
   const origin = ['reader', 'pulse', 'automatic'].includes(String(request.body?.origin)) ? String(request.body.origin) : 'reader'
+  if (standalone) {
+    const expectedRevisions = parseRevisions(request.body?.expectedRevisions)
+    const undo = request.body?.undo === true ? { token: crypto.randomBytes(24).toString('base64url'), expiresAt: new Date(Date.now() + UNDO_LIFETIME_MS).toISOString() } : undefined
+    const change = standalone.state.editEntries(ids, operation as EntryStateOperation, { expectedRevisions, origin, undo })
+    return response.json({ ok: true, ...change })
+  }
   await synchronizer.editEntries(ids, operation as EntryStateOperation, origin)
   response.json({ ok: true })
 }))
 
-const bulkPreviews = new Map<string, { ids: string[]; expires: number }>()
+const bulkPreviews = new Map<string, { ids: string[]; expires: number; revisions?: Record<string, number> }>()
 app.post('/api/streams/preview-read', asyncRoute(async (request, response) => {
   const input = request.body || {}
   const stream = parseStreamBody(input.stream)
@@ -417,7 +441,7 @@ app.post('/api/streams/preview-read', asyncRoute(async (request, response) => {
   const ids = localReadsActive ? database.matchingEntryIds(stream, { unreadOnly: true, query: String(input.query || ''), after: String(input.after || ''), before: String(input.before || '') }) : await backend.entryIds(stream, true)
   for (const [key, preview] of bulkPreviews) if (preview.expires < Date.now()) bulkPreviews.delete(key)
   const token = crypto.randomUUID()
-  bulkPreviews.set(token, { ids, expires: Date.now() + 60000 })
+  bulkPreviews.set(token, { ids, expires: Date.now() + 60000, revisions: standalone ? currentRevisions(ids) : undefined })
   response.json({ token, count: ids.length })
 }))
 app.post('/api/streams/confirm-read', asyncRoute(async (request, response) => {
@@ -425,11 +449,9 @@ app.post('/api/streams/confirm-read', asyncRoute(async (request, response) => {
   const preview = bulkPreviews.get(token)
   if (!preview || preview.expires < Date.now()) return response.status(409).json({ error: 'The preview expired. Check the count again.' })
   bulkPreviews.delete(token)
-  const ids = localReadsActive ? preview.ids.filter(id => database.localEntry(id)?.read === false) : preview.ids
-  await synchronizer.editEntries(ids, 'read', 'stream')
-  const undoToken = crypto.randomBytes(24).toString('base64url')
-  database.createUndo({ token: undoToken, operation: 'unread', entryIds: ids, expiresAt: new Date(Date.now() + UNDO_LIFETIME_MS).toISOString() })
-  response.json({ count: ids.length, undoToken })
+  const ids = localReadsActive && !standalone ? preview.ids.filter(id => database.localEntry(id)?.read === false) : preview.ids
+  const result = await markReadWithUndo(ids, preview.revisions)
+  response.json(result)
 }))
 
 app.post('/api/streams/mark-read', asyncRoute(async (request, response) => {
@@ -437,15 +459,8 @@ app.post('/api/streams/mark-read', asyncRoute(async (request, response) => {
   const remoteIds = await backend.entryIds(stream, true)
   const localIds = localReadsActive ? database.localEntryIds(stream, true) : []
   const ids = [...new Set([...remoteIds, ...localIds])]
-  await synchronizer.editEntries(ids, 'read', 'stream')
-  const undoToken = ids.length ? crypto.randomBytes(24).toString('base64url') : ''
-  if (undoToken) database.createUndo({
-    token: undoToken,
-    operation: 'unread',
-    entryIds: ids,
-    expiresAt: new Date(Date.now() + UNDO_LIFETIME_MS).toISOString(),
-  })
-  response.json({ ok: true, count: ids.length, undoToken })
+  const result = await markReadWithUndo(ids)
+  response.json({ ok: true, ...result })
 }))
 
 app.post('/api/streams/mark-relative-read', asyncRoute(async (request, response) => {
@@ -473,19 +488,16 @@ app.post('/api/streams/mark-relative-read', asyncRoute(async (request, response)
     ids = candidates.filter(id => unreadSet.has(id))
   }
 
-  await synchronizer.editEntries(ids, 'read', 'stream')
-  const undoToken = ids.length ? crypto.randomBytes(24).toString('base64url') : ''
-  if (undoToken) database.createUndo({
-    token: undoToken,
-    operation: 'unread',
-    entryIds: ids,
-    expiresAt: new Date(Date.now() + UNDO_LIFETIME_MS).toISOString(),
-  })
-  response.json({ ok: true, count: ids.length, ids, undoToken })
+  const result = await markReadWithUndo(ids)
+  response.json({ ok: true, ...result, ids })
 }))
 
 app.post('/api/undo', asyncRoute(async (request, response) => {
   const token = String(request.body?.token || '')
+  if (standalone) {
+    const change = standalone.state.undo(token)
+    return response.json({ ok: true, count: change.ids.length, ...change })
+  }
   const undo = database.getUndo(token)
   if (!undo) return response.status(410).json({ error: 'That undo has expired' })
   await synchronizer.editEntries(undo.entryIds, undo.operation, 'undo')
@@ -610,7 +622,7 @@ app.get('/briefings/:id/confirm', (request, response) => {
 app.post('/briefings/:id/confirm', asyncRoute(async (request, response) => {
   const briefing = database.getBriefing(String(request.params.id))
   const token = String(request.body?.token || '')
-  if (!briefing || !token || !briefings.verifyToken(briefing, token)) return response.status(404).send(messagePage('This link is not valid.', 'Paper did not change FreshRSS.'))
+  if (!briefing || !token || !briefings.verifyToken(briefing, token)) return response.status(404).send(messagePage('This link is not valid.', 'Paper did not change article state.'))
   if (!briefing.acknowledgedAt) {
     const ids = database.entryIdsForBriefing(briefing.id)
     await synchronizer.editEntries(ids, 'read', 'briefing')
@@ -621,18 +633,60 @@ app.post('/briefings/:id/confirm', asyncRoute(async (request, response) => {
 
 const clientPath = path.resolve('dist')
 app.use(express.static(clientPath, { index: false, maxAge: '1h' }))
-app.get('*splat', (_request, response) => response.sendFile(path.join(clientPath, 'index.html')))
+app.get('*splat', (_request, response) => response.sendFile('index.html', { root: clientPath }))
 
 app.use((error: Error, request: Request, response: Response, _next: NextFunction) => {
+  if (error instanceof StateConflictError) return response.status(409).json({ code: 'state-conflict', error: error.message, states: error.states })
+  if (error instanceof UndoExpiredError) return response.status(410).json({ error: error.message })
   if (error instanceof BackendValidationError) return response.status(400).json({ error: error.message })
   console.error(`${request.method} ${request.path}`, error)
   response.status(500).json({ error: error.message || 'Paper could not complete the request' })
 })
 
-app.listen(config.port, config.host, () => {
+const server = app.listen(config.port, config.host, () => {
   console.log(`Paper is listening on port ${config.port}`)
   logMemory('listening')
 })
+
+function parseRevisions(value: unknown): Record<string, number> | undefined {
+  if (value === undefined) return undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.values(value).some(revision => !Number.isSafeInteger(revision) || Number(revision) < 0)) throw new BackendValidationError('Send valid article revisions.')
+  return value as Record<string, number>
+}
+function currentRevisions(ids: string[]) { return Object.fromEntries(ids.map(id => [id, database.entryState(id)?.revision ?? -1])) }
+async function markReadWithUndo(ids: string[], expectedRevisions?: Record<string, number>) {
+  const token = crypto.randomBytes(24).toString('base64url')
+  const expiresAt = new Date(Date.now() + UNDO_LIFETIME_MS).toISOString()
+  if (standalone) {
+    const change = standalone.state.editEntries(ids, 'read', { origin: 'stream', expectedRevisions, undo: { token, expiresAt } })
+    return { count: change.ids.length, undoToken: change.undoToken }
+  }
+  await synchronizer.editEntries(ids, 'read', 'stream')
+  if (ids.length) database.createUndo({ token, operation: 'unread', entryIds: ids, expiresAt })
+  return { count: ids.length, undoToken: ids.length ? token : '' }
+}
+
+async function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
+  clearInterval(memoryTimer)
+  // On timeout the process exits holding the lock. The OS releases it only
+  // after every remaining writer has died.
+  const deadline = setTimeout(() => process.exit(1), 30_000)
+  deadline.unref()
+  const stopped = new Promise<void>(resolve => server.close(() => resolve()))
+  for (const response of eventResponses) response.end()
+  headlines.setEnabled(false)
+  pulse.setEnabled(false)
+  discussions.stopAll()
+  await synchronizer.stop()
+  await stopped
+  await drainRequests()
+  await Promise.all([headlines.drain(), pulse.drain(), topics.drain(), discussions.drain()])
+  storage.close()
+  clearTimeout(deadline)
+}
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void shutdown().catch(() => process.exit(1)) })
 
 function logMemory(stage: string) {
   const { rss, heapUsed, heapTotal } = process.memoryUsage()
@@ -678,15 +732,12 @@ function requireInternalSecret(request: Request, response: Response, next: NextF
   next()
 }
 
-function asyncRoute(handler: (request: Request, response: Response, next: NextFunction) => Promise<unknown>) {
-  return (request: Request, response: Response, next: NextFunction) => void handler(request, response, next).catch(next)
-}
 
 function confirmPage(id: string, token: string, count: number, kind: string): string {
   return pageShell(`
     <p class="eyebrow">Paper ${escapeHtml(kind)} briefing</p>
     <h1>Mark this briefing read?</h1>
-    <p>Paper will mark ${count} represented ${count === 1 ? 'entry' : 'entries'} as read in FreshRSS. Other unread entries will stay untouched.</p>
+    <p>Paper will mark ${count} represented ${count === 1 ? 'entry' : 'entries'} as read. Other unread entries will stay untouched.</p>
     <form method="post" action="/briefings/${escapeHtml(id)}/confirm">
       <input type="hidden" name="token" value="${escapeHtml(token)}">
       <button type="submit">Mark ${count} ${count === 1 ? 'entry' : 'entries'} read</button>

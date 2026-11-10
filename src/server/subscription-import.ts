@@ -9,7 +9,7 @@ export interface SubscriptionImportStore {
   backendId: string
   kind: 'freshrss' | 'standalone'
   snapshot(): Promise<ImportSnapshot>
-  create(row: ImportRow, folders: string[], expectedRevision: number | null): Promise<string | { id?: string; refreshError?: string } | undefined>
+  create(row: Pick<ImportRow, 'title' | 'url'>, folders: string[], expectedRevision: number | null): Promise<string | { id?: string; refreshError?: string } | undefined>
   setFolders(id: string, folders: string[], expectedRevision: number | null): Promise<{ refreshError?: string } | void>
 }
 export class ImportConflictError extends Error {

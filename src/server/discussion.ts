@@ -22,6 +22,8 @@ export function discussionSource(title: string, author: string, url: string, htm
 }
 
 export class DiscussionService {
+  private pending = new Set<Promise<void>>()
+  async drain() { this.stopAll(); await Promise.allSettled([...this.pending]) }
   private running = new Map<string, AbortController>()
   private listeners = new Map<string, Set<(value: Discussion | null) => void>>()
   constructor(private db: PaperDatabase, private model: ChatModel) { db.interruptDiscussions() }
@@ -68,7 +70,7 @@ export class DiscussionService {
     const reply: Discussion['messages'][number] = { id: `${requestId}-reply`, role: 'assistant', text: '', status: 'running' }
     const input = { source: discussion.source, conversation: discussion.messages.filter(m => m.status === 'complete').map(({ role, text, quote }) => ({ role, text, quote })) }
     discussion.messages.push(reply); this.publish(discussion)
-    void (async () => {
+    const task = (async () => {
       let lastUpdate = 0
       try {
         reply.text = await this.model(input, controller.signal, text => {
@@ -81,6 +83,8 @@ export class DiscussionService {
         reply.error = controller.signal.aborted ? 'Response stopped.' : error instanceof Error ? error.message : 'Could not generate a reply.'
       } finally { this.running.delete(entryId); this.publish(discussion) }
     })()
+    this.pending.add(task)
+    void task.finally(() => this.pending.delete(task))
     return discussion
   }
 }

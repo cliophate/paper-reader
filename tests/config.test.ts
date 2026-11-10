@@ -9,7 +9,18 @@ function configured() {
     PAPER_SIGNING_SECRET: 'synthetic-signing-secret',
   })) vi.stubEnv(key, value)
 }
-describe('standalone configuration', () => {
+describe('backend configuration', () => {
+  it('selects standalone explicitly without FreshRSS credentials and refuses disabling local reads', () => {
+    configured()
+    vi.stubEnv('PAPER_BACKEND', 'standalone')
+    for (const key of ['FRESHRSS_BASE_URL', 'FRESHRSS_USERNAME', 'FRESHRSS_API_PASSWORD']) vi.stubEnv(key, '')
+    expect(loadConfig().backend).toBe('standalone')
+    expect(loadConfig().freshRss.baseUrl).toBe('')
+    vi.stubEnv('PAPER_LOCAL_READS', 'false')
+    expect(loadConfig).toThrow(/requires PAPER_LOCAL_READS/)
+    vi.stubEnv('PAPER_BACKEND', 'invalid')
+    expect(loadConfig).toThrow(/PAPER_BACKEND must/)
+  })
   it('starts without optional credentials and enables no AI provider by default', () => {
     configured()
     for (const key of ['CODEX_ENABLED', 'OPENCODE_ENABLED', 'KIRBY_PUBLISH_URL', 'KIRBY_PUBLISH_TOKEN', 'READWISE_TOKEN', 'RSSHUB_BASE_URL', 'PAPER_TRUSTED_FEED_ORIGINS', 'HOST']) vi.stubEnv(key, '')

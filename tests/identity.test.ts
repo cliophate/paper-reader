@@ -215,6 +215,39 @@ describe('local state ownership', () => {
     expect(listener).toHaveBeenCalledTimes(1)
   })
 
+  it('commits undo with state and consumes it only after revision-checked restoration', () => {
+    const id = ingest(local(), { externalId: 'undo' })
+    const service = new LocalStateService(db, backend.id)
+    const events = vi.fn()
+    service.onStateChanged(events)
+    const undo = { token: 'synthetic-undo', expiresAt: new Date(Date.now() + 60000).toISOString() }
+    service.editEntries([id], 'read', { undo })
+    expect(db.getUndo(undo.token)).toMatchObject({ backendId: backend.id, expectedRevisions: { [id]: 1 } })
+    expect(events).toHaveBeenCalledOnce()
+    service.editEntries([id], 'star')
+    expect(() => service.undo(undo.token)).toThrow(/state changed/)
+    expect(db.getUndo(undo.token)).not.toBeNull()
+    expect(db.entryState(id)).toMatchObject({ read: true, starred: true })
+    service.editEntries([id], 'unread', { undo: { ...undo, token: 'second' } })
+    expect(service.undo('second').ids).toEqual([id])
+    expect(db.getUndo('second')).toBeNull()
+    expect(() => service.undo('second')).toThrow(/expired/)
+    db.createUndo({ ...undo, token: 'legacy', operation: 'unread', entryIds: [id] })
+    expect(() => service.undo('legacy')).toThrow(/another backend/)
+  })
+
+  it('rolls back state, activity and events when undo persistence fails', () => {
+    const id = ingest(local(), { externalId: 'undo-failure' })
+    const service = new LocalStateService(db, backend.id), listener = vi.fn()
+    service.onStateChanged(listener)
+    const undo = { token: 'duplicate', expiresAt: new Date(Date.now() + 60000).toISOString() }
+    db.createUndo({ ...undo, operation: 'unread', entryIds: [] })
+    expect(() => service.editEntries([id], 'read', { undo })).toThrow()
+    expect(db.entryState(id)).toEqual({ read: false, starred: false, revision: 0 })
+    expect(db.activity().filter(event => event.kind === 'state')).toHaveLength(0)
+    expect(listener).not.toHaveBeenCalled()
+  })
+
   it('does not report a committed write as failed when a listener throws', () => {
     const id = ingest(local(), { externalId: 'one' })
     const service = new LocalStateService(db, backend.id)

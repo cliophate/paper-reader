@@ -3,7 +3,6 @@ import type { PaperDatabase } from './db.js'
 
 export type LocalStateChange = ReturnType<PaperDatabase['commitLocalEntryState']>
 
-// Used by standalone mode once its collector and setup are available.
 export class LocalStateService {
   private readonly listeners = new Set<(change: LocalStateChange) => void>()
 
@@ -14,14 +13,22 @@ export class LocalStateService {
     return () => { this.listeners.delete(listener) }
   }
 
-  editEntries(ids: string[], operation: EntryStateOperation, options: {
-    expectedRevisions?: Record<string, number>; origin?: string
-  } = {}): LocalStateChange {
+  editEntries(ids: string[], operation: EntryStateOperation, options: Parameters<PaperDatabase['commitLocalEntryState']>[3] = {}): LocalStateChange {
     const change = this.db.commitLocalEntryState(this.backendId, ids, operation, options)
+    this.emit(change)
+    return change
+  }
+
+  undo(token: string): LocalStateChange {
+    const change = this.db.commitLocalUndo(this.backendId, token)
+    this.emit(change)
+    return change
+  }
+
+  private emit(change: LocalStateChange) {
     if (change.ids.length) for (const listener of this.listeners) {
       try { listener(change) }
       catch { console.warn('A local state listener failed after commit') }
     }
-    return change
   }
 }

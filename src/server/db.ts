@@ -1,3 +1,4 @@
+import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -51,6 +52,8 @@ export interface HeadlineRecord {
 }
 
 export interface UndoRecord {
+  backendId?: string
+  expectedRevisions?: Record<string, number>
   token: string
   operation: 'read' | 'unread' | 'star' | 'unstar'
   entryIds: string[]
@@ -221,7 +224,7 @@ export class PaperDatabase {
   bindBackend(backend: BackendIdentity) {
     transaction(this.db, () => {
       const active = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
-      if (active && active !== backend.id) throw new Error('This database belongs to another backend. Use its original configuration or a separate data directory; backend migration is not enabled.')
+      if (active && active !== backend.id) throw new Error('This database belongs to another backend. Use its original configuration, a separate data directory, or the offline migration command.')
       this.identities.registerBackend(backend)
       if (active) return
       if (backend.kind === 'standalone' && (this.entryCount() || this.db.prepare('SELECT 1 FROM feeds LIMIT 1').get())) {
@@ -246,6 +249,16 @@ export class PaperDatabase {
       this.db.prepare("INSERT INTO sync_state(key, value) VALUES ('active_backend_id', ?)").run(backend.id)
     })
     this.activeBackendId = backend.id
+  }
+
+  bindStandalone(): BackendIdentity {
+    return transaction(this.db, () => {
+      const active = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
+      const identity: BackendIdentity = active ? this.identities.backend(active) : { id: `standalone:${crypto.randomUUID()}`, kind: 'standalone' }
+      if (identity.kind !== 'standalone') throw new Error('This database belongs to FreshRSS. Complete the offline migration before selecting standalone mode.')
+      this.bindBackend(identity)
+      return identity
+    })
   }
 
   saveLocalSubscription(backendId: string, feed: { id?: string; title: string; url: string; siteUrl?: string; iconUrl?: string }): string {
@@ -307,6 +320,7 @@ export class PaperDatabase {
 
   commitLocalEntryState(backendId: string, ids: string[], operation: EntryStateOperation, options: {
     expectedRevisions?: Record<string, number>; origin?: string
+    undo?: { token: string; expiresAt: string }
   } = {}) {
     return transaction(this.db, () => {
       this.assertLocalBackend(backendId)
@@ -316,9 +330,11 @@ export class PaperDatabase {
         const owner = this.identities.article(id)
         const state = this.entryState(id)
         if (!state || owner?.backendId !== backendId) throw new Error('Article does not belong to this backend')
-        if (options.expectedRevisions && options.expectedRevisions[id] !== state.revision) throw new Error('Article state changed. Refresh before retrying.')
         return { id, ...state }
       })
+      if (options.expectedRevisions && states.some(state => options.expectedRevisions![state.id] !== state.revision)) {
+        throw new StateConflictError(Object.fromEntries(states.map(({ id, ...state }) => [id, state])))
+      }
       const column = operation === 'read' || operation === 'unread' ? 'read' : 'starred'
       const value = operation === 'read' || operation === 'star'
       const changed = states.filter(state => state[column] !== value)
@@ -327,7 +343,24 @@ export class PaperDatabase {
         kind: 'state', origin: options.origin || 'reader', summary: `${operation}: ${changed.length} articles`, count: changed.length,
         details: { operation, ids: changed.map(state => state.id).slice(0, 30) },
       })
-      return { ids: changed.map(state => state.id), operation, revisions: Object.fromEntries(states.map(state => [state.id, this.entryState(state.id)!.revision])) }
+      const revisions = Object.fromEntries(states.map(state => [state.id, this.entryState(state.id)!.revision]))
+      const undoToken = changed.length && options.undo ? options.undo.token : ''
+      if (undoToken) this.createUndo({ token: undoToken, expiresAt: options.undo!.expiresAt,
+        operation: operation === 'read' ? 'unread' : operation === 'unread' ? 'read' : operation === 'star' ? 'unstar' : 'star',
+        entryIds: changed.map(state => state.id), backendId,
+        expectedRevisions: Object.fromEntries(changed.map(state => [state.id, revisions[state.id]])) })
+      return { ids: changed.map(state => state.id), operation, revisions, undoToken }
+    })
+  }
+
+  commitLocalUndo(backendId: string, token: string) {
+    return transaction(this.db, () => {
+      this.assertLocalBackend(backendId)
+      const undo = this.getUndo(token)
+      if (!undo || undo.backendId !== backendId || !undo.expectedRevisions) throw new UndoExpiredError()
+      const result = this.commitLocalEntryState(backendId, undo.entryIds, undo.operation, { expectedRevisions: undo.expectedRevisions, origin: 'undo' })
+      this.deleteUndo(token)
+      return result
     })
   }
 
@@ -1705,8 +1738,8 @@ export class PaperDatabase {
 
   createUndo(record: UndoRecord) {
     this.db.prepare('DELETE FROM undo_actions WHERE expires_at <= ?').run(new Date().toISOString())
-    this.db.prepare('INSERT INTO undo_actions (token, operation, entry_ids_json, expires_at) VALUES (?, ?, ?, ?)')
-      .run(record.token, record.operation, JSON.stringify(record.entryIds), record.expiresAt)
+    this.db.prepare('INSERT INTO undo_actions (token, operation, entry_ids_json, expires_at, backend_id, expected_revisions_json) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(record.token, record.operation, JSON.stringify(record.entryIds), record.expiresAt, record.backendId || '', record.expectedRevisions ? JSON.stringify(record.expectedRevisions) : null)
   }
 
   getUndo(token: string): UndoRecord | null {
@@ -1716,6 +1749,8 @@ export class PaperDatabase {
       return null
     }
     return {
+      ...(row.backend_id ? { backendId: String(row.backend_id) } : {}),
+      ...(row.expected_revisions_json ? { expectedRevisions: JSON.parse(row.expected_revisions_json) as Record<string, number> } : {}),
       token: String(row.token),
       operation: row.operation as UndoRecord['operation'],
       entryIds: JSON.parse(row.entry_ids_json) as string[],
@@ -1896,6 +1931,7 @@ function entryFromRow(row: Record<string, string | number>): Entry {
     crawledAt: Number(row.crawled_at || row.timestamp),
     read: Boolean(row.read),
     starred: Boolean(row.starred),
+    stateRevision: Number(row.state_revision),
     readingMinutes: contentChanged ? readingMinutes(contentHtml) : Number(row.reading_minutes),
     thumbnailUrl: normalizeFeedThumbnail({ url, thumbnailUrl: String(row.thumbnail_url), contentHtml, originalContentHtml: storedContentHtml }),
     kind: isEditorialLinkedFeed(String(row.feed_url)) ? 'article' : String(row.kind) as Entry['kind'],

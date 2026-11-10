@@ -1,3 +1,4 @@
+import { asyncRoute } from './request-work.js'
 import { Router } from 'express'
 import type { PaperDatabase } from './db.js'
 import type { ReaderBackend } from './backend.js'
@@ -58,15 +59,15 @@ export function organizationRouter({ database, backend, synchronizer, navigation
       : { revision: null, navigation: await (cached && navigation ? navigation() : backend.navigation()) }),
   })
   router.use((_request, response, next) => { response.set('Cache-Control', 'no-store'); next() })
-  router.get('/', async (request, response) => {
+  router.get('/', asyncRoute(async (request, response) => {
     try {
       const refresh = request.query.refresh === '1'
       if (refresh && backend.identity.kind === 'freshrss') await synchronizer?.refreshNavigation()
       response.json(await snapshot(!refresh))
     }
     catch { response.status(503).json({ code: 'unavailable', error: 'Could not load organization. Check the connection and reload.' }) }
-  })
-  router.post('/commands', async (request, response) => {
+  }))
+  router.post('/commands', asyncRoute(async (request, response) => {
     try {
       const { expectedRevision, commands } = parseOrganizationRequest(request.body)
       const local = backend.identity.kind === 'standalone'
@@ -101,6 +102,6 @@ export function organizationRouter({ database, backend, synchronizer, navigation
       if (error instanceof OrganizationError) response.status(error.code === 'conflict' ? 409 : 400).json({ code: error.code, error: error.message, currentRevision: error.currentRevision })
       else response.status(503).json({ code: 'unavailable', error: 'Could not save organization. Reload before retrying.' })
     }
-  })
+  }))
   return router
 }

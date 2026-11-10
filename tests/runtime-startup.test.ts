@@ -1,0 +1,141 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import http from 'node:http'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { once } from 'node:events'
+import { setTimeout as delay } from 'node:timers/promises'
+import { afterEach, beforeEach, expect, it } from 'vitest'
+import { acquireStateLock } from '../src/server/state-lock.js'
+import { openDatabase } from '../src/server/migration-storage.js'
+
+let directory: string
+const children: ChildProcess[] = []
+beforeEach(() => { directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-runtime-')) })
+afterEach(async () => {
+  await Promise.all(children.splice(0).map(async child => {
+    if (child.exitCode !== null || child.signalCode !== null) return
+    const exited = once(child, 'exit'); child.kill('SIGKILL'); await exited
+  }))
+  fs.rmSync(directory, { recursive: true, force: true })
+})
+async function port() {
+  const server = http.createServer().listen(0, '127.0.0.1'); await once(server, 'listening')
+  const port = (server.address() as { port: number }).port
+  await new Promise<void>(resolve => server.close(() => resolve()))
+  return port
+}
+function start(file: string, port: number, extra: NodeJS.ProcessEnv = {}) {
+  const child = spawn(process.execPath, ['--import', 'tsx', `src/server/${file}.ts`], {
+    stdio: ['ignore', 'pipe', 'pipe'], env: { PATH: process.env.PATH, HOME: directory, NODE_NO_WARNINGS: '1',
+      STATE_DIR: directory, PAPER_BACKEND: 'standalone', PORT: String(port), HOST: '127.0.0.1', PUBLIC_URL: `http://127.0.0.1:${port}`,
+      PAPER_SYNC_ENABLED: 'false', CODEX_ENABLED: 'false', OPENCODE_ENABLED: 'false', ...extra },
+  })
+  children.push(child)
+  let output = ''
+  child.stdout!.on('data', chunk => { output += chunk }); child.stderr!.on('data', chunk => { output += chunk })
+  const exited = once(child, 'exit').then(([code]) => ({ code, output }))
+  return { child, exited }
+}
+async function ready(port: number) {
+  for (let i = 0; i < 100; i++) {
+    try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return } catch {}
+    await delay(50)
+  }
+  throw new Error('Synthetic server did not start')
+}
+
+it('starts the actual server and briefing CLI together, then admits a current CLI while excluding migration', async () => {
+  const number = await port()
+  const server = start('index', number)
+  const firstBriefing = start('briefing-cli', number, { CODEX_ENABLED: 'true', CODEX_BIN: '/bin/false' })
+  await ready(number)
+  const firstResult = await firstBriefing.exited
+  expect(firstResult.code, firstResult.output).toBe(0)
+  const status = await (await fetch(`http://127.0.0.1:${number}/api/status`)).json()
+  expect(status).toMatchObject({ backend: 'standalone', localReadsActive: true, briefingConfigured: false, readwiseConfigured: false, kirbyConfigured: false })
+  const db = openDatabase(path.join(directory, 'paper.sqlite'), true)
+  const schema = db.prepare('PRAGMA schema_version').get()?.schema_version
+  expect(() => acquireStateLock(directory, 'exclusive')).toThrow(/in use/)
+  const nextBriefing = await start('briefing-cli', number, { CODEX_ENABLED: 'true', CODEX_BIN: '/bin/false' }).exited
+  expect(nextBriefing.code, nextBriefing.output).toBe(0)
+  expect(db.prepare('PRAGMA schema_version').get()?.schema_version).toBe(schema)
+  db.close()
+  const secrets = fs.readFileSync(path.join(directory, 'secrets.json'))
+  expect(fs.statSync(path.join(directory, 'secrets.json')).mode & 0o777).toBe(0o600)
+  server.child.kill('SIGTERM'); expect((await server.exited).code).toBe(0)
+  const lock = acquireStateLock(directory, 'exclusive'); lock.release()
+  const restarted = start('index', number); await ready(number)
+  expect((await (await fetch(`http://127.0.0.1:${number}/api/status`)).json()).backendInstance).toBe(status.backendInstance)
+  expect(fs.readFileSync(path.join(directory, 'secrets.json'))).toEqual(secrets)
+  restarted.child.kill('SIGKILL'); await restarted.exited
+  acquireStateLock(directory, 'exclusive').release()
+}, 20000)
+
+it('excludes both real entrypoints while offline migration owns the directory, then releases failed startup resources', async () => {
+  const number = await port(), lock = acquireStateLock(directory, 'exclusive')
+  try {
+    const results = await Promise.all([start('index', number).exited, start('briefing-cli', number).exited])
+    for (const result of results) { expect(result.code).not.toBe(0); expect(result.output).toMatch(/in use/) }
+    expect(fs.existsSync(path.join(directory, 'paper.sqlite'))).toBe(false)
+    expect(fs.existsSync(path.join(directory, 'secrets.json'))).toBe(false)
+  } finally { lock.release() }
+  const server = start('index', number); await ready(number)
+  server.child.kill('SIGTERM'); expect((await server.exited).code).toBe(0)
+}, 15000)
+
+it('rejects configuration-only ownership changes before generating secrets or loading connections', async () => {
+  const number = await port()
+  const server = start('index', number); await ready(number)
+  server.child.kill('SIGTERM'); await server.exited
+  fs.rmSync(path.join(directory, 'secrets.json'))
+  const result = await start('briefing-cli', number, { PAPER_BACKEND: 'freshrss', PAPER_LOCAL_READS: 'false',
+    FRESHRSS_BASE_URL: 'https://rss.example.test', FRESHRSS_USERNAME: 'synthetic', FRESHRSS_API_PASSWORD: 'synthetic' }).exited
+  expect(result.code).not.toBe(0); expect(result.output).toMatch(/another backend/)
+  expect(fs.existsSync(path.join(directory, 'secrets.json'))).toBe(false)
+  acquireStateLock(directory, 'exclusive').release()
+}, 15000)
+
+it('enforces route CAS, publishes committed revisions, and prevents bulk undo from overwriting later state', async () => {
+  const { PaperDatabase } = await import('../src/server/db.js')
+  const db = new PaperDatabase(path.join(directory, 'paper.sqlite'))
+  const identity = db.bindStandalone()
+  const feedId = db.saveLocalSubscription(identity.id, { title: 'Synthetic feed', url: 'https://example.test/feed' })
+  const entries = [1, 2].map(n => ({ identity: { externalId: `fixture-${n}` }, entry: {
+    feedTitle: 'Synthetic feed', feedUrl: 'https://example.test/feed', title: `Synthetic ${n}`, author: '', url: `https://example.test/${n}`,
+    contentHtml: '<p>Synthetic content</p>', excerpt: 'Synthetic content', publishedAt: new Date().toISOString(), timestamp: Date.now(),
+    readingMinutes: 1, thumbnailUrl: '', kind: 'article' as const,
+  } }))
+  const ids = db.importSourceEntries(identity.id, feedId, entries).map(item => item.status === 'resolved' ? item.id : '')
+  db.close()
+  const number = await port(), server = start('index', number)
+  await ready(number)
+  const base = `http://127.0.0.1:${number}`
+  const post = async (route: string, body: unknown) => {
+    const response = await fetch(base + route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    return { status: response.status, body: await response.json() }
+  }
+  const events = await fetch(base + '/api/events'), reader = events.body!.getReader()
+  try {
+    await reader.read() // Initial synchronization status.
+    const changed = await post('/api/entries/state', { ids: [ids[0]], operation: 'star', expectedRevisions: { [ids[0]]: 0 } })
+    expect(changed).toMatchObject({ status: 200, body: { revisions: { [ids[0]]: 1 } } })
+    const event = new TextDecoder().decode((await reader.read()).value)
+    expect(event).toContain('event: state'); expect(event).toContain('"revisions"')
+    const stale = await post('/api/entries/state', { ids, operation: 'read', expectedRevisions: Object.fromEntries(ids.map(id => [id, 0])) })
+    expect(stale).toMatchObject({ status: 409, body: { code: 'state-conflict', states: { [ids[0]]: { read: false, starred: true, revision: 1 }, [ids[1]]: { read: false, revision: 0 } } } })
+    const stream = { kind: 'all', id: 'all', title: 'All' }
+    const preview = await post('/api/streams/preview-read', { stream })
+    await post('/api/entries/state', { ids: [ids[1]], operation: 'star' })
+    expect((await post('/api/streams/confirm-read', { token: preview.body.token })).status).toBe(409)
+    const read = await post('/api/streams/mark-read', stream)
+    expect(read.body.count).toBe(2)
+    await post('/api/entries/state', { ids: [ids[0]], operation: 'unstar' })
+    expect((await post('/api/undo', { token: read.body.undoToken })).status).toBe(409)
+    expect((await post('/api/entries/item', { id: ids[1] })).body.entry.read).toBe(true)
+    const unstar = await post('/api/entries/state', { ids: [ids[1]], operation: 'unstar', undo: true })
+    expect((await post('/api/undo', { token: unstar.body.undoToken })).status).toBe(200)
+    expect((await post('/api/undo', { token: unstar.body.undoToken })).status).toBe(410)
+  } finally { await reader.cancel() }
+  server.child.kill('SIGTERM'); expect((await server.exited).code).toBe(0)
+}, 15000)

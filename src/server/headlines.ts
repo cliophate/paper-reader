@@ -70,6 +70,7 @@ function results(value: unknown): Map<string, Record<string, unknown>> {
 }
 
 export class HeadlineService {
+  private running: Promise<void> | null = null
   private busy = false
   private timer?: ReturnType<typeof setInterval>
   private lastErrorAt: string | null = null
@@ -100,7 +101,14 @@ export class HeadlineService {
   }
   page<T extends { items: Entry[] }>(page: T): T { return { ...page, items: page.items.map(entry => this.decorate(entry)) } }
 
-  async run(): Promise<void> {
+  run(): Promise<void> {
+    if (this.running) return this.running
+    this.running = this.perform().finally(() => { this.running = null })
+    return this.running
+  }
+  async drain() { await this.running }
+
+  private async perform(): Promise<void> {
     if (!this.enabled || this.busy) return
     this.busy = true
     const pending: Array<{ entry: Entry; fingerprint: string; attempts: number }> = []
