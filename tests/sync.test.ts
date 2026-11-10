@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendPageOptions, EntryPage, EntryStateOperation, ReaderBackend } from '../src/server/backend.js'
+import { FRESHRSS_ORGANIZATION_CAPABILITIES } from '../src/server/organization.js'
 import { PaperDatabase } from '../src/server/db.js'
 import { BackendSynchronizer, millisecondsUntilNextSync } from '../src/server/sync.js'
 import type { Entry, NavigationPayload, StreamRef } from '../src/server/types.js'
@@ -345,6 +346,7 @@ describe('Backend synchronization', () => {
 
 class FakeBackend implements ReaderBackend {
   readonly identity = { id: 'fixture:freshrss', kind: 'freshrss' as const }
+  readonly organizationCapabilities = FRESHRSS_ORGANIZATION_CAPABILITIES
   validateFeedId() {}
   unreadIds: string[] = []
   starredIds: string[] = []

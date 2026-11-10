@@ -1,5 +1,6 @@
 import type { Entry, NavigationPayload, StreamRef } from './types.js'
 import type { BackendIdentity } from './identity.js'
+import type { OrganizationCapabilities } from './organization.js'
 
 export class BackendValidationError extends Error {}
 
@@ -42,6 +43,7 @@ export interface EntrySource {
 
 export interface ReaderBackend extends EntrySource {
   readonly identity: BackendIdentity
+  readonly organizationCapabilities: Readonly<OrganizationCapabilities>
   // IDs are opaque to callers. Adapters reject invalid input before any I/O.
   validateFeedId(id: string, operation: FeedOperation): void
   entriesPage(stream: StreamRef, options?: BackendPageOptions): Promise<EntryPage>

@@ -11,7 +11,19 @@ import { runOpenCode } from './opencode.js'
 import type { ReaderService } from './reader.js'
 import { emailText, plainText } from './text.js'
 import type { TopicService } from './topics.js'
-import type { BriefingSelection, Entry, StreamRef } from './types.js'
+import type { BriefingSelection, Entry, NavigationPayload, StreamRef } from './types.js'
+
+export function resolveWritersFolder(navigation: NavigationPayload, stableFolderIds: boolean, savedId = ''): {
+  status: 'found' | 'missing' | 'disappeared' | 'ambiguous'; stream: StreamRef | null
+} {
+  const matches = stableFolderIds && savedId
+    ? navigation.folders.filter(folder => folder.id === savedId)
+    : navigation.folders.filter(folder => folder.title === 'Writers')
+  if (matches.length > 1) return { status: 'ambiguous', stream: null }
+  if (!matches.length) return { status: stableFolderIds && savedId ? 'disappeared' : 'missing', stream: null }
+  const folder = matches[0]
+  return { status: 'found', stream: { kind: 'category', id: folder.id, title: folder.title } }
+}
 
 interface Shortlist {
   writerIds: string[]
@@ -122,12 +134,15 @@ export class BriefingService {
     const lastCutoff = this.db.lastDeliveredCutoff()
     const windowStart = lastCutoff ? new Date(lastCutoff) : new Date(cutoff.getTime() - (kind === 'morning' ? 14 : 11) * 3_600_000)
     const unreadOnly = shouldLimitBriefingToUnread(cutoff, this.config.briefing.includeReadUntil)
-    const writersStream: StreamRef = { kind: 'category', id: 'user/-/label/Writers', title: 'Writers' }
+    const stableFolderIds = this.db.organizationCapabilities.stableFolderIds
+    const writersFolder = resolveWritersFolder(await this.entries.navigation(), stableFolderIds, this.db.getSyncValue('briefing_writers_folder_id'))
+    if (writersFolder.status === 'ambiguous') throw new Error('More than one Writers folder exists. Give the briefing folder a unique name before generating a briefing.')
+    if (stableFolderIds && writersFolder.stream) this.db.setSyncValue('briefing_writers_folder_id', writersFolder.stream.id)
     const allStream: StreamRef = { kind: 'all', id: 'all', title: 'All articles' }
     const candidates = (stream: StreamRef, limit: number) => this.entries.briefingEntries
       ? this.entries.briefingEntries(stream, { unreadOnly, limit, before: cutoff })
       : this.entries.entries(stream, { unreadOnly, limit, after: windowStart, before: cutoff })
-    const [writers, all] = await Promise.all([candidates(writersStream, 250), candidates(allStream, 1000)])
+    const [writers, all] = await Promise.all([writersFolder.stream ? candidates(writersFolder.stream, 250) : Promise.resolve([]), candidates(allStream, 1000)])
     const surfaced = this.db.surfacedEntryIds()
     const eligibleWriters = writers.filter(entry => !surfaced.has(entry.id))
     const eligibleAll = all.filter(entry => !surfaced.has(entry.id))

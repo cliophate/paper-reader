@@ -6,6 +6,8 @@ audit, standalone stages, and article identity and state requirements.
 the automatic pre-upgrade backup, account binding and recovery.
 [Feed ingestion](feed-ingestion.md) documents supported formats, identity matching
 and the successful-fetch contract for the future HTTP collector.
+[Folder and subscription organization](organization.md) documents schema v8,
+revision-checked commands, collision rules and FreshRSS capability limits.
 
 Use Node 24 or newer. From the repository root:
 

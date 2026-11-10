@@ -1,5 +1,6 @@
 import type { Config } from './config.js'
 import { BackendValidationError } from './backend.js'
+import { FRESHRSS_ORGANIZATION_CAPABILITIES } from './organization.js'
 import type { FeedOperation, BackendPageOptions, EntryOptions, EntryPage, EntryStateOperation, ReaderBackend } from './backend.js'
 import { detectKind } from './entry-kind.js'
 import { freshRssIdentity, type BackendIdentity } from './identity.js'
@@ -53,6 +54,7 @@ export type { EntryPage } from './backend.js'
 
 export class FreshRssClient implements ReaderBackend {
   readonly identity: BackendIdentity
+  readonly organizationCapabilities = FRESHRSS_ORGANIZATION_CAPABILITIES
   private authToken = ''
   private editToken = ''
   private readonly baseUrl: string

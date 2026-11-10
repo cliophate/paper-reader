@@ -6,6 +6,7 @@ import { normalizeFeedContent, normalizeFeedThumbnail } from './feed-content.js'
 import { isEditorialLinkedFeed } from './entry-kind.js'
 import { IdentityStore, migrateIdentity, type BackendIdentity, type SourceItemIdentity, type IdentityResolution } from './identity.js'
 import { transaction } from './transaction.js'
+import { FRESHRSS_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
 import type { BriefingSelection, Entry, Feed, Folder, NavigationPayload, StreamRef } from './types.js'
@@ -155,6 +156,7 @@ export class PaperDatabase {
   private readonly db: DatabaseSync
   private readonly databasePath: string
   readonly identities: IdentityStore
+  readonly organization: LocalOrganizationService
   private activeBackendId = ''
 
   constructor(databasePath: string) {
@@ -163,10 +165,12 @@ export class PaperDatabase {
     this.db = new DatabaseSync(databasePath)
     try {
       this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
-      this.backupBeforeIdentityMigration()
+      this.backupBeforeMigration(7, 'identity')
+      this.backupBeforeMigration(8, 'organization')
       this.migrate()
       this.identities = new IdentityStore(this.db)
       this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
+      this.organization = new LocalOrganizationService(this.db, id => this.assertLocalBackend(id), () => this.localNavigation())
     } catch (error) {
       this.db.close()
       throw error
@@ -177,17 +181,22 @@ export class PaperDatabase {
     this.db.close()
   }
 
-  private backupBeforeIdentityMigration() {
+  get organizationCapabilities() {
+    return this.activeBackendId && this.identities.backend(this.activeBackendId).kind === 'standalone'
+      ? LOCAL_ORGANIZATION_CAPABILITIES : FRESHRSS_ORGANIZATION_CAPABILITIES
+  }
+
+  private backupBeforeMigration(target: number, name: string) {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
-    if (version > 7) throw new Error('This database was created by a newer Paper version')
-    if (!version || version >= 7) return
-    const backupPath = `${this.databasePath}.before-identity-v7`
+    if (version > 8) throw new Error('This database was created by a newer Paper version')
+    if (!version || version >= target) return
+    const backupPath = `${this.databasePath}.before-${name}-v${target}`
     if (fs.existsSync(backupPath)) {
       const backup = new DatabaseSync(backupPath, { readOnly: true })
       try {
         const savedVersion = Number(backup.prepare('PRAGMA user_version').get()?.user_version || 0)
-        if (savedVersion < 1 || savedVersion >= 7 || backup.prepare('PRAGMA integrity_check').get()?.integrity_check !== 'ok') {
-          throw new Error('The pre-identity backup is invalid. Preserve it for inspection and restore a verified backup before retrying.')
+        if (savedVersion < 1 || savedVersion >= target || backup.prepare('PRAGMA integrity_check').get()?.integrity_check !== 'ok') {
+          throw new Error(`The pre-${name} backup is invalid. Preserve it for inspection and restore a verified backup before retrying.`)
         }
       } finally { backup.close() }
       return
@@ -235,10 +244,15 @@ export class PaperDatabase {
       this.assertLocalBackend(backendId)
       const id = feed.id || this.identities.createSubscription(backendId)
       this.identities.assertSubscription(backendId, id)
-      this.db.prepare(`INSERT INTO feeds(id, title, url, site_url, icon_url, synced_at) VALUES (?, ?, ?, ?, ?, ?)
+      const previous = this.db.prepare('SELECT title, url, site_url, icon_url FROM feeds WHERE id = ?').get(id)
+      this.db.prepare(`INSERT INTO feeds(id, title, url, site_url, icon_url, synced_at, position)
+        VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM feeds))
         ON CONFLICT(id) DO UPDATE SET title = excluded.title, url = excluded.url,
           site_url = excluded.site_url, icon_url = excluded.icon_url, synced_at = excluded.synced_at`)
         .run(id, feed.title, feed.url, feed.siteUrl || '', feed.iconUrl || '', new Date().toISOString())
+      if (!previous || previous.title !== feed.title || previous.url !== feed.url || previous.site_url !== (feed.siteUrl || '') || previous.icon_url !== (feed.iconUrl || '')) {
+        this.organization.subscriptionChanged(backendId)
+      }
       return id
     })
   }
@@ -622,6 +636,7 @@ export class PaperDatabase {
       migrateIdentity(this.db)
       this.db.exec('PRAGMA user_version = 7;')
     })
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 8) migrateOrganization(this.db)
   }
 
   replaceNavigation(navigation: NavigationPayload) {
@@ -658,11 +673,12 @@ export class PaperDatabase {
       this.db.prepare('DELETE FROM feed_folders').run()
       this.db.prepare('DELETE FROM folders').run()
       const insertFolder = this.db.prepare('INSERT INTO folders (id, title, position, synced_at) VALUES (?, ?, ?, ?)')
-      const insertMembership = this.db.prepare('INSERT OR IGNORE INTO feed_folders (feed_id, folder_id) VALUES (?, ?)')
+      const insertMembership = this.db.prepare('INSERT OR IGNORE INTO feed_folders (feed_id, folder_id, position) VALUES (?, ?, ?)')
       navigation.folders.forEach((folder, position) => {
         insertFolder.run(folder.id, folder.title, position, now)
-        for (const feed of folder.feeds) insertMembership.run(feed.id, folder.id)
+        folder.feeds.forEach((feed, index) => insertMembership.run(feed.id, folder.id, index))
       })
+      navigation.uncategorized.forEach((feed, index) => this.db.prepare('UPDATE feeds SET position = ? WHERE id = ?').run(index, feed.id))
       this.setSyncValueInTransaction('navigation_synced_at', now)
     })
   }
@@ -1023,9 +1039,9 @@ export class PaperDatabase {
         FROM entries ${visibleEntries} GROUP BY feed_id
       ) entry_counts ON entry_counts.feed_id = feeds.id
       WHERE feeds.active = 1
-      ORDER BY feeds.title COLLATE NOCASE
+      ORDER BY feeds.position, feeds.id
     `).all() as Array<Record<string, string | number | null>>
-    const membershipRows = this.db.prepare('SELECT feed_id, folder_id FROM feed_folders').all() as Array<{ feed_id: string; folder_id: string }>
+    const membershipRows = this.db.prepare('SELECT feed_id, folder_id FROM feed_folders ORDER BY position, feed_id').all() as Array<{ feed_id: string; folder_id: string }>
     const folderRows = this.db.prepare('SELECT id, title FROM folders ORDER BY position, title COLLATE NOCASE').all() as Array<{ id: string; title: string }>
     const folderIdsByFeed = new Map<string, string[]>()
     for (const row of membershipRows) {
@@ -1043,12 +1059,10 @@ export class PaperDatabase {
         .filter(membership => membership.folder_id === row.id)
         .map(membership => feeds.get(membership.feed_id))
         .filter((feed): feed is Feed => Boolean(feed))
-        .sort((a, b) => a.title.localeCompare(b.title))
       return { id: row.id, title: row.title, unread: folderFeeds.reduce((sum, feed) => sum + feed.unread, 0), feeds: folderFeeds }
     })
     const uncategorized = [...feeds.values()]
       .filter(feed => !(folderIdsByFeed.get(feed.id) || []).length)
-      .sort((a, b) => a.title.localeCompare(b.title))
     const counts = this.db.prepare(`
       SELECT
         SUM(CASE WHEN read = 0 ${includeMuted ? '' : 'AND NOT EXISTS (SELECT 1 FROM muted_entries WHERE muted_entries.entry_id = entries.id)'} THEN 1 ELSE 0 END) AS unread,
