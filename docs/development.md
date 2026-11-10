@@ -15,6 +15,9 @@ flat-folder mapping, partial failures and the bounded discovery transport.
 leases and conditional requests. [Bounded HTTP transport](feed-http.md) defines
 the shared collector, discovery and repair fetch contract.
 
+[Backend migration](backend-migration.md) documents schema v10, offline
+staging, process coordination, runtime activation and rollback.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh
@@ -22,8 +25,10 @@ npm ci
 npm run init
 ```
 
-Edit `.env` with your FreshRSS connection details. Reuse an existing `.env`
-rather than running init again.
+New configuration selects standalone. To test FreshRSS, select
+`PAPER_BACKEND=freshrss` and use a disposable account. Reuse an existing private
+configuration rather than running init again. Never use real reading data in a
+development or test instance.
 
 ```sh
 PUBLIC_URL=http://localhost:5173 npm run dev

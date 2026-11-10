@@ -64,6 +64,7 @@ export interface TopicsPayload {
 
 export class TopicService {
   private running: Promise<void> | null = null
+  async drain() { await this.running }
   private stale = false
   private revision = 0
 

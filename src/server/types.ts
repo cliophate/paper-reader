@@ -30,6 +30,7 @@ export interface Folder {
 export type EntryKind = 'article' | 'x' | 'instagram' | 'threads' | 'bluesky' | 'mastodon' | 'youtube'
 
 export interface Entry {
+  stateRevision?: number
   searchExcerpt?: string
   readingPosition?: number
   lastReadAt?: string

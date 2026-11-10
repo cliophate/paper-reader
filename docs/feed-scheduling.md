@@ -1,10 +1,15 @@
 # Standalone feed scheduling
 
 [#17](https://github.com/cliophate/paper-reader/issues/17) adds an internal
-`StandaloneFeedScheduler` around `ingestFeed`. FreshRSS remains required and is
-the only selectable backend. The server does not start this collector.
-[#21](https://github.com/cliophate/paper-reader/issues/21) owns standalone setup
-and lifecycle wiring. FreshRSS continues using `BackendSynchronizer`.
+`StandaloneFeedScheduler` around `ingestFeed`. With `PAPER_BACKEND=standalone`,
+the runtime starts collection after binding the persisted instance and acquiring
+the shared process lock. FreshRSS continues using `BackendSynchronizer`.
+
+The runtime polls for due work every second. Each fetch batch remains bounded;
+new subscriptions receive durable due schedules. `PAPER_SYNC_ENABLED=false` stops
+collection, including manual sync. Shutdown rejects new requests, aborts the
+collector, drains admitted writes and closes the database before releasing its
+lock. Crash recovery uses the existing expiring leases.
 
 ## Calls and scheduling
 

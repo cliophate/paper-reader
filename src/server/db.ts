@@ -1,3 +1,4 @@
+import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -7,6 +8,7 @@ import { isEditorialLinkedFeed } from './entry-kind.js'
 import { IdentityStore, migrateIdentity, type BackendIdentity, type SourceItemIdentity, type IdentityResolution } from './identity.js'
 import { transaction } from './transaction.js'
 import { FeedFetchStore, migrateFeedFetchState } from './feed-fetch-state.js'
+import { migrateStandaloneSetup } from './migration-schema.js'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
@@ -50,6 +52,8 @@ export interface HeadlineRecord {
 }
 
 export interface UndoRecord {
+  backendId?: string
+  expectedRevisions?: Record<string, number>
   token: string
   operation: 'read' | 'unread' | 'star' | 'unstar'
   entryIds: string[]
@@ -170,7 +174,11 @@ export class PaperDatabase {
       this.backupBeforeMigration(7, 'identity')
       this.backupBeforeMigration(8, 'organization')
       this.backupBeforeMigration(9, 'feed-fetch')
-      this.migrate()
+      this.backupBeforeMigration(10, 'standalone-setup')
+      const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
+      // Current-schema participants must not drop/recreate triggers on every
+      // open. Coordinated bootstrap performs upgrades under exclusive access.
+      if (version < 10 || this.getSyncValue('fulltext_search_v1') !== 'true') this.migrate()
       this.identities = new IdentityStore(this.db)
       this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
       this.feedFetch = new FeedFetchStore(this.db, id => this.assertLocalBackend(id))
@@ -192,7 +200,7 @@ export class PaperDatabase {
 
   private backupBeforeMigration(target: number, name: string) {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
-    if (version > 9) throw new Error('This database was created by a newer Paper version')
+    if (version > 10) throw new Error('This database was created by a newer Paper version')
     if (!version || version >= target) return
     const backupPath = `${this.databasePath}.before-${name}-v${target}`
     if (fs.existsSync(backupPath)) {
@@ -216,7 +224,7 @@ export class PaperDatabase {
   bindBackend(backend: BackendIdentity) {
     transaction(this.db, () => {
       const active = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
-      if (active && active !== backend.id) throw new Error('This database belongs to another backend. Use its original configuration or a separate data directory; backend migration is not enabled.')
+      if (active && active !== backend.id) throw new Error('This database belongs to another backend. Use its original configuration, a separate data directory, or the offline migration command.')
       this.identities.registerBackend(backend)
       if (active) return
       if (backend.kind === 'standalone' && (this.entryCount() || this.db.prepare('SELECT 1 FROM feeds LIMIT 1').get())) {
@@ -241,6 +249,16 @@ export class PaperDatabase {
       this.db.prepare("INSERT INTO sync_state(key, value) VALUES ('active_backend_id', ?)").run(backend.id)
     })
     this.activeBackendId = backend.id
+  }
+
+  bindStandalone(): BackendIdentity {
+    return transaction(this.db, () => {
+      const active = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
+      const identity: BackendIdentity = active ? this.identities.backend(active) : { id: `standalone:${crypto.randomUUID()}`, kind: 'standalone' }
+      if (identity.kind !== 'standalone') throw new Error('This database belongs to FreshRSS. Complete the offline migration before selecting standalone mode.')
+      this.bindBackend(identity)
+      return identity
+    })
   }
 
   saveLocalSubscription(backendId: string, feed: { id?: string; title: string; url: string; siteUrl?: string; iconUrl?: string }): string {
@@ -302,6 +320,7 @@ export class PaperDatabase {
 
   commitLocalEntryState(backendId: string, ids: string[], operation: EntryStateOperation, options: {
     expectedRevisions?: Record<string, number>; origin?: string
+    undo?: { token: string; expiresAt: string }
   } = {}) {
     return transaction(this.db, () => {
       this.assertLocalBackend(backendId)
@@ -311,9 +330,11 @@ export class PaperDatabase {
         const owner = this.identities.article(id)
         const state = this.entryState(id)
         if (!state || owner?.backendId !== backendId) throw new Error('Article does not belong to this backend')
-        if (options.expectedRevisions && options.expectedRevisions[id] !== state.revision) throw new Error('Article state changed. Refresh before retrying.')
         return { id, ...state }
       })
+      if (options.expectedRevisions && states.some(state => options.expectedRevisions![state.id] !== state.revision)) {
+        throw new StateConflictError(Object.fromEntries(states.map(({ id, ...state }) => [id, state])))
+      }
       const column = operation === 'read' || operation === 'unread' ? 'read' : 'starred'
       const value = operation === 'read' || operation === 'star'
       const changed = states.filter(state => state[column] !== value)
@@ -322,7 +343,24 @@ export class PaperDatabase {
         kind: 'state', origin: options.origin || 'reader', summary: `${operation}: ${changed.length} articles`, count: changed.length,
         details: { operation, ids: changed.map(state => state.id).slice(0, 30) },
       })
-      return { ids: changed.map(state => state.id), operation, revisions: Object.fromEntries(states.map(state => [state.id, this.entryState(state.id)!.revision])) }
+      const revisions = Object.fromEntries(states.map(state => [state.id, this.entryState(state.id)!.revision]))
+      const undoToken = changed.length && options.undo ? options.undo.token : ''
+      if (undoToken) this.createUndo({ token: undoToken, expiresAt: options.undo!.expiresAt,
+        operation: operation === 'read' ? 'unread' : operation === 'unread' ? 'read' : operation === 'star' ? 'unstar' : 'star',
+        entryIds: changed.map(state => state.id), backendId,
+        expectedRevisions: Object.fromEntries(changed.map(state => [state.id, revisions[state.id]])) })
+      return { ids: changed.map(state => state.id), operation, revisions, undoToken }
+    })
+  }
+
+  commitLocalUndo(backendId: string, token: string) {
+    return transaction(this.db, () => {
+      this.assertLocalBackend(backendId)
+      const undo = this.getUndo(token)
+      if (!undo || undo.backendId !== backendId || !undo.expectedRevisions) throw new UndoExpiredError()
+      const result = this.commitLocalEntryState(backendId, undo.entryIds, undo.operation, { expectedRevisions: undo.expectedRevisions, origin: 'undo' })
+      this.deleteUndo(token)
+      return result
     })
   }
 
@@ -643,6 +681,7 @@ export class PaperDatabase {
     })
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 8) migrateOrganization(this.db)
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 9) migrateFeedFetchState(this.db)
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 10) migrateStandaloneSetup(this.db)
   }
 
   replaceNavigation(navigation: NavigationPayload) {
@@ -888,7 +927,7 @@ export class PaperDatabase {
   pulseCollections(): PulseCollection[] {
     const rows = this.db.prepare(`SELECT pulse_memberships.collection_id, pulse_memberships.sequence,
       pulse_memberships.added_at, pulse_memberships.development, entries.id, entries.feed_id,
-      entries.read, entries.feed_title, entries.title, entries.url, entries.feed_url, entries.author,
+      entries.read, entries.state_revision, entries.feed_title, entries.title, entries.url, entries.feed_url, entries.author,
       entries.published_at, entries.timestamp, entries.thumbnail_url
       FROM pulse_memberships JOIN entries ON entries.id = pulse_memberships.entry_id
       WHERE NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = entries.id)
@@ -897,7 +936,7 @@ export class PaperDatabase {
     for (const row of rows) {
       const id = String(row.collection_id)
       const members = sources.get(id) || []
-      members.push({ id: String(row.id), feedId: String(row.feed_id), read: Boolean(row.read), publication: decodeHtmlText(String(row.feed_title)),
+      members.push({ id: String(row.id), feedId: String(row.feed_id), read: Boolean(row.read), stateRevision: Number(row.state_revision), publication: decodeHtmlText(String(row.feed_title)),
         domain: sourceDomain(String(row.url)) || sourceDomain(String(row.feed_url)), title: decodeHtmlText(String(row.title)), url: String(row.url),
         author: decodeHtmlText(String(row.author)), publishedAt: String(row.published_at), timestamp: Number(row.timestamp),
         thumbnailUrl: normalizeFeedThumbnail({ url: String(row.url), thumbnailUrl: String(row.thumbnail_url) }),
@@ -1699,8 +1738,8 @@ export class PaperDatabase {
 
   createUndo(record: UndoRecord) {
     this.db.prepare('DELETE FROM undo_actions WHERE expires_at <= ?').run(new Date().toISOString())
-    this.db.prepare('INSERT INTO undo_actions (token, operation, entry_ids_json, expires_at) VALUES (?, ?, ?, ?)')
-      .run(record.token, record.operation, JSON.stringify(record.entryIds), record.expiresAt)
+    this.db.prepare('INSERT INTO undo_actions (token, operation, entry_ids_json, expires_at, backend_id, expected_revisions_json) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(record.token, record.operation, JSON.stringify(record.entryIds), record.expiresAt, record.backendId || '', record.expectedRevisions ? JSON.stringify(record.expectedRevisions) : null)
   }
 
   getUndo(token: string): UndoRecord | null {
@@ -1710,6 +1749,8 @@ export class PaperDatabase {
       return null
     }
     return {
+      ...(row.backend_id ? { backendId: String(row.backend_id) } : {}),
+      ...(row.expected_revisions_json ? { expectedRevisions: JSON.parse(row.expected_revisions_json) as Record<string, number> } : {}),
       token: String(row.token),
       operation: row.operation as UndoRecord['operation'],
       entryIds: JSON.parse(row.entry_ids_json) as string[],
@@ -1890,6 +1931,7 @@ function entryFromRow(row: Record<string, string | number>): Entry {
     crawledAt: Number(row.crawled_at || row.timestamp),
     read: Boolean(row.read),
     starred: Boolean(row.starred),
+    stateRevision: Number(row.state_revision),
     readingMinutes: contentChanged ? readingMinutes(contentHtml) : Number(row.reading_minutes),
     thumbnailUrl: normalizeFeedThumbnail({ url, thumbnailUrl: String(row.thumbnail_url), contentHtml, originalContentHtml: storedContentHtml }),
     kind: isEditorialLinkedFeed(String(row.feed_url)) ? 'article' : String(row.kind) as Entry['kind'],

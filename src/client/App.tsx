@@ -4,13 +4,14 @@ import type { OrganizationView } from '../shared/organization'
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createArticleBoundaryStore, type ArticleBoundaryStore } from './articleBoundaryStore'
 import { createArticleNavigation } from './articleNavigation'
-import { api } from './api'
+import { api, ApiError } from './api'
 import { useDialogFocus, useMenuFocus } from './dialogFocus'
 import { useReadingProgress } from './readingProgress'
 import { clearOffline, offlineArticles, removeOffline, saveOffline } from './offline'
 import { fullTextMode, setFullTextMode, type FullTextMode } from './fullTextPreferences'
 import { FeedRepair } from './components/FeedRepair'
 import { ArticleDiscussion } from './components/ArticleDiscussion'
+import { BackendSettings } from './components/BackendSettings'
 import { ConnectionSettings } from './components/ConnectionSettings'
 import { FeedSettings } from './components/FeedSettings'
 import { isDarkTheme, toggledTheme } from './appearance'
@@ -55,7 +56,7 @@ interface OverlayState {
   appearance: boolean
 }
 
-type SettingsSection = 'feeds' | 'filters' | 'reports' | 'activity' | 'connections'
+type SettingsSection = 'backend' | 'feeds' | 'filters' | 'reports' | 'activity' | 'connections'
 
 const closedOverlays: OverlayState = { command: false, help: false, settings: false, appearance: false }
 
@@ -147,7 +148,7 @@ export default function App() {
   const [articleNavigationBusy, setArticleNavigationBusy] = useState(false)
   const [articleTransition, setArticleTransition] = useState<ArticleTransition>('')
   const [automaticFullFeeds, setAutomaticFullFeeds] = useState(() => automaticFullTextFeeds(localStorage))
-  const [status, setStatus] = useState({ discussionConfigured: false, readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false })
+  const [status, setStatus] = useState({ backend: 'freshrss' as 'freshrss' | 'standalone', discussionConfigured: false, readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false })
   const listRef = useRef<HTMLDivElement>(null)
   const selectedIdRef = useRef(selectedId)
   selectedIdRef.current = selectedId
@@ -507,11 +508,11 @@ export default function App() {
       setTopicsRefreshKey(current => current + 1)
     }
     const stateChanged = (event: MessageEvent) => {
-      const change = JSON.parse(event.data) as { ids: string[]; operation: 'read' | 'unread' | 'star' | 'unstar' } | null
+      const change = JSON.parse(event.data) as { ids: string[]; operation: 'read' | 'unread' | 'star' | 'unstar'; revisions?: Record<string, number> } | null
       if (!change) { synced(); return }
       const ids = new Set(change.ids)
       const patch = change.operation === 'read' ? { read: true } : change.operation === 'unread' ? { read: false } : change.operation === 'star' ? { starred: true } : { starred: false }
-      setEntries(current => current.map(entry => ids.has(entry.id) ? { ...entry, ...patch } : entry))
+      setEntries(current => current.map(entry => ids.has(entry.id) ? { ...entry, ...patch, stateRevision: change.revisions?.[entry.id] ?? entry.stateRevision } : entry))
       void loadNavigation().catch(error => setSyncError(error.message))
       setTopicsRefreshKey(value => value + 1)
     }
@@ -726,7 +727,7 @@ export default function App() {
       await loadNavigation()
       notify(`${feed.title} unsubscribed`)
     } catch (error) {
-      notify(error instanceof Error ? error.message : 'FreshRSS could not remove this feed')
+      notify(error instanceof Error ? error.message : 'Paper could not remove this feed')
     }
   }, [loadNavigation, notify, openStream, pushLocation])
 
@@ -832,30 +833,45 @@ export default function App() {
       : { starred: false }
     setActionError(null)
     updateEntry(entry.id, patch)
+    let undoToken = ''
+    let revision = entry.stateRevision
     try {
-      await api.editState([entry.id], operation, origin)
+      const result = await api.editState([entry.id], operation, origin, {
+        expectedRevisions: status.backend === 'standalone' && revision !== undefined ? { [entry.id]: revision } : undefined, undo: !quiet,
+      })
+      undoToken = result.undoToken || ''
+      revision = result.revisions?.[entry.id] ?? revision
+      updateEntry(entry.id, { ...patch, stateRevision: revision })
     } catch (error) {
       if (origin === 'automatic') manuallyUnreadId.current = entry.id
-      setActionError({ id: entry.id, message: error instanceof Error ? error.message : 'FreshRSS rejected the change', operation })
-      updateEntry(entry.id, operation === 'read' ? { read: false } : operation === 'unread' ? { read: true } : operation === 'star' ? { starred: false } : { starred: true })
-      notify(error instanceof Error ? error.message : 'FreshRSS rejected the change')
+      setActionError({ id: entry.id, message: error instanceof Error ? error.message : 'Paper could not save the change', operation })
+      const current = error instanceof ApiError ? error.states?.[entry.id] : undefined
+      updateEntry(entry.id, current ? { read: current.read, starred: current.starred, stateRevision: current.revision } : { read: entry.read, starred: entry.starred })
+      notify(error instanceof Error ? error.message : 'Paper could not save the change')
       return
     }
-    if (!quiet) {
+    if (!quiet && (status.backend !== 'standalone' || undoToken)) {
       const inverse = operation === 'read' ? 'unread' : operation === 'unread' ? 'read' : operation === 'star' ? 'unstar' : 'star'
       notify(operation === 'star' ? 'Starred' : operation === 'unstar' ? 'Star removed' : operation === 'read' ? 'Marked read' : 'Marked unread', {
         label: 'Undo',
-        run: () => void setEntryState({ ...entry, ...patch }, inverse, true, origin),
+        run: () => {
+          if (!undoToken) { void setEntryState({ ...entry, ...patch, stateRevision: revision }, inverse, true, origin); return }
+          void api.undo(undoToken).then(async () => {
+            const current = await api.entry(entry.id)
+            if (current.entry) updateEntry(entry.id, current.entry)
+            await loadNavigation()
+          }).catch(error => notify(error instanceof Error ? error.message : 'Could not undo this change'))
+        },
       })
     }
     void loadNavigation().catch(() => notify('The change was saved. Counts will refresh shortly.'))
-  }, [loadNavigation, notify, updateEntry, online])
+  }, [loadNavigation, notify, updateEntry, online, status.backend])
 
-  const markTopicRead = useCallback(async (ids: string[]): Promise<boolean> => {
+  const markTopicRead = useCallback(async (ids: string[], expectedRevisions?: Record<string, number>): Promise<boolean> => {
     if (!ids.length) return true
     const idSet = new Set(ids)
     try {
-      await api.editState(ids, 'read', 'pulse')
+      const result = await api.editState(ids, 'read', 'pulse', { undo: true, expectedRevisions: status.backend === 'standalone' ? expectedRevisions : undefined })
       setEntries(current => current.map(entry => idSet.has(entry.id) ? { ...entry, read: true } : entry))
       setTopicsRefreshKey(current => current + 1)
       void loadNavigation().catch(() => notify('The articles were marked read. Counts will refresh shortly.'))
@@ -863,7 +879,10 @@ export default function App() {
         label: 'Undo',
         run: () => void (async () => {
           try {
-            await api.editState(ids, 'unread', 'pulse')
+            if (status.backend === 'standalone') {
+              if (!result.undoToken) return
+              await api.undo(result.undoToken)
+            } else await api.editState(ids, 'unread', 'pulse')
             setEntries(current => current.map(entry => idSet.has(entry.id) ? { ...entry, read: false } : entry))
             setTopicsRefreshKey(current => current + 1)
             await loadNavigation()
@@ -874,10 +893,11 @@ export default function App() {
       })
       return true
     } catch (error) {
+      if (error instanceof ApiError && error.code === 'state-conflict') setTopicsRefreshKey(current => current + 1)
       notify(error instanceof Error ? error.message : 'Paper could not mark this coverage read')
       return false
     }
-  }, [loadNavigation, notify])
+  }, [loadNavigation, notify, status.backend])
 
   const fetchFullText = useCallback(async (target: Entry | null = selected, quiet = false, force = false) => {
     if (!target?.url || target.kind !== 'article' || (target.fullText && !force) || fetchingFullTextId) return
@@ -1326,7 +1346,7 @@ export default function App() {
           <button className={`icon-button ${refreshing ? 'spinning' : ''}`} onClick={() => void refresh()} aria-label="Refresh"><Icon name="refresh" /></button>
           <button className="icon-button" disabled={!online || libraryMode !== 'stream'} onClick={() => void markAllRead()} aria-label={query ? "Mark search results read" : "Mark stream read"}><Icon name="check" /></button>
         </div>
-        <div className="reader-status" role="status">{!online ? 'Offline. Saved articles are available below.' : syncError ? `Sync needs attention: ${syncError}` : lastSync ? `Last synced ${relativeDate(lastSync)}` : 'Waiting for synchronization'}{syncError && online && <button onClick={() => void refresh()}>Retry</button>}</div>
+        <div className="reader-status" role="status">{!online ? 'Offline. Saved articles are available below.' : syncError ? `Sync needs attention: ${syncError}` : lastSync ? `Last synced ${relativeDate(lastSync)}` : status.backend === 'standalone' ? 'Ready to fetch feeds' : 'Waiting for synchronization'}{syncError && online && <button onClick={() => void refresh()}>Retry</button>}</div>
         {query && <div className="search-controls">
           <label>Search in<select aria-label="Search scope" value={searchStream.id} onChange={event => {
             const id = event.target.value
@@ -1372,7 +1392,7 @@ export default function App() {
               onContext={(left, top) => openEntryContext(entry, left, top)}
             />)}
             {listError && <div className="list-error" role="alert"><p>{listError}</p><button onClick={() => void loadEntries()}>Try again</button></div>}
-            {!listError && !loading && !entries.length && <EmptyList query={query} libraryMode={libraryMode} unreadOnly={streamUnreadOnly} onShowAll={() => changeUnreadOnly(false)} />}
+            {!listError && !loading && !entries.length && <EmptyList onAddFeed={status.backend === 'standalone' && navigation && !uniqueFeeds(navigation).length ? () => { setSettingsSection('feeds'); setOverlays({ ...closedOverlays, settings: true }) } : undefined} query={query} libraryMode={libraryMode} unreadOnly={streamUnreadOnly} onShowAll={() => changeUnreadOnly(false)} />}
             {!loading && <div className={`load-more-marker${!continuation && !listError ? ' stream-boundary' : ''}`} ref={loadMoreRef}>
               {loadingMore ? 'Loading more' : continuation || listError ? '' : <>
                 <span>End</span>
@@ -1442,10 +1462,10 @@ export default function App() {
       }}>{bulkBusy ? 'Marking read...' : `Mark ${bulkPreview.count} read`}</button><button disabled={bulkBusy} onClick={() => setBulkPreview(null)}>Cancel</button></Modal>}
       {overlays.command && <CommandPalette commands={commands} onClose={() => setOverlays(closedOverlays)} />}
       {overlays.help && <ShortcutHelp onClose={() => setOverlays(closedOverlays)} />}
-      {entryContext && <EntryContextMenu key={entryContext.entry.id} state={entryContext} relativeAvailable={libraryMode === 'stream' && online} onClose={() => setEntryContext(null)} onOpen={() => { setEntryContext(null); openEntry(entryContext.entry) }} onCopyUrl={() => { void copyArticleUrl(entryContext.entry); setEntryContext(null) }} onToggleRead={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.read ? 'unread' : 'read') }} onToggleStar={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.starred ? 'unstar' : 'star') }} onReport={() => { setReportEntry(entryContext.entry); setEntryContext(null) }} onMarkAbove={() => void markRelativeRead(entryContext.entry, 'above')} onMarkBelow={() => void markRelativeRead(entryContext.entry, 'below')} onUnsubscribe={() => void unsubscribeFeed({ id: entryContext.entry.feedId, title: entryContext.entry.feedTitle })} />}
+      {entryContext && <EntryContextMenu key={entryContext.entry.id} state={entryContext} unsubscribeAvailable={Boolean(organization?.capabilities.unsubscribe && uniqueFeeds(navigation).some(feed => feed.id === entryContext.entry.feedId))} relativeAvailable={libraryMode === 'stream' && online} onClose={() => setEntryContext(null)} onOpen={() => { setEntryContext(null); openEntry(entryContext.entry) }} onCopyUrl={() => { void copyArticleUrl(entryContext.entry); setEntryContext(null) }} onToggleRead={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.read ? 'unread' : 'read') }} onToggleStar={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.starred ? 'unstar' : 'star') }} onReport={() => { setReportEntry(entryContext.entry); setEntryContext(null) }} onMarkAbove={() => void markRelativeRead(entryContext.entry, 'above')} onMarkBelow={() => void markRelativeRead(entryContext.entry, 'below')} onUnsubscribe={() => void unsubscribeFeed({ id: entryContext.entry.feedId, title: entryContext.entry.feedTitle })} />}
       {selectionContext && (status.kirbyConfigured || status.discussionConfigured) && <SelectionContextMenu state={selectionContext} kirbyConfigured={status.kirbyConfigured} discussionConfigured={status.discussionConfigured} onClose={() => setSelectionContext(null)} onCreate={() => void createKirbyNote(selectionContext.quote)} onDiscuss={() => { if (!status.discussionConfigured) return notify('Article discussion is not configured'); if (selected) setDiscussionTarget({ entry: selected, quote: selectionContext.quote }); setSelectionContext(null) }} />}
       {discussionTarget && <ArticleDiscussion key={discussionTarget.entry.id} entry={discussionTarget.entry} initialQuote={discussionTarget.quote} onClose={() => setDiscussionTarget(null)} />}
-      {overlays.settings && <Settings section={settingsSection} setSection={setSettingsSection} initialFeedId={settingsFeedId} navigation={navigation} onChanged={loadNavigation} onFiltersChanged={reloadFilteredLibrary} notify={notify} onConnectionsChanged={loadStatus} autoRead={autoRead} setAutoRead={value => { setAutoRead(value); localStorage.setItem('paper-auto-read', value ? 'automatic' : 'manual') }} onOpenEntry={id => { setOverlays(closedOverlays); void openTopicEntry(id) }} onClose={() => setOverlays(closedOverlays)} />}
+      {overlays.settings && <Settings backend={status.backend} section={settingsSection} setSection={setSettingsSection} initialFeedId={settingsFeedId} navigation={navigation} onChanged={loadNavigation} onFiltersChanged={reloadFilteredLibrary} notify={notify} onConnectionsChanged={loadStatus} autoRead={autoRead} setAutoRead={value => { setAutoRead(value); localStorage.setItem('paper-auto-read', value ? 'automatic' : 'manual') }} onOpenEntry={id => { setOverlays(closedOverlays); void openTopicEntry(id) }} onClose={() => setOverlays(closedOverlays)} />}
       {overlays.appearance && <AppearancePopover theme={theme} setTheme={setTheme} readerFont={readerFont} setReaderFont={setReaderFont} readerSize={readerSize} setReaderSize={setReaderSize} readerSpacing={readerSpacing} setReaderSpacing={setReaderSpacing} readerWidth={readerWidth} setReaderWidth={setReaderWidth} onClose={() => setOverlays(closedOverlays)} />}
       {reportEntry && <ReportProblemModal entry={reportEntry} onClose={() => setReportEntry(null)} onSaved={() => { setReportEntry(null); notify('Problem reported') }} />}
       {toast && <div className="toast" role="status"><span>{toast.message}</span>{toast.action && <button onClick={() => { toast.action?.(); setToast(null) }}>{toast.actionLabel}</button>}</div>}
@@ -1464,7 +1484,8 @@ function ArticleFilter({ unreadOnly, onChange }: { unreadOnly: boolean; onChange
   </div>
 }
 
-function EntryContextMenu({ state, relativeAvailable, onClose, onOpen, onCopyUrl, onToggleRead, onToggleStar, onReport, onMarkAbove, onMarkBelow, onUnsubscribe }: {
+function EntryContextMenu({ state, unsubscribeAvailable, relativeAvailable, onClose, onOpen, onCopyUrl, onToggleRead, onToggleStar, onReport, onMarkAbove, onMarkBelow, onUnsubscribe }: {
+  unsubscribeAvailable: boolean
   state: EntryContextState
   relativeAvailable: boolean
   onClose: () => void
@@ -1508,7 +1529,7 @@ function EntryContextMenu({ state, relativeAvailable, onClose, onOpen, onCopyUrl
     <button role="menuitem" disabled={!relativeAvailable} onClick={onMarkAbove}><Icon name="check" /> Mark all above read</button>
     <button role="menuitem" disabled={!relativeAvailable} onClick={onMarkBelow}><Icon name="check" /> Mark all below read</button>
     <span className="context-menu-rule" />
-    <button role="menuitem" className={`danger entry-unsubscribe ${confirmRemove ? 'confirming' : ''}`} disabled={!state.entry.feedId.startsWith('feed/')} onClick={() => confirmRemove ? onUnsubscribe() : setConfirmRemove(true)}>
+    <button role="menuitem" className={`danger entry-unsubscribe ${confirmRemove ? 'confirming' : ''}`} disabled={!unsubscribeAvailable} onClick={() => confirmRemove ? onUnsubscribe() : setConfirmRemove(true)}>
       <Icon name="close" /><span>{confirmRemove ? 'Confirm unsubscribe' : 'Unsubscribe from feed'}<small title={state.entry.feedTitle}>{state.entry.feedTitle}</small></span>
     </button>
   </div>
@@ -1986,10 +2007,11 @@ function ReaderEmpty({ onCommand }: { onCommand: () => void }) {
   return <div className="reader-empty"><span className="empty-rule" /><h2>Select an article</h2><p>Choose a story from the list, or use J and K.</p><button onClick={onCommand}>Open commands</button></div>
 }
 
-function EmptyList({ unreadOnly, onShowAll, query = '', libraryMode = 'stream' }: { unreadOnly: boolean; onShowAll: () => void; query?: string; libraryMode?: string }) {
+function EmptyList({ onAddFeed, unreadOnly, onShowAll, query = '', libraryMode = 'stream' }: { onAddFeed?: () => void; unreadOnly: boolean; onShowAll: () => void; query?: string; libraryMode?: string }) {
+  if (onAddFeed && !query && libraryMode === 'stream') return <div className="list-empty"><Icon name="plus" /><h2>Add your first feed</h2><p>Paper is ready. Add an RSS or Atom feed, discover one from a website, or import an OPML file.</p><button onClick={onAddFeed}>Add feeds</button></div>
   if (query) return <div className="list-empty"><h2>No results</h2><p>Try fewer words, a wider date range, or the entire archive.</p></div>
   if (libraryMode !== 'stream') return <div className="list-empty"><h2>{libraryMode === 'recent' ? 'No recent reading yet' : 'No offline articles yet'}</h2><p>{libraryMode === 'recent' ? 'Articles you open will appear here with their reading position.' : 'Open an article and choose Save offline to keep a copy on this device.'}</p></div>
-  return <div className="list-empty"><Icon name="check" /><h2>{unreadOnly ? 'You are caught up' : 'No articles here'}</h2><p>{unreadOnly ? 'This stream has no unread articles.' : 'FreshRSS returned no articles for this stream.'}</p>{unreadOnly && <button onClick={onShowAll}>Show all articles</button>}</div>
+  return <div className="list-empty"><Icon name="check" /><h2>{unreadOnly ? 'You are caught up' : 'No articles here'}</h2><p>{unreadOnly ? 'This stream has no unread articles.' : 'This stream has no saved articles.'}</p>{unreadOnly && <button onClick={onShowAll}>Show all articles</button>}</div>
 }
 
 function StorySkeleton() {
@@ -2101,7 +2123,8 @@ function ShortcutHelp({ onClose }: { onClose: () => void }) {
   return <Modal title="Keyboard shortcuts" onClose={onClose} className="help-modal"><dl>{shortcuts.map(([key, label]) => <div key={key}><dt>{key}</dt><dd>{label}</dd></div>)}</dl></Modal>
 }
 
-function Settings({ section, setSection, initialFeedId, navigation, onChanged, onFiltersChanged, notify, onConnectionsChanged, autoRead, setAutoRead, onOpenEntry, onClose }: {
+function Settings({ backend, section, setSection, initialFeedId, navigation, onChanged, onFiltersChanged, notify, onConnectionsChanged, autoRead, setAutoRead, onOpenEntry, onClose }: {
+  backend: 'standalone' | 'freshrss'
   section: SettingsSection
   setSection: (value: SettingsSection) => void
   initialFeedId: string
@@ -2115,7 +2138,7 @@ function Settings({ section, setSection, initialFeedId, navigation, onChanged, o
   onOpenEntry: (id: string) => void
   onClose: () => void
 }) {
-  const content = section === 'feeds'
+  const content = section === 'backend' ? <BackendSettings backend={backend} /> : section === 'feeds'
     ? <FeedSettings onChanged={onChanged}><FeedManager initialFeedId={initialFeedId} navigation={navigation} onChanged={onChanged} notify={notify} /></FeedSettings>
     : section === 'filters'
       ? <FiltersSettings feeds={uniqueFeeds(navigation)} onChanged={onFiltersChanged} notify={notify} />
@@ -2130,6 +2153,7 @@ function Settings({ section, setSection, initialFeedId, navigation, onChanged, o
   return <Modal title="Settings" onClose={onClose} className="settings-modal">
     <div className="settings-layout">
       <nav className="settings-nav" aria-label="Settings sections">
+        <button className={section === 'backend' ? 'active' : ''} onClick={() => setSection('backend')}>Backend &amp; data</button>
         <button className={section === 'feeds' ? 'active' : ''} onClick={() => setSection('feeds')}>Feeds</button>
         <button className={section === 'filters' ? 'active' : ''} onClick={() => setSection('filters')}>Filters</button>
         <button className={section === 'reports' ? 'active' : ''} onClick={() => setSection('reports')}>Reports</button>
@@ -2251,7 +2275,7 @@ function FeedManager({ initialFeedId, navigation, onChanged, notify }: {
       setShowAdd(false)
       notify('Feed added')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'FreshRSS could not add this feed')
+      setError(reason instanceof Error ? reason.message : 'Paper could not add this feed')
     } finally { setBusy(false) }
   }
 
@@ -2263,7 +2287,7 @@ function FeedManager({ initialFeedId, navigation, onChanged, notify }: {
       await onChanged()
       notify('Feed updated')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'FreshRSS could not update this feed')
+      setError(reason instanceof Error ? reason.message : 'Paper could not update this feed')
     } finally { setBusy(false) }
   }
 
@@ -2278,7 +2302,7 @@ function FeedManager({ initialFeedId, navigation, onChanged, notify }: {
       await onChanged()
       notify('Feed unsubscribed')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'FreshRSS could not remove this feed')
+      setError(reason instanceof Error ? reason.message : 'Paper could not remove this feed')
     } finally { setBusy(false) }
   }
 
@@ -2344,7 +2368,7 @@ function FeedManager({ initialFeedId, navigation, onChanged, notify }: {
       notify(`${count} ${count === 1 ? 'feed' : 'feeds'} unsubscribed`)
     } catch (reason) {
       await onChanged().catch(() => undefined)
-      setError(reason instanceof Error ? reason.message : 'FreshRSS could not remove the remaining feeds')
+      setError(reason instanceof Error ? reason.message : 'Paper could not remove the remaining feeds')
     } finally { setBusy(false) }
   }
 
@@ -2354,7 +2378,7 @@ function FeedManager({ initialFeedId, navigation, onChanged, notify }: {
   }
 
   return <div className={`feed-manager ${mobileDetailOpen ? 'mobile-details-open' : ''}`}>
-    <header className="feed-manager-heading"><div><h3>Feeds</h3><p>Feeds are grouped by their FreshRSS folders. Paper only calls out feeds that FreshRSS cannot update.</p></div><button className="primary" onClick={() => setShowAdd(value => !value)}><Icon name={showAdd ? 'close' : 'plus'} />{showAdd ? 'Cancel' : 'Add feed'}</button></header>
+    <header className="feed-manager-heading"><div><h3>Feeds</h3><p>Manage subscriptions and folders. Unsubscribing keeps saved articles and reading state.</p></div><button className="primary" onClick={() => setShowAdd(value => !value)}><Icon name={showAdd ? 'close' : 'plus'} />{showAdd ? 'Cancel' : 'Add feed'}</button></header>
     {showAdd && <form className="feed-add-form" onSubmit={add}>
       <label><span>Feed or website URL</span><input autoFocus type="url" required placeholder="https://example.com/feed.xml" value={url} onChange={event => setUrl(event.target.value)} /></label>
       <label><span>Title, optional</span><input value={newTitle} onChange={event => setNewTitle(event.target.value)} /></label>
@@ -2381,7 +2405,7 @@ function FeedManager({ initialFeedId, navigation, onChanged, notify }: {
         {selected ? <>
           <button className="feed-editor-back" onClick={() => setMobileDetailOpen(false)}><Icon name="back" /> Back to feeds</button>
           <div className="feed-editor-heading"><FeedMark title={selected.title} url={selected.siteUrl || selected.url} iconUrl={selected.iconUrl} /><div><strong>{selected.title}</strong><span>{selected.url}</span></div></div>
-          {selected.broken && <div className="feed-health-alert"><strong>FreshRSS cannot update this feed</strong><span>{selected.lastErrorAt ? `Last failed ${relativeDate(selected.lastErrorAt)}.` : 'The latest fetch failed.'}{selected.lastCheckedAt ? ` Last successful check ${relativeDate(selected.lastCheckedAt)}.` : ''}</span></div>}
+          {selected.broken && <div className="feed-health-alert"><strong>The feed could not be updated</strong><span>{selected.lastErrorAt ? `Last failed ${relativeDate(selected.lastErrorAt)}.` : 'The latest fetch failed.'}{selected.lastCheckedAt ? ` Last successful check ${relativeDate(selected.lastCheckedAt)}.` : ''}</span></div>}
           {!selected.broken && <p className="feed-last-post">{selected.lastPublishedAt ? `Last post ${formatFeedDate(selected.lastPublishedAt)}` : 'No posts have arrived yet'}</p>}
           <label><span>Title</span><input value={title} onChange={event => setTitle(event.target.value)} /></label>
           <label><span>Folder</span><input list="paper-feed-folders" placeholder="Uncategorized" value={folder} onChange={event => setFolder(event.target.value)} /></label>

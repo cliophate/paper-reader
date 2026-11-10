@@ -30,8 +30,8 @@ function positive(value: number, name: string, maximum = 2_147_483_647): number 
   return value
 }
 
-// Internal standalone foundation. No factory or server startup activates it.
-// FreshRSS continues using BackendSynchronizer and its own import schedule.
+// StandaloneRuntime owns startup, abort and drain. FreshRSS keeps its separate
+// BackendSynchronizer and import schedule.
 export class StandaloneFeedScheduler {
   private readonly concurrency: number
   private readonly perHost: number

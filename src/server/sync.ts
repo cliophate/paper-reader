@@ -9,6 +9,7 @@ const INCREMENTAL_OVERLAP_MS = 10 * 60 * 1000
 const SOURCE_CONTENT_MARKER = 'source_content_restored_v6'
 
 export class BackendSynchronizer {
+  private stopped = false
   private running: Promise<void> | null = null
   private queue: Promise<void> = Promise.resolve()
   private timer: NodeJS.Timeout | null = null
@@ -30,7 +31,7 @@ export class BackendSynchronizer {
   }
 
   start() {
-    if (!this.enabled || this.timer) return
+    if (this.stopped || !this.enabled || this.timer) return
     if (this.db.getSyncValue('backfill_complete') !== 'true') {
       void this.syncNow('startup').catch(() => undefined).finally(() => this.scheduleNext())
       return
@@ -39,12 +40,20 @@ export class BackendSynchronizer {
   }
 
   private scheduleNext() {
-    if (!this.enabled || this.timer) return
+    if (this.stopped || !this.enabled || this.timer) return
     this.timer = setTimeout(() => {
       this.timer = null
       void this.syncNow('schedule').catch(() => undefined).finally(() => this.scheduleNext())
     }, millisecondsUntilNextSync(new Date(), this.syncMinutes))
     this.timer.unref()
+  }
+
+  async stop() {
+    this.stopped = true
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = null
+    await this.queue
+    await this.running
   }
 
   syncNow(origin = 'manual'): Promise<void> {

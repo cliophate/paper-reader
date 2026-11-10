@@ -46,9 +46,15 @@ function timeZone(): string {
 
 export type Config = ReturnType<typeof loadConfig>
 
-export function loadConfig() {
-  const stateDir = value('STATE_DIR', path.resolve('data'))
+export function stateDirectory() { return value('STATE_DIR', path.resolve('data')) }
+
+export function loadConfig(secrets?: { internalSecret: string; signingSecret: string }) {
+  const backend = value('PAPER_BACKEND', 'freshrss')
+  if (backend !== 'freshrss' && backend !== 'standalone') throw new Error('PAPER_BACKEND must be freshrss or standalone')
+  if (backend === 'standalone' && value('PAPER_LOCAL_READS', 'true') !== 'true') throw new Error('Standalone mode requires PAPER_LOCAL_READS=true')
+  const stateDir = stateDirectory()
   return {
+    backend,
     port: Number(value('PORT', '8080')),
     host: value('HOST', '127.0.0.1'),
     readerFallbackEnabled: value('PAPER_READER_FALLBACK_ENABLED', 'false') === 'true',
@@ -58,9 +64,9 @@ export function loadConfig() {
     stateDir,
     databasePath: path.join(stateDir, 'paper.sqlite'),
     freshRss: {
-      baseUrl: required('FRESHRSS_BASE_URL').replace(/\/$/, ''),
-      username: required('FRESHRSS_USERNAME'),
-      apiPassword: required('FRESHRSS_API_PASSWORD'),
+      baseUrl: (backend === 'freshrss' ? required('FRESHRSS_BASE_URL') : '').replace(/\/$/, ''),
+      username: backend === 'freshrss' ? required('FRESHRSS_USERNAME') : '',
+      apiPassword: backend === 'freshrss' ? required('FRESHRSS_API_PASSWORD') : '',
     },
     rssHub: {
       baseUrl: value('RSSHUB_BASE_URL').replace(/\/$/, ''),
@@ -73,7 +79,7 @@ export function loadConfig() {
       publishUrl: value('KIRBY_PUBLISH_URL'),
       token: value('KIRBY_PUBLISH_TOKEN'),
     },
-    internalSecret: required('PAPER_INTERNAL_SECRET'),
+    internalSecret: value('PAPER_INTERNAL_SECRET', secrets?.internalSecret) || required('PAPER_INTERNAL_SECRET'),
     ai: { discussionEnabled: true, briefingsEnabled: true },
     collections: {
       enabled: value('PAPER_COLLECTIONS_ENABLED', 'true') === 'true',
@@ -84,7 +90,7 @@ export function loadConfig() {
       writerModel: value('PAPER_HEADLINE_WRITER_MODEL', 'gpt-5.6-terra'),
       reviewerModel: value('PAPER_HEADLINE_REVIEWER_MODEL', 'gpt-5.6-sol'),
     },
-    signingSecret: required('PAPER_SIGNING_SECRET'),
+    signingSecret: value('PAPER_SIGNING_SECRET', secrets?.signingSecret) || required('PAPER_SIGNING_SECRET'),
     briefing: {
       includeReadUntil: optionalDate('PAPER_BRIEFING_INCLUDE_READ_UNTIL'),
     },

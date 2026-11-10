@@ -252,6 +252,7 @@ export function correctedCollections(input: PulseCollection[], feedback: Coverag
 
 export class PulseService {
   private running: Promise<void> | null = null
+  async drain() { await this.running }
   private timer?: ReturnType<typeof setInterval>
   private failed = false
   private retryAfter = 0

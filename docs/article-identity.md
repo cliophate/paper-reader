@@ -144,7 +144,9 @@ by the current FreshRSS adapter.
 
 ## Upgrade and recovery
 
-The current schema is v9. [Standalone feed scheduling](feed-scheduling.md)
+The current schema is v10. [Backend migration core](backend-migration.md)
+documents its journal, provenance, undo context and pre-upgrade backup.
+[Standalone feed scheduling](feed-scheduling.md)
 documents its migration and `.before-feed-fetch-v9` backup.
 [Folder and subscription organization](organization.md) documents schema v8
 and its `.before-organization-v8` backup. Both migrations keep the v7 identity

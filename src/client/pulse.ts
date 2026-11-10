@@ -9,7 +9,7 @@ export function refreshPulseState(current: PulsePayload, incoming: PulsePayload,
     const sources = new Map(next.sources.map(source => [source.id, source]))
     const updated = collection.sources.map(source => {
       const incomingSource = sources.get(source.id)
-      return incomingSource ? { ...source, read: incomingSource.read,
+      return incomingSource ? { ...source, read: incomingSource.read, stateRevision: incomingSource.stateRevision,
         isNew: collection.id === openId ? source.isNew : incomingSource.isNew } : source
     })
     return { ...collection, sources: updated, unreadCount: updated.filter(source => !source.read).length,

@@ -4,9 +4,12 @@ The goal is [#1](https://github.com/cliophate/paper-reader/issues/1): one Paper
 container that can collect feeds and manage reading state, with FreshRSS kept as
 an optional backend. [#13](https://github.com/cliophate/paper-reader/issues/13)
 owns folder and subscription organization. This document records the current
-dependencies, the first change, and the requirements for the remaining stages.
+initial dependencies and staged requirements. Standalone selection, coordinated
+startup, conditional state and offline migration now follow the
+[backend migration contract](backend-migration.md). The audit below records the
+starting point before those stages.
 
-## Current dependency audit
+## Initial dependency audit
 
 | Area | Current owner and dependency | First-stage treatment |
 | --- | --- | --- |

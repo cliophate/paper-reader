@@ -1080,3 +1080,12 @@ button:focus-visible, summary:focus-visible, .story-row:focus-visible { outline:
 }
 .organization-sidebar .folder-row > svg { width: 14px; height: 14px; flex-shrink: 0; }
 .organization-sidebar .folder-row > svg.rotated { transform: rotate(90deg); }
+
+.backend-commands { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+.connection-settings details > summary { cursor: pointer; padding: 10px 0; }
+
+.backend-settings { padding: 24px; min-width: 0; font-size: 14px; line-height: 1.6; }
+.backend-settings h3 { margin: 0 0 12px; }
+.backend-settings p { margin: 12px 0; }
+.backend-settings a { color: inherit; text-underline-offset: 3px; }
+@media (max-width: 700px) { .backend-settings { padding: 16px; } }

@@ -35,6 +35,7 @@ export interface NavigationPayload {
 }
 
 export interface Entry {
+  stateRevision?: number
   searchExcerpt?: string
   readingPosition?: number
   lastReadAt?: string

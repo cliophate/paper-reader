@@ -27,17 +27,18 @@ describe('Pulse visit and update interface', () => {
   it('preserves membership and order during background updates while refreshing read status', () => {
     const one = collection('one', [source('1', 1)])
     const two = collection('two', [source('2', 2)])
-    const incoming = payload([collection('two', [source('3', 3), source('2', 2)]), collection('one', [{ ...source('1', 1, true), isNew: false }])], 'two')
+    const incoming = payload([collection('two', [source('3', 3), source('2', 2)]), collection('one', [{ ...source('1', 1, true), isNew: false, stateRevision: 3 }])], 'two')
     const refreshed = refreshPulseState(payload([one, two]), incoming, 'one')
     expect(refreshed.collections.map(item => item.id)).toEqual(['one', 'two'])
     expect(refreshed.collections[1].articleCount).toBe(1)
     expect(refreshed.collections[0]).toMatchObject({ unreadCount: 0, newCount: 1 })
+    expect(refreshed.collections[0].sources[0].stateRevision).toBe(3)
     expect(acknowledgePulseVisit(incoming.collections[0], 2)).toMatchObject({ newCount: 1, unreadCount: 2 })
   })
 
   it('keeps a collection snapshot open, acknowledges only its displayed revision and loads changes on request', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
-    let latest = payload([collection('one', [source('1', 1), source('2', 2, true), source('3', 3)])])
+    let latest = payload([collection('one', [{ ...source('1', 1), stateRevision: 4 }, source('2', 2, true), { ...source('3', 3), stateRevision: 6 }])])
     const load = vi.spyOn(api, 'pulse').mockImplementation(async () => latest)
     const visit = vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
     const markRead = vi.fn().mockResolvedValue(true)
@@ -86,7 +87,7 @@ describe('Pulse visit and update interface', () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
     vi.spyOn(api, 'pulse').mockResolvedValue(payload([
       collection('active', [source('1', 1), source('2', 2, true), source('a', 1, true)]),
-      { ...collection('quiet', [source('3', 3, true), source('4', 4), source('q', 3, true)]), quiet: true },
+      { ...collection('quiet', [source('3', 3, true), { ...source('4', 4), stateRevision: 7 }, source('q', 3, true)]), quiet: true },
       collection('finished', [source('5', 5, true)]),
     ]))
     const visit = vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
@@ -102,7 +103,7 @@ describe('Pulse visit and update interface', () => {
     await act(async () => button(quiet, 'View collection').click())
     expect(button(quiet, 'Unread 1').getAttribute('aria-pressed')).toBe('true')
     await act(async () => button(quiet, 'Mark 1 unread as read').click())
-    expect(markRead).toHaveBeenCalledWith(['4'])
+    expect(markRead).toHaveBeenCalledWith(['4'], { '4': 7 })
     expect(visit).toHaveBeenCalledWith('quiet', 4)
     expect(container.textContent).not.toContain('Collection quiet')
     expect(button(toolbar, 'Unread 1')).toBeDefined()

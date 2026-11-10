@@ -59,7 +59,7 @@ export function FiltersSettings({ feeds, onChanged, notify }: {
   }
 
   return <section className="settings-page filters-settings">
-    <header><h3>Filters</h3><p>Hide recurring noise without deleting it or changing its FreshRSS read state. Removing a filter restores any matches that are still unread.</p></header>
+    <header><h3>Filters</h3><p>Hide recurring noise without deleting it or changing its read state. Removing a filter restores any matches that are still unread.</p></header>
     <form className="filter-form" onSubmit={add}>
       <label className="filter-phrase"><span>Phrase</span><input disabled={busy} autoFocus placeholder="New podcast episode" value={phrase} onChange={event => setPhrase(event.target.value)} /></label>
       <label><span>Look in</span><select disabled={busy} value={scope} onChange={event => setScope(event.target.value as MuteFilter['scope'])}><option value="title">Title</option><option value="content">Article text</option><option value="any">Title, article, author, or source</option></select></label>

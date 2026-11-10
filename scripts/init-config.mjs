@@ -12,7 +12,7 @@ const content = fs.readFileSync(path.join(directory, '.env.example'), 'utf8')
 try {
   fs.writeFileSync(target, content, { flag: 'wx', mode: 0o600 })
   fs.mkdirSync(path.join(directory, 'data'), { recursive: true, mode: 0o700 })
-  console.log('Created .env with mode 0600. Set your FreshRSS connection before starting Paper.')
+  console.log('Created .env with mode 0600. Standalone mode is ready. Set PUBLIC_URL before remote access, or select FreshRSS and add its connection.')
 } catch (error) {
   if (error.code === 'EEXIST') {
     console.error('.env already exists. Nothing was changed.')
