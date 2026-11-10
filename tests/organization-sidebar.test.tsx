@@ -173,6 +173,17 @@ describe('sidebar organization interactions', () => {
     expect(container.textContent).toContain('Bulk changes can partly succeed')
   })
 
+  it('preserves FreshRSS named Uncategorized without adding a duplicate empty group', async () => {
+    snapshot = { ...snapshot, backend: 'freshrss', revision: null, capabilities: FRESHRSS_ORGANIZATION_CAPABILITIES }
+    snapshot.navigation.uncategorized = []
+    snapshot.navigation.folders[0].title = 'Uncategorized'
+    await render(); await click('Organize feeds')
+    expect([...container.querySelectorAll('.folder-row .source-label')].filter(item => item.textContent === 'Uncategorized')).toHaveLength(1)
+    await click('Expand Uncategorized'); await click('Options for First'); await click('Move feed')
+    expect(dialog().textContent).toContain('FreshRSS returns feeds without a chosen folder to its default category')
+    expect([...dialog().querySelectorAll('option')].map(item => item.textContent)).toEqual(['Default folder', 'Uncategorized', 'Empty', 'Other'])
+  })
+
   it('shows visible drop targets and persists feed and folder order through commands', async () => {
     await render(); await click('Expand Essays')
     await drag(button('Second'), 'dragstart')

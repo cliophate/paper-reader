@@ -133,4 +133,3 @@ describe('organization HTTP contract', () => {
     expect(body.refreshError).toContain('Changes were processed')
   })
 })
-
