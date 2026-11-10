@@ -1,0 +1,20 @@
+.subscription-tools { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--border); min-width: 0; }
+.subscription-tools p { overflow-wrap: anywhere; }
+.subscription-tools fieldset { min-width: 0; }
+.subscription-tools-controls { border: 0; padding: 0; margin: 0; }
+.subscription-tools form, .opml-export { margin: 1.25rem 0; }
+.subscription-tools label { display: flex; flex-direction: column; gap: .4rem; margin: .75rem 0; }
+.subscription-tools input:not([type="radio"]), .subscription-tools textarea, .subscription-tools select { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; font: inherit; }
+.subscription-tools input, .subscription-tools textarea, .subscription-tools select, .subscription-tools button { min-height: 2.5rem; }
+.subscription-tools button { margin: .3rem .5rem .3rem 0; }
+.subscription-tools .discovery-choice { flex-direction: row; align-items: flex-start; gap: .75rem; }
+.discovery-choice span { min-width: 0; overflow-wrap: anywhere; }
+.discovery-choice small { display: block; }
+.opml-row { margin: 1rem 0; padding: .75rem; border: 1px solid var(--border); }
+.opml-row legend { max-width: 100%; overflow-wrap: anywhere; }
+.subscription-url { font-size: .85rem; }
+.opml-results li { margin: .5rem 0; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .subscription-tools button { width: 100%; margin-right: 0; }
+  .opml-row { padding: .5rem; }
+}
