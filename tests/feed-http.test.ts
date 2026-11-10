@@ -11,6 +11,7 @@ vi.mock('node:dns/promises', async importOriginal => {
   return { ...original, lookup: async (hostname: string, options: unknown) => {
     if (hostname === 'pinned.test') { dnsCalls.pinned++; return [{ address: '127.0.0.1', family: 4 }] }
     if (hostname === 'mixed.test') return [{ address: '8.8.8.8', family: 4 }, { address: '127.0.0.1', family: 4 }]
+    if (hostname === 'failed-dns.test') throw new Error('getaddrinfo EAI_AGAIN failed-dns.test')
     if (hostname === 'slow-dns.test') return new Promise(() => {})
     return original.lookup(hostname, options as Parameters<typeof original.lookup>[1])
   } }
@@ -61,6 +62,7 @@ describe('bounded feed HTTP transport', () => {
     dnsCalls.pinned = 0
     expect((await boundedFetch(pinned, { trustedOrigins: [pinned] })).text).toBe(xml)
     expect(dnsCalls.pinned).toBe(1)
+    await expect(boundedFetch('http://failed-dns.test')).rejects.toMatchObject({ code: 'network', message: 'The HTTP request failed.' })
     await expect(boundedFetch('http://mixed.test')).rejects.toMatchObject({ code: 'policy' })
     await expect(boundedFetch('http://slow-dns.test', { timeoutMs: 20 })).rejects.toMatchObject({ code: 'timeout' })
     await expect(boundedFetch('http://[::ffff:127.0.0.1]')).rejects.toMatchObject({ code: 'policy' })

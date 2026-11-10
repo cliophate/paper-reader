@@ -3,7 +3,7 @@ import { request as httpsRequest } from 'node:https'
 import { PassThrough, Transform, Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib'
-import { resolveHttpUrl } from './network-policy.js'
+import { HttpUrlPolicyError, resolveHttpUrl } from './network-policy.js'
 
 export type FeedHttpErrorCode = 'policy' | 'limit' | 'encoding' | 'redirect' | 'timeout' | 'aborted' | 'network'
 export class FeedHttpError extends Error {
@@ -101,7 +101,11 @@ export async function boundedFetch(input: string, options: BoundedFetchOptions =
       url.hash = ''
       let addresses: Awaited<ReturnType<typeof resolveHttpUrl>>
       try { addresses = await abortable(resolveHttpUrl(url, options.trustedOrigins), signal) }
-      catch (error) { signal.throwIfAborted(); throw new FeedHttpError('policy', error instanceof Error ? error.message : 'Unsafe HTTP URL.') }
+      catch (error) {
+        signal.throwIfAborted()
+        if (error instanceof HttpUrlPolicyError) throw new FeedHttpError('policy', error.message)
+        throw new FeedHttpError('network', 'The HTTP request failed.')
+      }
       const release = options.acquire ? await options.acquire(url, signal) : () => {}
       try {
         signal.throwIfAborted()

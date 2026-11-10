@@ -1,6 +1,8 @@
 import { lookup } from 'node:dns/promises'
 import { BlockList, isIP } from 'node:net'
 
+export class HttpUrlPolicyError extends Error {}
+
 const blocked = new BlockList()
 for (const [network, prefix] of [
   ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
@@ -17,12 +19,12 @@ export function isPublicAddress(address: string, family: number): boolean {
 }
 
 export async function resolveHttpUrl(url: URL, trustedOrigins: readonly string[] = []) {
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Use an HTTP or HTTPS URL without embedded login details.')
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new HttpUrlPolicyError('Use an HTTP or HTTPS URL without embedded login details.')
   const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
   const trusted = trustedOrigins.includes(url.origin)
-  if (!trusted && (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local'))) throw new Error('Paper cannot fetch private network addresses')
+  if (!trusted && (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local'))) throw new HttpUrlPolicyError('Paper cannot fetch private network addresses')
   const family = isIP(hostname)
   const addresses = family ? [{ address: hostname, family }] : await lookup(hostname, { all: true, verbatim: true })
-  if (!addresses.length || (!trusted && addresses.some(item => !isPublicAddress(item.address, item.family)))) throw new Error('Paper cannot fetch private network addresses')
+  if (!addresses.length || (!trusted && addresses.some(item => !isPublicAddress(item.address, item.family)))) throw new HttpUrlPolicyError('Paper cannot fetch private network addresses')
   return addresses
 }
