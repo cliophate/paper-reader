@@ -11,7 +11,10 @@ import { openDatabase } from '../src/server/migration-storage.js'
 
 let directory: string
 const children: ChildProcess[] = []
-beforeEach(() => { directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-runtime-')) })
+beforeEach(() => {
+  directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-runtime-'))
+  fs.writeFileSync(path.join(directory, 'synthetic-model'), '#!/bin/sh\ncat >/dev/null\nexit 1\n', { mode: 0o700 })
+})
 afterEach(async () => {
   await Promise.all(children.splice(0).map(async child => {
     if (child.exitCode !== null || child.signalCode !== null) return
@@ -48,7 +51,7 @@ async function ready(port: number) {
 it('starts the actual server and briefing CLI together, then admits a current CLI while excluding migration', async () => {
   const number = await port()
   const server = start('index', number)
-  const firstBriefing = start('briefing-cli', number, { CODEX_ENABLED: 'true', CODEX_BIN: '/bin/false' })
+  const firstBriefing = start('briefing-cli', number, { CODEX_ENABLED: 'true', CODEX_BIN: path.join(directory, 'synthetic-model') })
   await ready(number)
   const firstResult = await firstBriefing.exited
   expect(firstResult.code, firstResult.output).toBe(0)
@@ -57,7 +60,7 @@ it('starts the actual server and briefing CLI together, then admits a current CL
   const db = openDatabase(path.join(directory, 'paper.sqlite'), true)
   const schema = db.prepare('PRAGMA schema_version').get()?.schema_version
   expect(() => acquireStateLock(directory, 'exclusive')).toThrow(/in use/)
-  const nextBriefing = await start('briefing-cli', number, { CODEX_ENABLED: 'true', CODEX_BIN: '/bin/false' }).exited
+  const nextBriefing = await start('briefing-cli', number, { CODEX_ENABLED: 'true', CODEX_BIN: path.join(directory, 'synthetic-model') }).exited
   expect(nextBriefing.code, nextBriefing.output).toBe(0)
   expect(db.prepare('PRAGMA schema_version').get()?.schema_version).toBe(schema)
   db.close()

@@ -102,7 +102,7 @@ export class HeadlineService {
   page<T extends { items: Entry[] }>(page: T): T { return { ...page, items: page.items.map(entry => this.decorate(entry)) } }
 
   run(): Promise<void> {
-    if (this.running) return this.running
+    if (this.running) return Promise.resolve()
     this.running = this.perform().finally(() => { this.running = null })
     return this.running
   }
