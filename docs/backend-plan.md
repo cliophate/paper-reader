@@ -55,6 +55,11 @@ configuration names and sync markers remain compatible.
 
 ## Article identity requirements
 
+[#15](https://github.com/cliophate/paper-reader/issues/15) implements these rules in
+[Article identity and state ownership](article-identity.md), including migration
+recovery and the design required before offline writes or backend switching.
+
+
 Implement these in [#15](https://github.com/cliophate/paper-reader/issues/15)
 before collecting feeds:
 
@@ -129,7 +134,7 @@ drag-and-drop, mobile and keyboard controls using those operations.
 
 | Order | Issue | Deliverable and dependency |
 | --- | --- | --- |
-| 1 | [#14](https://github.com/cliophate/paper-reader/issues/14) | Common backend operations and FreshRSS adapter. This PR. |
+| 1 | [#14](https://github.com/cliophate/paper-reader/issues/14) | Common backend operations and FreshRSS adapter. Merged in #23. |
 | 2 | [#15](https://github.com/cliophate/paper-reader/issues/15) | Durable identity, aliases and local state ownership. Follows #14. |
 | 3 | [#16](https://github.com/cliophate/paper-reader/issues/16) | RSS/Atom ingestion and repeatable content updates. Follows #15. |
 | 4 | [#17](https://github.com/cliophate/paper-reader/issues/17) | Conditional fetching, bounded concurrency, timeouts, backoff and restart recovery. Follows #16. |

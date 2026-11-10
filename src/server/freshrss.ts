@@ -2,6 +2,7 @@ import type { Config } from './config.js'
 import { BackendValidationError } from './backend.js'
 import type { FeedOperation, BackendPageOptions, EntryOptions, EntryPage, EntryStateOperation, ReaderBackend } from './backend.js'
 import { detectKind } from './entry-kind.js'
+import { freshRssIdentity, type BackendIdentity } from './identity.js'
 import { normalizeFeedContent, normalizeFeedThumbnail } from './feed-content.js'
 import type { Entry, Feed, Folder, NavigationPayload, StreamRef } from './types.js'
 import { SocialAvatarService } from './social-avatar.js'
@@ -51,6 +52,7 @@ export { detectKind, isEditorialLinkedFeed } from './entry-kind.js'
 export type { EntryPage } from './backend.js'
 
 export class FreshRssClient implements ReaderBackend {
+  readonly identity: BackendIdentity
   private authToken = ''
   private editToken = ''
   private readonly baseUrl: string
@@ -58,6 +60,7 @@ export class FreshRssClient implements ReaderBackend {
   private readonly socialAvatars: SocialAvatarService
 
   constructor(private readonly config: Config['freshRss'], trustedOrigins: string[] = []) {
+    this.identity = freshRssIdentity(config.baseUrl, config.username)
     this.socialAvatars = new SocialAvatarService(trustedOrigins)
     this.rootUrl = config.baseUrl
     this.baseUrl = `${config.baseUrl}/api/greader.php`
@@ -387,6 +390,7 @@ function mapEntry(item: GReaderItem): Entry {
   })
   return {
     id: item.id || '',
+    sourceOrder: canonicalItemId(item.id || ''),
     feedId: item.origin?.streamId || '',
     feedTitle,
     feedUrl: item.origin?.htmlUrl || '',

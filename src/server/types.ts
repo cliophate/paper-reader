@@ -47,6 +47,8 @@ export interface Entry {
   publishedAt: string
   timestamp: number
   crawledAt?: number
+  // Adapter-provided arrival order, separate from the immutable Paper ID.
+  sourceOrder?: string
   read: boolean
   starred: boolean
   readingMinutes: number

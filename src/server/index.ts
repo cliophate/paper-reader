@@ -105,7 +105,7 @@ app.post('/api/discussion', asyncRoute(async (request, response) => {
   if (!discussionEnabled()) return response.status(503).json({ error: 'Enable article discussions and Codex in Settings.' })
   const entry = database.localEntry(String(request.body?.entryId || ''))
   if (!entry) return response.status(404).json({ error: 'Article is not available in Paper.' })
-  const full = request.body?.fullText === true ? database.getArticle(entry.url) : null
+  const full = request.body?.fullText === true ? database.getArticleForEntry(entry.id) : null
   if (request.body?.fullText === true && !full) return response.status(409).json({ error: 'Reload the full article before starting its discussion.' })
   try {
     const source = discussionSource(entry.title, entry.author, entry.url, full?.contentHtml || entry.contentHtml, full ? 'fulltext' : 'feed')
