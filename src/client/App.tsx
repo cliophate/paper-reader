@@ -131,6 +131,7 @@ export default function App() {
   const [overlays, setOverlays] = useState<OverlayState>(closedOverlays)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('feeds')
   const [settingsFeedId, setSettingsFeedId] = useState('')
+  const [settingsFeedView, setSettingsFeedView] = useState<'manage' | 'discover'>('manage')
   const [entryContext, setEntryContext] = useState<EntryContextState | null>(null)
   const [selectionContext, setSelectionContext] = useState<SelectionContextState | null>(null)
   const [discussionTarget, setDiscussionTarget] = useState<{ entry: Entry; quote: string } | null>(null)
@@ -744,6 +745,7 @@ export default function App() {
   }, [releasePull, stream.kind, switchFolder])
 
   const manageFeed = useCallback((feed: Feed) => {
+    setSettingsFeedView('manage')
     setSettingsFeedId(feed.id)
     setSettingsSection('feeds')
     setOverlays({ ...closedOverlays, settings: true })
@@ -1278,7 +1280,7 @@ export default function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (discussionTarget || bulkPreview || reportEntry || selectionContext || entryContext) return
-      const target = event.target as HTMLElement
+      const target = event.target instanceof Element ? event.target : document.body
       const typing = Boolean(target.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])'))
       if (event.defaultPrevented || target.closest('[role="dialog"],[role="menu"],[data-organization-handle]')) return
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -1366,7 +1368,6 @@ export default function App() {
           {mobileLayout && <div className="source-filter">
             <ArticleFilter unreadOnly={unreadOnly} onChange={changeUnreadOnly} />
           </div>}
-          <button className="icon-button" onClick={() => { setSettingsFeedId(''); setSettingsSection('feeds'); setOverlays({ ...closedOverlays, settings: true }) }} aria-label="Manage feeds"><Icon name="plus" /></button>
         </div>
         <nav
           className={`source-nav ${sourcePullDistance > 0 ? 'pulling pull-active' : ''} ${refreshing ? 'pull-active' : ''}`}
@@ -1392,7 +1393,7 @@ export default function App() {
             <p>All caught up</p>
             <button onClick={() => changeUnreadOnly(false)}>Show all feeds</button>
           </div>}
-          <OrganizationSidebar snapshot={organization} navigation={navigation} active={!query ? stream : null} unreadOnly={unreadOnly} online={online} onSnapshot={applyOrganizationSnapshot} onOpen={openStream} onMarkFeed={feed => void markFeedRead(feed)} onMarkFolder={folder => void markFolderRead(folder)} onManage={manageFeed} />
+          <OrganizationSidebar snapshot={organization} navigation={navigation} active={!query ? stream : null} unreadOnly={unreadOnly} online={online} onSnapshot={applyOrganizationSnapshot} onOpen={openStream} onMarkFeed={feed => void markFeedRead(feed)} onMarkFolder={folder => void markFolderRead(folder)} onManage={manageFeed} onAddFeed={() => { setSettingsFeedId(''); setSettingsFeedView('discover'); setSettingsSection('feeds'); setOverlays({ ...closedOverlays, settings: true }) }} />
           </div>
         </nav>
         <footer className="sidebar-footer">
@@ -1528,7 +1529,7 @@ export default function App() {
       {entryContext && <EntryContextMenu key={entryContext.entry.id} state={entryContext} unsubscribeAvailable={Boolean(organization?.capabilities.unsubscribe && uniqueFeeds(navigation).some(feed => feed.id === entryContext.entry.feedId))} relativeAvailable={libraryMode === 'stream' && online} onClose={() => setEntryContext(null)} onOpen={() => { setEntryContext(null); openEntry(entryContext.entry) }} onCopyUrl={() => { void copyArticleUrl(entryContext.entry); setEntryContext(null) }} onToggleRead={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.read ? 'unread' : 'read') }} onToggleStar={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.starred ? 'unstar' : 'star') }} onReport={() => { setReportEntry(entryContext.entry); setEntryContext(null) }} onMarkAbove={() => void markRelativeRead(entryContext.entry, 'above')} onMarkBelow={() => void markRelativeRead(entryContext.entry, 'below')} onUnsubscribe={() => void unsubscribeFeed({ id: entryContext.entry.feedId, title: entryContext.entry.feedTitle })} />}
       {selectionContext && (status.kirbyConfigured || status.discussionConfigured) && <SelectionContextMenu state={selectionContext} kirbyConfigured={status.kirbyConfigured} discussionConfigured={status.discussionConfigured} onClose={() => setSelectionContext(null)} onCreate={() => void createKirbyNote(selectionContext.quote)} onDiscuss={() => { if (!status.discussionConfigured) return notify('Article discussion is not configured'); if (selected) setDiscussionTarget({ entry: selected, quote: selectionContext.quote }); setSelectionContext(null) }} />}
       {discussionTarget && <ArticleDiscussion key={discussionTarget.entry.id} entry={discussionTarget.entry} initialQuote={discussionTarget.quote} onClose={() => setDiscussionTarget(null)} />}
-      {overlays.settings && <Settings backend={status.backend} section={settingsSection} setSection={setSettingsSection} initialFeedId={settingsFeedId} navigation={navigation} onChanged={loadNavigation} onFiltersChanged={reloadFilteredLibrary} notify={notify} onConnectionsChanged={loadStatus} autoRead={autoRead} setAutoRead={value => { setAutoRead(value); localStorage.setItem('paper-auto-read', value ? 'automatic' : 'manual') }} onOpenEntry={id => { setOverlays(closedOverlays); void openTopicEntry(id) }} onClose={() => setOverlays(closedOverlays)} />}
+      {overlays.settings && <Settings backend={status.backend} section={settingsSection} setSection={setSettingsSection} initialFeedId={settingsFeedId} initialFeedView={settingsFeedView} navigation={navigation} onChanged={loadNavigation} onFiltersChanged={reloadFilteredLibrary} notify={notify} onConnectionsChanged={loadStatus} autoRead={autoRead} setAutoRead={value => { setAutoRead(value); localStorage.setItem('paper-auto-read', value ? 'automatic' : 'manual') }} onOpenEntry={id => { setOverlays(closedOverlays); void openTopicEntry(id) }} onClose={() => { setOverlays(closedOverlays); setSettingsFeedView('manage') }} />}
       {overlays.appearance && <AppearancePopover theme={theme} setTheme={setTheme} readerFont={readerFont} setReaderFont={setReaderFont} readerSize={readerSize} setReaderSize={setReaderSize} readerSpacing={readerSpacing} setReaderSpacing={setReaderSpacing} readerWidth={readerWidth} setReaderWidth={setReaderWidth} onClose={() => setOverlays(closedOverlays)} />}
       {reportEntry && <ReportProblemModal entry={reportEntry} onClose={() => setReportEntry(null)} onSaved={() => { setReportEntry(null); notify('Problem reported') }} />}
       {toast && <div className="toast" role="status"><span>{toast.message}</span>{toast.action && <button onClick={() => { toast.action?.(); setToast(null) }}>{toast.actionLabel}</button>}</div>}
@@ -1844,7 +1845,7 @@ const ArticleView = forwardRef<HTMLElement, {
     })
   }
 
-  return <article className={`article-view kind-${entry.kind}`} tabIndex={0} ref={ref}>
+  return <article className={`article-view kind-${entry.kind}`} tabIndex={-1} ref={ref}>
     <div className="reader-toolbar">
       <button className="reader-back-button" onClick={onBack} aria-label={backLabel} title={backLabel}><Icon name="back" /></button>
       <div className="reader-actions">
@@ -2186,11 +2187,12 @@ function ShortcutHelp({ onClose }: { onClose: () => void }) {
   return <Modal title="Keyboard shortcuts" onClose={onClose} className="help-modal"><dl>{shortcuts.map(([key, label]) => <div key={key}><dt>{key}</dt><dd>{label}</dd></div>)}</dl></Modal>
 }
 
-function Settings({ backend, section, setSection, initialFeedId, navigation, onChanged, onFiltersChanged, notify, onConnectionsChanged, autoRead, setAutoRead, onOpenEntry, onClose }: {
+function Settings({ backend, section, setSection, initialFeedId, initialFeedView, navigation, onChanged, onFiltersChanged, notify, onConnectionsChanged, autoRead, setAutoRead, onOpenEntry, onClose }: {
   backend: 'standalone' | 'freshrss'
   section: SettingsSection
   setSection: (value: SettingsSection) => void
   initialFeedId: string
+  initialFeedView: 'manage' | 'discover'
   navigation: NavigationPayload | null
   onChanged: () => Promise<unknown>
   onFiltersChanged: () => Promise<unknown>
@@ -2202,7 +2204,7 @@ function Settings({ backend, section, setSection, initialFeedId, navigation, onC
   onClose: () => void
 }) {
   const content = section === 'backend' ? <BackendSettings backend={backend} /> : section === 'feeds'
-    ? <FeedSettings onChanged={onChanged}><FeedManager initialFeedId={initialFeedId} navigation={navigation} onChanged={onChanged} notify={notify} /></FeedSettings>
+    ? <FeedSettings initialView={initialFeedView} onChanged={onChanged}><FeedManager initialFeedId={initialFeedId} navigation={navigation} onChanged={onChanged} notify={notify} /></FeedSettings>
     : section === 'filters'
       ? <FiltersSettings feeds={uniqueFeeds(navigation)} onChanged={onFiltersChanged} notify={notify} />
       : section === 'reports'

@@ -219,6 +219,31 @@ describe('mobile reader switching', () => {
     expect(container.textContent).toContain('Instagram')
   })
 
+  it('keeps the programmatic reader focus target out of Tab order and leaves article controls tabbable', async () => {
+    await mount()
+    const article = container.querySelector<HTMLElement>('.article-view')!
+    expect(article.tabIndex).toBe(-1)
+    article.focus()
+    expect(document.activeElement).toBe(article)
+    expect(article.querySelector<HTMLAnchorElement>('a[href]')!.tabIndex).toBe(0)
+    expect(article.querySelector<HTMLButtonElement>('button:not(:disabled)')!.tabIndex).toBe(0)
+  })
+
+  it('opens the existing discovery flow from the Feeds add menu and returns focus on close', async () => {
+    await mount()
+    const plus = container.querySelector<HTMLButtonElement>('[aria-label="Add feed or folder"]')!
+    await act(async () => { plus.focus(); plus.click() })
+    const add = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === 'Add feed')!
+    await act(async () => add.click())
+    expect(container.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('Settings')
+    expect(container.querySelector('[aria-label="Discover feeds"]')).not.toBeNull()
+    expect(container.querySelectorAll('.subscription-tools')).toHaveLength(1)
+    expect(container.querySelector('.feed-add-form')).toBeNull()
+    await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' })) })
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(plus)
+  })
+
   it('reveals the end marker before J crosses into the next folder', async () => {
     await mount()
     vi.mocked(HTMLElement.prototype.scrollIntoView).mockClear()
@@ -612,7 +637,8 @@ describe('Sources read filter', () => {
     const heading = container.querySelector('.sidebar-heading')!
     expect(heading.children[0].textContent).toBe('Library')
     expect(heading.children[1].className).toBe('source-filter')
-    expect(heading.children[2].getAttribute('aria-label')).toBe('Manage feeds')
+    expect(heading.children).toHaveLength(2)
+    expect(container.querySelector('.organization-header [aria-label="Add feed or folder"]')).not.toBeNull()
     expect(container.querySelector('.source-nav .source-filter')).toBeNull()
     expect(container.querySelector('.source-filter [aria-pressed="true"]')?.textContent).toBe('Unread')
     expect(container.querySelector('.story-pane [aria-label="Article filter"]')).toBeNull()

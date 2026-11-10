@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { api, ApiError } from '../api'
 import { useDialogFocus, useMenuFocus } from '../dialogFocus'
@@ -10,11 +10,14 @@ import { FeedMark } from './FeedMark'
 type Member = { feed: Feed; folderId: string | null }
 type Target = { kind: 'feed'; member: Member } | { kind: 'folder'; folder: Folder }
 type Action = { type: 'unsubscribe'; members: Member[] } | { type: 'create' } | { type: 'rename' | 'remove'; target: Target } | { type: 'move'; members: Member[] } | { type: 'merge'; folder: Folder }
-type Drag = { kind: 'feed'; member: Member } | { kind: 'folder'; folder: Folder }
+type Drag = Target
+type Placement = { row: string; edge: 'before' | 'after' | 'inside'; commands: OrganizationCommand[]; label: string }
+const folderRow = (id: string | null) => JSON.stringify(['folder', id])
+const feedRow = (member: Member) => JSON.stringify(['feed', member.folderId, member.feed.id])
 const memberKey = (member: Member) => JSON.stringify([member.folderId, member.feed.id])
 const targetTitle = (target: Target) => target.kind === 'feed' ? target.member.feed.title : target.folder.title
 
-export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, online, onSnapshot, onOpen, onMarkFeed, onMarkFolder, onManage }: {
+export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, online, onSnapshot, onOpen, onMarkFeed, onMarkFolder, onManage, onAddFeed }: {
   snapshot: OrganizationView | null
   navigation: NavigationPayload | null
   active: StreamRef | null
@@ -25,13 +28,23 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
   onMarkFeed: (feed: Feed) => void
   onMarkFolder: (folder: Folder) => void
   onManage: (feed: Feed) => void
+  onAddFeed: () => void
 }) {
   const [expanded, setExpanded] = useState(new Set<string | null>())
   const [organizing, setOrganizing] = useState(false)
   const [selected, setSelected] = useState<Member[]>([])
   const [menu, setMenu] = useState<{ target: Target; left: number; top: number } | null>(null)
+  const [headerMenu, setHeaderMenu] = useState<{ kind: 'add' | 'options'; left: number; top: number } | null>(null)
   const [action, setAction] = useState<Action | null>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
+  const [placement, setPlacement] = useState<Placement | null>(null)
+  const placementRef = useRef<Placement | null>(null)
+  const [dragPoint, setDragPoint] = useState<{ x: number; y: number } | null>(null)
+  const pointer = useRef<{ id: number; startX: number; startY: number; x: number; y: number; item: Drag; moving: boolean } | null>(null)
+  const scrollFrame = useRef<number | null>(null)
+  const keyboardIndex = useRef(0)
+  const dragHelp = useId()
+  const sidebar = useRef<HTMLElement>(null)
   const editRevision = useRef<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [needsReload, setNeedsReload] = useState(false)
@@ -39,6 +52,7 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
   const returnFocus = useRef<HTMLElement | null>(null)
   const focusAfterClose = useRef(false)
   const toolbar = useRef<HTMLButtonElement>(null)
+  const selectionDone = useRef<HTMLButtonElement>(null)
   const capabilities = snapshot?.capabilities
   const writable = online && !!snapshot && !busy && !needsReload
   const folders = navigation?.folders || []
@@ -49,14 +63,15 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
   const toggle = (id: string | null) => setExpanded(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
   const restoreFocus = () => { focusAfterClose.current = true }
   useEffect(() => {
-    if (menu || action || !focusAfterClose.current) return
+    if (menu || headerMenu || action || !focusAfterClose.current) return
     focusAfterClose.current = false
     if (returnFocus.current?.isConnected) returnFocus.current.focus()
-    else toolbar.current?.focus()
-  }, [menu, action, snapshot])
+    else (selectionDone.current || toolbar.current)?.focus()
+  }, [menu, headerMenu, action, snapshot, organizing])
+  const closeHeaderMenu = () => { setHeaderMenu(null); restoreFocus() }
   const closeMenu = () => { setMenu(null); restoreFocus() }
   const closeAction = () => { setAction(null); restoreFocus() }
-  const begin = (next: Action) => { if (!menu) editRevision.current = snapshot?.revision ?? null; setMenu(null); setFeedback(null); setAction(next) }
+  const begin = (next: Action) => { if (!menu) editRevision.current = snapshot?.revision ?? null; setMenu(null); setHeaderMenu(null); setFeedback(null); setAction(next) }
   const reload = async () => {
     setBusy(true)
     try { const refreshed = await api.organization(true); onSnapshot(refreshed); editRevision.current = refreshed.revision; setNeedsReload(false); setFeedback({ error: false, text: 'Organization reloaded. Review your choices before submitting again.' }) }
@@ -88,6 +103,7 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
     } finally { setBusy(false) }
   }
   const showMenu = (target: Target, element: HTMLElement, point?: { x: number; y: number }) => {
+    cancelDrag(); setHeaderMenu(null)
     editRevision.current = snapshot?.revision ?? null
     element.focus()
     returnFocus.current = element
@@ -109,61 +125,189 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
       reorderFeed(target.member, feeds[index + (direction < 0 ? -1 : 2)]?.id || null)
     }
   }
-  const startDrag = (event: DragEvent, item: Drag) => {
-    if (!writable) { event.preventDefault(); return }
-    editRevision.current = snapshot?.revision ?? null
-    event.dataTransfer.effectAllowed = 'move'
-    event.dataTransfer.setData('text/plain', item.kind === 'feed' ? item.member.feed.id : item.folder.id)
-    setDrag(item); setMenu(null)
+  const indicate = (next: Placement | null) => { if (JSON.stringify(next) === JSON.stringify(placementRef.current)) return; placementRef.current = next; setPlacement(next) }
+  const cancelDrag = () => { if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current); scrollFrame.current = null; pointer.current = null; setDrag(null); setDragPoint(null); indicate(null) }
+  useEffect(() => {
+    if (!drag) return
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); cancelDrag() } }
+    document.addEventListener('keydown', escape)
+    return () => document.removeEventListener('keydown', escape)
+  }, [drag])
+  useEffect(() => { if (!writable) cancelDrag() }, [writable])
+  const drop = (item: Drag) => {
+    const next = placementRef.current
+    cancelDrag()
+    if (next) void apply(next.commands, next.commands.map(() => targetTitle(item)))
   }
-  const dropTarget = (label: string, run: () => void) => <DropTarget label={label} onDrop={() => { setDrag(null); run() }} />
+  const orderPlacement = (item: Drag, index: number): Placement | null => {
+    if (item.kind === 'folder') {
+      if (!capabilities?.orderFolders) return null
+      const remaining = folders.filter(folder => folder.id !== item.folder.id)
+      const before = remaining[index]
+      const last = remaining.at(-1)
+      if (!before && !last) return null
+      return { row: folderRow((before || last)!.id), edge: before ? 'before' : 'after', commands: [{ type: 'move-folder', folderId: item.folder.id, beforeId: before?.id ?? null }], label: before ? `Before ${before.title}` : 'After all folders' }
+    }
+    if (!capabilities?.orderFeeds) return null
+    const remaining = feedsIn(item.member.folderId).filter(feed => feed.id !== item.member.feed.id)
+    const before = remaining[index], last = remaining.at(-1)
+    if (!before && !last) return null
+    const ids = remaining.map(feed => feed.id)
+    ids.splice(index, 0, item.member.feed.id)
+    return { row: feedRow({ feed: (before || last)!, folderId: item.member.folderId }), edge: before ? 'before' : 'after', commands: [{ type: 'order-feeds', folderId: item.member.folderId, feedIds: ids }], label: before ? `Before ${before.title}` : 'After all feeds' }
+  }
+  const locate = (item: Drag, x: number, y: number): Placement | null => {
+    const row = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-organization-row]')
+    if (!row || !sidebar.current?.contains(row)) return null
+    const [kind, folderId, feedId] = JSON.parse(row.dataset.organizationRow!) as [string, string | null, string?]
+    const box = row.getBoundingClientRect(), after = y > box.top + box.height / 2
+    if (item.kind === 'feed' && item.member.folderId !== folderId && capabilities?.moveFeed) {
+      const title = folders.find(folder => folder.id === folderId)?.title || 'Uncategorized'
+      const commands: OrganizationCommand[] = [{ type: 'move-feed', feedId: item.member.feed.id, fromFolderId: item.member.folderId, toFolderId: folderId }]
+      if (folderId === null && capabilities.multipleMemberships && members.some(member => member.feed.id === item.member.feed.id && member.folderId !== null && member.folderId !== item.member.folderId)) {
+        const source = folders.find(folder => folder.id === item.member.folderId)?.title || 'source folder'
+        return { row: row.dataset.organizationRow!, edge: 'inside', commands, label: `Remove from ${source}; keep other folders` }
+      }
+      if (kind === 'feed' && capabilities.orderFeeds && capabilities.conditionalWrites) {
+        const destination = feedsIn(folderId).map(feed => feed.id)
+        const ids = destination.filter(id => id !== item.member.feed.id)
+        const index = feedId === item.member.feed.id ? destination.indexOf(feedId) : ids.indexOf(feedId!) + Number(after)
+        ids.splice(index, 0, item.member.feed.id)
+        commands.push({ type: 'order-feeds', folderId, feedIds: ids })
+        return { row: row.dataset.organizationRow!, edge: after ? 'after' : 'before', commands, label: `${after ? 'After' : 'Before'} ${feedsIn(folderId).find(feed => feed.id === feedId)?.title} in ${title}` }
+      }
+      return { row: row.dataset.organizationRow!, edge: 'inside', commands, label: `Move to ${title}` }
+    }
+    if (item.kind === 'folder' && kind === 'folder' && folderId !== null && folderId !== item.folder.id) {
+      const remaining = folders.filter(folder => folder.id !== item.folder.id)
+      return orderPlacement(item, remaining.findIndex(folder => folder.id === folderId) + Number(after))
+    }
+    if (item.kind === 'feed' && kind === 'feed' && folderId === item.member.folderId && feedId !== item.member.feed.id) {
+      const remaining = feedsIn(folderId).filter(feed => feed.id !== item.member.feed.id)
+      return orderPlacement(item, remaining.findIndex(feed => feed.id === feedId) + Number(after))
+    }
+    return null
+  }
+  const locateRef = useRef(locate)
+  locateRef.current = locate
+  useEffect(() => {
+    if (!drag || !pointer.current?.moving) return
+    const tick = () => {
+      const pending = pointer.current
+      if (!pending?.moving) return
+      const scroll = sidebar.current?.closest<HTMLElement>('.source-nav')
+      if (scroll) {
+        const box = scroll.getBoundingClientRect()
+        const distance = pending.y < box.top + 32 ? pending.y - box.top : box.bottom - pending.y
+        if (distance < 32) {
+          const before = scroll.scrollTop
+          const speed = Math.min(16, Math.max(4, (32 - distance) / 2))
+          scroll.scrollTop += pending.y < box.top + 32 ? -speed : speed
+          if (scroll.scrollTop !== before) indicate(locateRef.current(pending.item, pending.x, pending.y))
+        }
+      }
+      scrollFrame.current = requestAnimationFrame(tick)
+    }
+    scrollFrame.current = requestAnimationFrame(tick)
+    return () => { if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current); scrollFrame.current = null }
+  }, [drag])
+  const rowProps = (row: string) => ({ 'data-organization-row': row, 'data-drop-edge': placement?.row === row && !(row.startsWith('["folder"') && placement.edge === 'after') ? placement.edge : undefined })
+  const handle = (item: Drag) => <button type="button" className="organization-handle" data-organization-handle="" aria-label={`Move ${targetTitle(item)}`} aria-describedby={dragHelp} aria-pressed={drag !== null && (drag.kind === 'folder' && item.kind === 'folder' ? drag.folder.id === item.folder.id : drag.kind === 'feed' && item.kind === 'feed' && memberKey(drag.member) === memberKey(item.member))} disabled={!writable}
+    onPointerDown={event => {
+      if (!writable || event.button !== 0) return
+      event.preventDefault(); event.currentTarget.focus(); returnFocus.current = event.currentTarget; event.currentTarget.setPointerCapture(event.pointerId)
+      editRevision.current = snapshot?.revision ?? null
+      pointer.current = { id: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, item, moving: false }
+    }}
+    onPointerMove={event => {
+      const pending = pointer.current
+      if (!pending || pending.id !== event.pointerId) return
+      if (!pending.moving && Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY) < 4) return
+      pending.moving = true; pending.x = event.clientX; pending.y = event.clientY
+      setDrag(pending.item); setMenu(null); setDragPoint({ x: event.clientX, y: event.clientY })
+      indicate(locate(pending.item, event.clientX, event.clientY))
+    }}
+    onPointerUp={event => { const pending = pointer.current; if (pending?.id === event.pointerId) { if (pending.moving) drop(pending.item); else cancelDrag() } }}
+    onBlur={() => { if (!pointer.current?.moving) cancelDrag() }}
+    onPointerCancel={cancelDrag}
+    onLostPointerCapture={() => { if (pointer.current) cancelDrag() }}
+    onKeyDown={event => {
+      if (event.key === 'Escape') { event.preventDefault(); cancelDrag(); return }
+      if (event.key === ' ' || event.key === 'Enter') {
+        event.preventDefault()
+        if (!(item.kind === 'folder' ? capabilities?.orderFolders : capabilities?.orderFeeds)) { showMenu(item, event.currentTarget); return }
+        if (drag) { drop(drag); return }
+        returnFocus.current = event.currentTarget
+        editRevision.current = snapshot?.revision ?? null
+        keyboardIndex.current = item.kind === 'folder' ? folders.findIndex(folder => folder.id === item.folder.id) : feedsIn(item.member.folderId).findIndex(feed => feed.id === item.member.feed.id)
+        setDrag(item); setMenu(null); indicate(null); return
+      }
+      if (drag && ['ArrowUp', 'ArrowDown'].includes(event.key)) {
+        event.preventDefault()
+        const length = drag.kind === 'folder' ? folders.length : feedsIn(drag.member.folderId).length
+        keyboardIndex.current = Math.max(0, Math.min(length - 1, keyboardIndex.current + (event.key === 'ArrowUp' ? -1 : 1)))
+        indicate(orderPlacement(drag, keyboardIndex.current))
+      }
+      if (event.key === 'Tab') cancelDrag()
+    }}><svg viewBox="0 0 12 18" aria-hidden="true">{[4, 9, 14].flatMap(y => [3, 8].map(x => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.2" fill="currentColor" />))}</svg></button>
   const renderFeeds = (folderId: string | null) => <div className="feed-list">
     {feedsIn(folderId).filter(feed => organizing || drag !== null || !unreadOnly || feed.unread > 0).map(feed => {
       const member = { feed, folderId }, target: Target = { kind: 'feed', member }
       return <div key={feed.id}>
-        {drag?.kind === 'feed' && drag.member.folderId === folderId && drag.member.feed.id !== feed.id && capabilities?.orderFeeds && dropTarget(`Place before ${feed.title}`, () => reorderFeed(drag.member, feed.id))}
-        <div className="feed-row-wrapper">
+        <div className="feed-row-wrapper" {...rowProps(feedRow(member))}>
+          {(capabilities?.moveFeed || capabilities?.orderFeeds) && handle(target)}
           {organizing && <input type="checkbox" aria-label={`Select ${feed.title} in ${folders.find(folder => folder.id === folderId)?.title || 'Uncategorized'}`} checked={selectedNow.some(item => memberKey(item) === memberKey(member))} onChange={event => setSelected(current => event.target.checked ? [...current, member] : current.filter(item => memberKey(item) !== memberKey(member)))} />}
-          <button className={`feed-row ${active?.kind === 'feed' && active.id === feed.id ? 'active' : ''}`} draggable={writable && (capabilities?.moveFeed || capabilities?.orderFeeds)} onDragStart={event => startDrag(event, { kind: 'feed', member })} onDragEnd={() => setDrag(null)} onClick={() => onOpen({ kind: 'feed', id: feed.id, title: feed.title })} onContextMenu={event => { event.preventDefault(); showMenu(target, event.currentTarget, { x: event.clientX, y: event.clientY }) }} onKeyDown={event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); showMenu(target, event.currentTarget) } }}>
+          <button className={`feed-row ${active?.kind === 'feed' && active.id === feed.id ? 'active' : ''}`} onClick={() => onOpen({ kind: 'feed', id: feed.id, title: feed.title })} onContextMenu={event => { event.preventDefault(); showMenu(target, event.currentTarget, { x: event.clientX, y: event.clientY }) }} onKeyDown={event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); showMenu(target, event.currentTarget) } }}>
             <FeedMark title={feed.title} url={feed.siteUrl || feed.url} iconUrl={feed.iconUrl} /><span className="source-label">{feed.title}</span>{feed.unread > 0 && <span className="source-count">{feed.unread}</span>}
           </button>
           <button className="row-options" aria-label={`Options for ${feed.title}`} aria-haspopup="menu" onClick={event => showMenu(target, event.currentTarget)}>⋯</button>
         </div>
       </div>
     })}
-    {drag?.kind === 'feed' && drag.member.folderId === folderId && capabilities?.orderFeeds && dropTarget('Place at end of feeds', () => reorderFeed(drag.member, null))}
     {feedsIn(folderId).length === 0 && <p className="organization-empty">No feeds</p>}
   </div>
-  return <section className="organization-sidebar" aria-label="Feed organization" onKeyDown={event => { if (event.key !== 'Tab') event.stopPropagation() }}>
-    <div className="organization-toolbar">
-      <button ref={toolbar} aria-pressed={organizing} onClick={() => { setOrganizing(value => !value); setSelected([]) }}>{organizing ? 'Done organizing' : 'Organize feeds'}</button>
-      {capabilities?.createEmptyFolder && <button disabled={!writable} onClick={event => { returnFocus.current = event.currentTarget; begin({ type: 'create' }) }}>New folder</button>}
+  return <section ref={sidebar} className="organization-sidebar" aria-label="Feed organization" onKeyDown={event => { if (event.key !== 'Tab') event.stopPropagation() }}>
+    <span id={dragHelp} className="visually-hidden">{capabilities?.orderFeeds || capabilities?.orderFolders ? 'Drag to reorder or move to a folder. With the keyboard, press Space, use Up or Down to reorder, then Space to drop. Escape cancels. Use the options menu to move between folders.' : 'Drag to move to a folder. Press Enter or Space for the options menu.'}</span>
+    <span className="visually-hidden" role="status">{drag ? `${targetTitle(drag)} picked up. ${placement?.label || 'Choose a position.'}` : ''}</span>
+    {drag && dragPoint && createPortal(<div className="organization-drag-preview" style={{ left: dragPoint.x + 12, top: dragPoint.y + 12 }} aria-hidden="true"><span>{targetTitle(drag)}</span>{placement && <small>{placement.label}</small>}</div>, document.body)}
+    <div className="organization-header">
+      <h2>{organizing ? `${selectedNow.length} selected` : 'Feeds'}</h2>
+      {organizing ? <button ref={selectionDone} className="organization-done" disabled={busy} onClick={() => { setOrganizing(false); setSelected([]); returnFocus.current = null; restoreFocus() }}>Done</button> : <div className="organization-header-actions">
+        {(['add', 'options'] as const).map(kind => <button key={kind} ref={kind === 'options' ? toolbar : undefined} className="icon-button" aria-label={kind === 'add' ? 'Add feed or folder' : 'Feed options'} title={kind === 'add' ? 'Add feed or folder' : 'Feed options'} aria-haspopup="menu" aria-expanded={headerMenu?.kind === kind} disabled={kind === 'add' ? !writable : busy} onClick={event => {
+          cancelDrag(); setMenu(null); returnFocus.current = event.currentTarget
+          editRevision.current = snapshot?.revision ?? null
+          const box = event.currentTarget.getBoundingClientRect()
+          setHeaderMenu({ kind, left: Math.max(8, Math.min(box.left, window.innerWidth - 268)), top: Math.max(8, Math.min(box.bottom, window.innerHeight - 420)) })
+        }}>{kind === 'add' ? <Icon name="plus" /> : '⋯'}</button>)}
+      </div>}
     </div>
-    {organizing && <p className="organization-note">{capabilities?.conditionalWrites ? 'Select feeds to move them together. Drag to a visible target or use the options menus.' : 'FreshRSS supports feed edits and unsubscribe. Folder management and ordering are unavailable. Bulk changes can partly succeed; concurrent remote edits cannot be revision-checked.'}</p>}
-    {drag?.kind === 'feed' && capabilities?.multipleMemberships && <p className="organization-note">Moving removes only the source membership. Other folders keep this feed.</p>}
+    {organizing && <p className="organization-note">{capabilities?.conditionalWrites ? 'Select feeds to move them together. Use the grip to drag, or use the options menus.' : 'FreshRSS supports feed edits and unsubscribe. Folder management and ordering are unavailable. Bulk changes can partly succeed; concurrent remote edits cannot be revision-checked.'}</p>}
     {!online && <p className="organization-note">Connect to organize feeds.</p>}
     {feedback && <p className="organization-feedback" role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p>}
     {(needsReload || !snapshot) && <button disabled={busy || !online} onClick={() => void reload()}>Reload organization</button>}
-    {organizing && selectedNow.length > 0 && <div className="organization-bulk"><span>{selectedNow.length} selected</span><button disabled={!writable || !capabilities?.moveFeed || selectedNow.length > 200} onClick={event => { returnFocus.current = event.currentTarget; begin({ type: 'move', members: selectedNow }) }}>Move selected</button>{capabilities?.unsubscribe && <button disabled={!writable || selectedNow.length > 200} onClick={event => { returnFocus.current = event.currentTarget; begin({ type: 'unsubscribe', members: [...new Map(selectedNow.map(member => [member.feed.id, member])).values()] }) }}>Unsubscribe selected</button>}<button onClick={() => setSelected([])}>Clear selection</button></div>}
+    {organizing && selectedNow.length > 0 && <div className="organization-bulk"><button disabled={!writable || !capabilities?.moveFeed || selectedNow.length > 200} onClick={event => { returnFocus.current = event.currentTarget; begin({ type: 'move', members: selectedNow }) }}>Move selected</button>{capabilities?.unsubscribe && <button disabled={!writable || selectedNow.length > 200} onClick={event => { returnFocus.current = event.currentTarget; begin({ type: 'unsubscribe', members: [...new Map(selectedNow.map(member => [member.feed.id, member])).values()] }) }}>Unsubscribe selected</button>}</div>}
     {folders.filter(folder => organizing || drag !== null || !unreadOnly || folder.unread > 0).map(folder => {
       const target: Target = { kind: 'folder', folder }
-      return <div className="folder" key={folder.id}>
-        {drag?.kind === 'folder' && drag.folder.id !== folder.id && capabilities?.orderFolders && dropTarget(`Place before ${folder.title}`, () => void apply([{ type: 'move-folder', folderId: drag.folder.id, beforeId: folder.id }], [drag.folder.title]))}
-        <div className="folder-row-wrapper">
+      return <div className="folder" key={folder.id} data-folder-drop-after={placement?.row === folderRow(folder.id) && placement.edge === 'after' ? true : undefined}>
+        <div className="folder-row-wrapper" {...rowProps(folderRow(folder.id))}>
+          {capabilities?.orderFolders && handle(target)}
           <button className="folder-expand" aria-label={`${expanded.has(folder.id) ? 'Collapse' : 'Expand'} ${folder.title}`} aria-expanded={expanded.has(folder.id)} onClick={() => toggle(folder.id)}><Icon name="chevron" className={expanded.has(folder.id) ? 'rotated' : ''} /></button>
-          <button className={`folder-row ${active?.kind === 'category' && active.id === folder.id ? 'active' : ''}`} draggable={writable && capabilities?.orderFolders} onDragStart={event => startDrag(event, { kind: 'folder', folder })} onDragEnd={() => setDrag(null)} onClick={() => onOpen({ kind: 'category', id: folder.id, title: folder.title })} onContextMenu={event => { event.preventDefault(); showMenu(target, event.currentTarget, { x: event.clientX, y: event.clientY }) }} onKeyDown={event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); showMenu(target, event.currentTarget) } }}><span className="source-label">{folder.title}</span>{folder.unread > 0 && <span className="source-count">{folder.unread}</span>}</button>
+          <button className={`folder-row ${active?.kind === 'category' && active.id === folder.id ? 'active' : ''}`} onClick={() => onOpen({ kind: 'category', id: folder.id, title: folder.title })} onContextMenu={event => { event.preventDefault(); showMenu(target, event.currentTarget, { x: event.clientX, y: event.clientY }) }} onKeyDown={event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); showMenu(target, event.currentTarget) } }}><span className="source-label">{folder.title}</span>{folder.unread > 0 && <span className="source-count">{folder.unread}</span>}</button>
           <button className="row-options" aria-label={`Options for ${folder.title}`} aria-haspopup="menu" onClick={event => showMenu(target, event.currentTarget)}>⋯</button>
         </div>
-        {drag?.kind === 'feed' && drag.member.folderId !== folder.id && capabilities?.moveFeed && dropTarget(`Move to ${folder.title}`, () => void apply([{ type: 'move-feed', feedId: drag.member.feed.id, fromFolderId: drag.member.folderId, toFolderId: folder.id }], [drag.member.feed.title]))}
         {expanded.has(folder.id) && renderFeeds(folder.id)}
       </div>
     })}
-    {drag?.kind === 'folder' && capabilities?.orderFolders && dropTarget('Place at end of folders', () => void apply([{ type: 'move-folder', folderId: drag.folder.id, beforeId: null }], [drag.folder.title]))}
     {((organizing && !namedUncategorized) || (navigation?.uncategorized || []).some(feed => !unreadOnly || feed.unread > 0) || (drag?.kind === 'feed' && !namedUncategorized)) && <div className="folder">
-      <button className="folder-row" aria-expanded={expanded.has(null)} onClick={() => toggle(null)}><Icon name="chevron" className={expanded.has(null) ? 'rotated' : ''} /><span className="source-label">Uncategorized</span></button>
-      {drag?.kind === 'feed' && drag.member.folderId !== null && capabilities?.moveFeed && dropTarget(capabilities.multipleMemberships ? 'Remove from source folder' : 'Move to Uncategorized', () => void apply([{ type: 'move-feed', feedId: drag.member.feed.id, fromFolderId: drag.member.folderId, toFolderId: null }], [drag.member.feed.title]))}
+      <button className="folder-row" {...rowProps(folderRow(null))} aria-expanded={expanded.has(null)} onClick={() => toggle(null)}><Icon name="chevron" className={expanded.has(null) ? 'rotated' : ''} /><span className="source-label">Uncategorized</span></button>
       {expanded.has(null) && renderFeeds(null)}
     </div>}
+    {headerMenu && createPortal(<OrganizationMenu menu={{ ...headerMenu, title: headerMenu.kind === 'add' ? 'Add' : 'Feeds' }} onClose={closeHeaderMenu}>
+      {headerMenu.kind === 'add' ? <>
+        <button role="menuitem" disabled={!writable} onClick={() => { setHeaderMenu(null); returnFocus.current?.focus(); onAddFeed() }}>Add feed</button>
+        {capabilities?.createEmptyFolder && <button role="menuitem" disabled={!writable} onClick={() => begin({ type: 'create' })}>New folder</button>}
+      </> : <button role="menuitem" disabled={busy} onClick={() => { setOrganizing(true); setSelected([]); setHeaderMenu(null); returnFocus.current = null; focusAfterClose.current = true }}>Select feeds</button>}
+    </OrganizationMenu>, document.body)}
     {menu && createPortal(<OrganizationMenu menu={menu} onClose={closeMenu}>
       <button role="menuitem" onClick={() => { const target = menu.target; closeMenu(); onOpen(target.kind === 'feed' ? { kind: 'feed', id: target.member.feed.id, title: target.member.feed.title } : { kind: 'category', id: target.folder.id, title: target.folder.title }) }}>Open {menu.target.kind}</button>
       <button role="menuitem" disabled={(menu.target.kind === 'feed' ? menu.target.member.feed.unread : menu.target.folder.unread) === 0} onClick={() => { menu.target.kind === 'feed' ? onMarkFeed(menu.target.member.feed) : onMarkFolder(menu.target.folder); closeMenu() }}>Mark {menu.target.kind} read</button>
@@ -186,20 +330,16 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
   </section>
 }
 
-function DropTarget({ label, onDrop }: { label: string; onDrop: () => void }) {
-  const [over, setOver] = useState(false)
-  return <div className={`organization-drop ${over ? 'over' : ''}`} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setOver(true) }} onDragLeave={() => setOver(false)} onDrop={event => { event.preventDefault(); setOver(false); onDrop() }}>{label}</div>
-}
-
-function OrganizationMenu({ menu, onClose, children }: { menu: { target: Target; left: number; top: number }; onClose: () => void; children: ReactNode }) {
+function OrganizationMenu({ menu, onClose, children }: { menu: { target?: Target; title?: string; left: number; top: number }; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null)
+  const title = menu.target ? targetTitle(menu.target) : menu.title || 'Feeds'
   useMenuFocus(ref)
   useEffect(() => {
     const dismiss = (event: PointerEvent) => { if (!ref.current?.contains(event.target as Node)) onClose() }
     document.addEventListener('pointerdown', dismiss)
     return () => document.removeEventListener('pointerdown', dismiss)
   }, [onClose])
-  return <div ref={ref} className="feed-context-menu organization-menu" role="menu" aria-label={`${targetTitle(menu.target)} options`} style={{ left: menu.left, top: menu.top }} onKeyDown={event => { if (event.key !== 'Tab') event.stopPropagation(); if (event.key === 'Escape') { event.preventDefault(); onClose() } }}><strong>{targetTitle(menu.target)}</strong>{children}</div>
+  return <div ref={ref} className="feed-context-menu organization-menu" role="menu" aria-label={`${title} options`} style={{ left: menu.left, top: menu.top }} onKeyDown={event => { if (event.key !== 'Tab') event.stopPropagation(); if (event.key === 'Escape') { event.preventDefault(); onClose() } }}><strong>{title}</strong>{children}</div>
 }
 
 function OrganizationDialog({ action, folders, multipleMemberships, defaultFolderLabel, busy, writable, feedback, needsReload, onReload, onClose, onSubmit }: {
