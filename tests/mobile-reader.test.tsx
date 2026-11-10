@@ -80,6 +80,14 @@ async function edge(target = 'video', cancel = false, release = true) {
 }
 
 describe('mobile reader switching', () => {
+  it.each(['', 'not-a-date', '0', '1970-01-01T00:00:00.000Z', undefined])('opens an article with unavailable publication date %s without crashing', async publishedAt => {
+    initialPage.items[0] = { ...post('a'), kind: 'article', publishedAt: publishedAt as string, timestamp: 0 }
+    await mount()
+    expect(container.querySelector('.article-kicker')?.textContent).toContain('Date unavailable')
+    expect(container.querySelector('.story-list')?.textContent).toContain('Date unavailable')
+    expect(container.textContent).not.toContain('NaNd')
+  })
+
   it.each(['j', 'k'])('keeps %s navigation working after marking an unread folder read', async key => {
     history.replaceState(null, '', '/?kind=category&id=instagram&title=Instagram&entry=a&pane=article&unread=1')
     initialPage.continuation = 'old-page'

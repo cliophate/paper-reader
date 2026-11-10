@@ -2461,11 +2461,17 @@ function groupFeeds(feeds: Feed[], folderOrder: string[]): Array<{ title: string
     .sort((a, b) => (order.get(a.title) ?? 10_000) - (order.get(b.title) ?? 10_000) || a.title.localeCompare(b.title))
 }
 
+function validDate(value: string | number): boolean {
+  return Boolean(value) && value !== '0' && Number.isFinite(new Date(value).getTime()) && new Date(value).getTime() !== 0
+}
+
 function formatFeedDate(value: string): string {
+  if (!validDate(value)) return 'Date unavailable'
   return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(value))
 }
 
 function relativeDate(value: string): string {
+  if (!validDate(value)) return 'Date unavailable'
   const minutes = Math.max(0, Math.round((Date.now() - Date.parse(value)) / 60_000))
   if (minutes < 2) return 'just now'
   if (minutes < 60) return `${minutes} minutes ago`
@@ -2491,6 +2497,7 @@ function uniqueFeeds(navigation: NavigationPayload | null): Feed[] {
 }
 
 function relativeTime(timestamp: number): string {
+  if (!validDate(timestamp)) return 'Date unavailable'
   const minutes = Math.max(0, Math.round((Date.now() - timestamp) / 60_000))
   if (minutes < 1) return 'now'
   if (minutes < 60) return `${minutes}m`
@@ -2500,6 +2507,7 @@ function relativeTime(timestamp: number): string {
 }
 
 function formatDate(value: string): string {
+  if (!validDate(value)) return 'Date unavailable'
   return new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
 }
 
