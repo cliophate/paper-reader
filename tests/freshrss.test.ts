@@ -7,6 +7,15 @@ import { createReaderBackend } from '../src/server/create-backend.js'
 afterEach(() => vi.unstubAllGlobals())
 
 describe('backend feed identifiers', () => {
+  it('advertises only the organization guarantees supported by the adapter', () => {
+    const backend = createReaderBackend({ freshRss: { baseUrl: 'http://freshrss', username: 'fixture', apiPassword: 'synthetic-password' }, trustedFeedOrigins: [] })
+    expect(backend.organizationCapabilities).toEqual({
+      stableFolderIds: false, createEmptyFolder: false, renameFolder: false, removeFolder: false,
+      atomicMerge: false, orderFolders: false, orderFeeds: false, multipleMemberships: false,
+      conditionalWrites: false, renameFeed: true, moveFeed: true, unsubscribe: true,
+    })
+  })
+
   it('keeps FreshRSS validation in the selected adapter and rejects invalid IDs before I/O', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

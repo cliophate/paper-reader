@@ -286,6 +286,9 @@ function downgradeFixtureToV6() {
     DROP TABLE subscription_aliases;
     DROP TABLE subscription_identities;
     DROP TABLE backend_checkpoints;
+    DROP TABLE organization_revisions;
+    ALTER TABLE feeds DROP COLUMN position;
+    ALTER TABLE feed_folders DROP COLUMN position;
     DROP TABLE reader_backends;
     ALTER TABLE entries DROP COLUMN state_revision;
     ALTER TABLE entries DROP COLUMN source_order;
@@ -312,6 +315,12 @@ describe('v7 migration recovery', () => {
     expect(saved.prepare('SELECT position FROM reading_progress WHERE entry_id = ?').get(id)?.position).toBe(0.6)
     saved.close()
     const before = fs.readFileSync(backup)
+    const organizationBackup = `${file}.before-organization-v8`
+    expect(fs.statSync(organizationBackup).mode & 0o777).toBe(0o600)
+    const savedOrganization = new DatabaseSync(organizationBackup, { readOnly: true })
+    expect(savedOrganization.prepare('PRAGMA user_version').get()?.user_version).toBe(6)
+    savedOrganization.close()
+    const organizationBefore = fs.readFileSync(organizationBackup)
     reopen()
     const source = freshRssIdentity('https://example.test', 'fixture')
     db.bindBackend(source)
@@ -319,9 +328,10 @@ describe('v7 migration recovery', () => {
     expect(db.discussion(id)?.entryId).toBe(id)
     expect(db.syncEntryIds(all)).toEqual([id])
     reopen()
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(7)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(8)
     expect(sql(c => c.prepare('SELECT COUNT(*) AS n FROM article_arrivals').get()?.n)).toBe(1)
     expect(fs.readFileSync(backup)).toEqual(before)
+    expect(fs.readFileSync(organizationBackup)).toEqual(organizationBefore)
   })
 
   it('rolls back interrupted schema migration and can retry against the same backup', () => {
@@ -332,7 +342,7 @@ describe('v7 migration recovery', () => {
     expect(sql(c => c.prepare('PRAGMA table_info(entries)').all().map(row => row.name))).not.toContain('state_revision')
     sql(c => c.exec('DROP VIEW article_arrivals'))
     reopen()
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(7)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(8)
   })
 
   it('rolls back interrupted source adoption without leaving aliases or completion markers', () => {

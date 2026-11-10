@@ -24,7 +24,7 @@ dependencies, the first change, and the requirements for the remaining stages.
 | Other integrations | AI, Readwise and Kirby have their own optional settings. | Keep them optional. Never expose saved credentials through backend contracts. |
 | Shared content classification | SQLite imports an editorial-feed helper from `freshrss.ts`. | Move kind detection and that helper into `entry-kind.ts` so storage no longer imports the adapter. |
 | Filter feed scope | `/api/filters` validates the FreshRSS `feed/` prefix. | Delegate validation to the adapter and preserve the existing `Unknown feed` response. |
-| Briefing folder selection | `BriefingService.generate` constructs `user/-/label/Writers`. | Keep this compatibility behavior now. #18 must resolve the folder through navigation and stable folder identity before standalone selection. |
+| Briefing folder selection | `BriefingService.generate` resolves Writers through navigation. | #18 retains the selected ID for standalone folders and resolves the current title for FreshRSS, whose category IDs change on rename. |
 | Client feed actions and copy | The article unsubscribe menu checks `feed/`; Settings and messages name FreshRSS. | #21 must use backend capabilities or opaque subscription IDs and update copy before standalone selection. |
 | Parity arrival order | `PaperDatabase.syncEntryIds` sorts fixed-width hexadecimal FreshRSS IDs to compare arrival order. | Preserve current parity checks. #15 must define explicit arrival ordering or adapter-specific parity before new Paper IDs enter this path. |
 
@@ -113,22 +113,16 @@ checkpoints and migration rules before sharing a database between modes.
 
 ## Organization requirements
 
-[#18](https://github.com/cliophate/paper-reader/issues/18) implements the backend
-work under #13. Standalone folders need stable IDs, empty-folder persistence,
-explicit positions and transactional membership changes. Renames must not alter
-article or subscription identity. Reject rename collisions consistently.
+[#18](https://github.com/cliophate/paper-reader/issues/18) implements the internal
+standalone service and schema v8. [Folder and subscription organization](organization.md)
+defines its commands, revision and bulk-result contract, migration recovery,
+Writers resolution and the FreshRSS capability limits. It adds no sidebar
+controls or standalone selector.
 
-For a merge, retain destination order and append unseen source feeds in source
-order. Keep one membership per feed/folder pair. Removing a folder keeps its
-subscriptions and history; feeds without remaining memberships appear in
-Uncategorized. Unsubscribe stays a separate operation. Add revision checks for
-concurrent edits and useful per-feed results for bulk changes.
-
-Document FreshRSS limits before adding operations to the common contract.
-Expose capabilities when the UI needs them. Do not promise empty folders,
-merges or persistent feed ordering until the adapter can preserve their meaning.
 [#19](https://github.com/cliophate/paper-reader/issues/19) then adds sidebar,
-drag-and-drop, mobile and keyboard controls using those operations.
+drag-and-drop, mobile and keyboard controls using those operations and their
+backend capabilities. FreshRSS folder writes and ordering remain unsupported
+until its adapter can preserve those operations.
 
 ## Ordered work
 
