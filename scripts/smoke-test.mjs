@@ -57,7 +57,7 @@ async function until(check) {
   for (let n = 0; n < 100; n++) { try { if (await check()) return } catch {} await delay(100) }
   throw new Error('Timed out waiting for synthetic Paper instance')
 }
-async function start(state) {
+async function start(state, localReads = true) {
   child = spawn(process.execPath, ['dist-server/index.js'], {
     cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'], env: {
       PATH: process.env.PATH, HOME: temporary, NODE_ENV: 'test',
@@ -65,7 +65,7 @@ async function start(state) {
       FRESHRSS_BASE_URL: `http://127.0.0.1:${fixture.address().port}`,
       FRESHRSS_USERNAME: 'fixture', FRESHRSS_API_PASSWORD: 'synthetic-password',
       PAPER_INTERNAL_SECRET: 'synthetic-internal-secret-only-for-tests', PAPER_SIGNING_SECRET: 'synthetic-signing-secret-only-for-tests',
-      PAPER_SYNC_MINUTES: '28,58', PAPER_SYNC_ENABLED: 'true', PAPER_LOCAL_READS: 'true',
+      PAPER_SYNC_MINUTES: '28,58', PAPER_SYNC_ENABLED: 'true', PAPER_LOCAL_READS: String(localReads),
       CODEX_ENABLED: 'false', OPENCODE_ENABLED: 'false',
     },
   })
@@ -140,6 +140,28 @@ try {
   assert.equal(restored.readingPosition, 0.37)
   assert.equal((await request('/api/sync/parity')).data.ready, true)
   await stop()
+  // Exercise the same factory and routes with remote reads explicitly selected.
+  await start(path.join(temporary, 'restored'), false)
+  assert.equal((await request('/api/status')).data.localReadsActive, false)
+  const remotePage = (await request('/api/entries?kind=all&id=all&unread=0')).data
+  assert.equal(remotePage.items.length, rows.length)
+  const remoteSearch = (await request('/api/entries?kind=all&id=all&unread=0&q=compositor')).data
+  assert.equal(remoteSearch.items.length, 2)
+  assert.equal((await request('/api/entries/item', { id })).data.entry.id, id)
+  const preview = await request('/api/streams/preview-read', { stream: { kind: 'all', id: 'all' } })
+  assert.equal(preview.data.count, rows.filter(row => !row.categories.includes(readTag)).length)
+  for (const method of ['PATCH', 'DELETE']) {
+    const invalid = await fetch(`${base}/api/feeds`, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'invalid', title: 'Fixture' }) })
+    assert.equal(invalid.status, 400)
+    assert.equal((await invalid.json()).error, 'A FreshRSS feed ID is required')
+  }
+  const invalidRepair = await request('/api/feeds/repair', { id: 'feed/not-numeric', url: 'https://example.test/feed.xml' })
+  assert.equal(invalidRepair.status, 400)
+  assert.equal(invalidRepair.data.error, 'Choose a FreshRSS feed')
+  const invalidFilter = await request('/api/filters', { phrase: 'fixture', scope: 'title', feedId: 'invalid' })
+  assert.equal(invalidFilter.status, 400)
+  assert.equal(invalidFilter.data.error, 'Unknown feed')
+  await stop()
   const cli = spawnSync(process.execPath, ['dist-server/briefing-cli.js', 'morning'], { encoding: 'utf8', env: {
     PATH: process.env.PATH, HOME: temporary, STATE_DIR: path.join(temporary, 'restored'),
     FRESHRSS_BASE_URL: 'https://example.test', FRESHRSS_USERNAME: 'fixture', FRESHRSS_API_PASSWORD: 'synthetic-password',
@@ -160,7 +182,7 @@ try {
   assert.equal((await fs.stat(path.join(setup, '.env'))).mode & 0o777, 0o600)
   assert(!first.includes('PAPER_SIGNING_SECRET=replace-me'))
   assert.equal(run().status, 1); assert.equal(await fs.readFile(path.join(setup, '.env'), 'utf8'), first)
-  console.log('Smoke checks passed: FreshRSS import and parity, state writes, private connection settings, disabled integrations and briefing CLI, token masking and removal, origin checks, offline assets, restart/restore, and configuration initialization.')
+  console.log('Smoke checks passed: FreshRSS import and parity, local and remote reads/search, adapter ID validation, state writes, private connection settings, disabled integrations and briefing CLI, token masking and removal, origin checks, offline assets, restart/restore, and configuration initialization.')
 } catch (error) {
   console.error(logs.slice(-4000)); throw error
 } finally {

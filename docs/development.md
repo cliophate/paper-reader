@@ -1,5 +1,8 @@
 # Development
 
+The [backend implementation plan](backend-plan.md) records the FreshRSS dependency
+audit, standalone stages, and article identity and state requirements.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh

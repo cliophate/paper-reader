@@ -1,8 +1,27 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { canonicalItemId, detectKind, FreshRssClient, sortFolders, streamPath } from '../src/server/freshrss.js'
 import type { Folder, StreamRef } from '../src/server/types.js'
+import { BackendValidationError } from '../src/server/backend.js'
+import { createReaderBackend } from '../src/server/create-backend.js'
 
 afterEach(() => vi.unstubAllGlobals())
+
+describe('backend feed identifiers', () => {
+  it('keeps FreshRSS validation in the selected adapter and rejects invalid IDs before I/O', () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const backend = createReaderBackend({ freshRss: { baseUrl: 'http://freshrss', username: 'fixture', apiPassword: 'synthetic-password' }, trustedFeedOrigins: [] })
+
+    for (const operation of ['edit', 'remove', 'filter'] as const) {
+      expect(() => backend.validateFeedId('feed/42', operation)).not.toThrow()
+      expect(() => backend.validateFeedId('feed/https://example.test/rss', operation)).not.toThrow()
+      expect(() => backend.validateFeedId('local:42', operation)).toThrow(BackendValidationError)
+    }
+    expect(() => backend.validateFeedId('feed/42', 'repair')).not.toThrow()
+    expect(() => backend.validateFeedId('feed/https://example.test/rss', 'repair')).toThrow('Choose a FreshRSS feed')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
 
 describe('FreshRSS stream paths', () => {
   it('uses the full Google Reader state path for starred entries', () => {

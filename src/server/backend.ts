@@ -1,5 +1,9 @@
 import type { Entry, NavigationPayload, StreamRef } from './types.js'
 
+export class BackendValidationError extends Error {}
+
+export type FeedOperation = 'edit' | 'remove' | 'repair' | 'filter'
+
 export type EntryStateOperation = 'read' | 'unread' | 'star' | 'unstar'
 
 export interface EntryOptions {
@@ -36,8 +40,11 @@ export interface EntrySource {
 }
 
 export interface ReaderBackend extends EntrySource {
+  // IDs are opaque to callers. Adapters reject invalid input before any I/O.
+  validateFeedId(id: string, operation: FeedOperation): void
   entriesPage(stream: StreamRef, options?: BackendPageOptions): Promise<EntryPage>
   entriesByIds(ids: string[]): Promise<Entry[]>
+  // Set the requested state. Repeating an operation must not toggle it.
   editEntries(ids: string[], operation: EntryStateOperation): Promise<void>
   addFeed(url: string, title?: string, folder?: string): Promise<void>
   editFeed(id: string, title: string, folder: string, currentFolder: string): Promise<void>

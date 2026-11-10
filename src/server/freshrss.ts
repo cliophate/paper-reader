@@ -1,7 +1,9 @@
 import type { Config } from './config.js'
-import type { BackendPageOptions, EntryOptions, EntryPage, EntryStateOperation, ReaderBackend } from './backend.js'
+import { BackendValidationError } from './backend.js'
+import type { FeedOperation, BackendPageOptions, EntryOptions, EntryPage, EntryStateOperation, ReaderBackend } from './backend.js'
+import { detectKind } from './entry-kind.js'
 import { normalizeFeedContent, normalizeFeedThumbnail } from './feed-content.js'
-import type { Entry, EntryKind, Feed, Folder, NavigationPayload, StreamRef } from './types.js'
+import type { Entry, Feed, Folder, NavigationPayload, StreamRef } from './types.js'
 import { SocialAvatarService } from './social-avatar.js'
 import { cleanArticleHtml, decodeHtmlText, excerpt, firstImage, readingMinutes } from './text.js'
 
@@ -45,6 +47,7 @@ interface FeedMetadata {
   folderOrder: string[]
 }
 
+export { detectKind, isEditorialLinkedFeed } from './entry-kind.js'
 export type { EntryPage } from './backend.js'
 
 export class FreshRssClient implements ReaderBackend {
@@ -58,6 +61,14 @@ export class FreshRssClient implements ReaderBackend {
     this.socialAvatars = new SocialAvatarService(trustedOrigins)
     this.rootUrl = config.baseUrl
     this.baseUrl = `${config.baseUrl}/api/greader.php`
+  }
+
+  validateFeedId(id: string, operation: FeedOperation): void {
+    if (operation === 'repair') {
+      if (!/^feed\/\d+$/.test(id)) throw new BackendValidationError('Choose a FreshRSS feed')
+    } else if (!id.startsWith('feed/')) {
+      throw new BackendValidationError('A FreshRSS feed ID is required')
+    }
   }
 
   private async request(path: string, init: RequestInit = {}, retry = true): Promise<Response> {
@@ -395,24 +406,6 @@ function mapEntry(item: GReaderItem): Entry {
   }
 }
 
-export function isEditorialLinkedFeed(feedUrl: string): boolean {
-  return matchesHost(hostname(feedUrl), 'daringfireball.net')
-}
-
-export function detectKind(feedTitle: string, url: string, feedUrl: string): EntryKind {
-  if (isEditorialLinkedFeed(feedUrl)) return 'article'
-  const title = feedTitle.toLowerCase()
-  const hosts = [url, feedUrl].map(hostname).filter(Boolean)
-  const sources = `${url} ${feedUrl}`.toLowerCase()
-  if (title.includes('instagram') || sources.includes('/instagram-stories') || hosts.some(host => matchesHost(host, 'instagram.com'))) return 'instagram'
-  if (title.includes('threads') || sources.includes('/threads/') || hosts.some(host => matchesHost(host, 'threads.net'))) return 'threads'
-  if (title.includes('bluesky') || sources.includes('/bluesky/') || hosts.some(host => matchesHost(host, 'bsky.app'))) return 'bluesky'
-  if (title.includes('mastodon') || sources.includes('/mastodon/') || hosts.some(host => matchesHost(host, 'mastodon.social'))) return 'mastodon'
-  if (title.includes('youtube') || sources.includes('/youtube/') || hosts.some(host => matchesHost(host, 'youtube.com') || matchesHost(host, 'youtu.be'))) return 'youtube'
-  if (title.includes('twitter') || /^x(?:\s|@|$)/i.test(feedTitle) || hosts.some(host => ['x.com', 'twitter.com', 't3.gg'].some(domain => matchesHost(host, domain)))) return 'x'
-  return 'article'
-}
-
 function bestImageEnclosure(enclosures: Array<{ href?: string; type?: string }>): string {
   const candidates = enclosures
     .filter(value => value.href && (!value.type || value.type.startsWith('image/')) && isLikelyImage(value.href, value.type || ''))
@@ -435,14 +428,6 @@ function imageScore(url: string): number {
   if (/-\d{2,4}x\d{2,4}\.(?:avif|jpe?g|png|webp)(?:$|\?)/i.test(url)) score -= 80
   if (/(?:thumbnail|thumb|small|low[_-]?res)/i.test(url)) score -= 40
   return score
-}
-
-function hostname(value: string): string {
-  try { return new URL(value).hostname.toLowerCase().replace(/\.$/, '') } catch { return '' }
-}
-
-function matchesHost(host: string, domain: string): boolean {
-  return host === domain || host.endsWith(`.${domain}`)
 }
 
 function delay(milliseconds: number): Promise<void> {

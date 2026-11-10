@@ -247,7 +247,13 @@ describe('Backend synchronization', () => {
 
   it('preserves article references when navigation and imported content change', async () => {
     database.replaceNavigation(navigation)
-    database.upsertEntries([entry()])
+    database.upsertEntries(['one', 'two', 'three'].map(id => entry({ id, url: `https://example.test/${id}` })))
+    database.saveReadingProgress('one', 0.42)
+    database.saveDiscussion({
+      entryId: 'one', revision: 1, messages: [],
+      source: { title: 'Fixture', author: 'Ada', url: 'https://example.test/one', kind: 'feed', paragraphs: [], warning: '' },
+    })
+    database.savePulseBatch([{ id: 'collection', headline: 'Fixture', scope: 'Fixture', entryIds: ['one', 'two', 'three'] }], ['one', 'two', 'three'], '2026-09-02T00:00:00.000Z')
     database.createBriefing({
       id: 'edition', kind: 'morning', windowStart: '2026-09-01T00:00:00.000Z', cutoff: '2026-09-02T00:00:00.000Z',
       subject: 'Fixture', html: '', text: '', status: 'delivered', tokenHash: '',
@@ -263,14 +269,24 @@ describe('Backend synchronization', () => {
     backend.unreadIds = ['one']
     const sync = new BackendSynchronizer(database, backend, true, [28, 58])
 
+    await sync.editEntries(['one'], 'star')
+    backend.starredIds = ['one']
     await sync.editFeed('feed/one', 'One', 'Writers', '')
     await sync.syncNow()
 
     expect(database.localNavigation().folders[0].feeds[0].id).toBe('feed/one')
     expect(database.entryIdsForBriefing('edition')).toEqual(['one'])
     expect(database.localEntry(database.entryIdsForBriefing('edition')[0])).toMatchObject({
-      id: 'one', feedId: 'feed/one', title: 'Updated article', contentHtml: '<p>Updated content</p>',
+      id: 'one', feedId: 'feed/one', title: 'Updated article', contentHtml: '<p>Updated content</p>', readingPosition: 0.42, read: false, starred: true,
     })
+    expect(database.discussion('one')).toMatchObject({ entryId: 'one', revision: 1 })
+    expect(database.pulseCollections()[0].sources.map(source => source.id).sort()).toEqual(['one', 'three', 'two'])
+
+    backend.navigation = async () => ({ unread: 0, starred: 1, folders: [], uncategorized: [] })
+    await sync.removeFeed('feed/one')
+    expect(database.localEntry('one')).toMatchObject({ id: 'one', starred: true, readingPosition: 0.42 })
+    expect(database.entryIdsForBriefing('edition')).toEqual(['one'])
+    expect(database.discussion('one')).not.toBeNull()
   })
 
   it('stops an incremental scan when the backend returns a short filtered page', async () => {
@@ -314,6 +330,7 @@ describe('Backend synchronization', () => {
 })
 
 class FakeBackend implements ReaderBackend {
+  validateFeedId() {}
   unreadIds: string[] = []
   starredIds: string[] = []
   continuations: string[] = []
