@@ -1,11 +1,92 @@
-# Backend migration core
+# Offline backend migration
 
-Issue #21 adds the storage foundation for an offline FreshRSS-to-standalone
-cutover. This document describes the internal API and recovery contract.
-The server and briefing entrypoints do not yet acquire the coordination lock,
-and the migration CLI and standalone selector are not wired. Do not use this
-core against an installation until that integration and its release checks
-are complete.
+Paper supports `PAPER_BACKEND=standalone` and `PAPER_BACKEND=freshrss`. Omitting
+it preserves legacy FreshRSS behavior. A new standalone data directory gets one
+persisted opaque instance ID. Existing account bindings remain strict, including
+when local reads are disabled. Configuration alone cannot transfer ownership.
+
+This is a one-way snapshot cutover, not ongoing synchronization between backends.
+FreshRSS remains untouched. Use a reviewed release that includes this migration
+before applying it to an installation.
+
+## Run a migration
+
+1. Complete a successful FreshRSS import and state reconciliation in Paper.
+2. Stop Paper and every briefing command. Stop older binaries and unrelated
+   database tools too. Back up the private configuration and entire data directory.
+3. Keep the original FreshRSS URL and username configured. Preview needs them to
+   verify ownership, but never contacts FreshRSS or requires its API password.
+4. Run preview, review its counts, references and mapping choices, then apply
+   using the exact returned `planDigest`:
+
+```sh
+docker compose stop paper
+docker compose run --rm --no-deps paper node dist-server/migration-cli.js preview
+docker compose run --rm --no-deps paper node dist-server/migration-cli.js apply --digest PLAN_DIGEST
+```
+
+After apply reports `active`, set `PAPER_BACKEND=standalone` in private
+configuration and run `docker compose up -d --no-build paper`. Environment-provided
+signing secrets keep precedence. Missing secrets are generated privately in
+`secrets.json`; include that file in future backups. AI, Readwise and Kirby stay
+optional. Preserve their existing settings through migration.
+
+For a source checkout, use `npm run migrate -- COMMAND` with `STATE_DIR` set to
+the disposable or stopped installation's directory. For another image runner,
+mount the same data directory and run `node dist-server/migration-cli.js COMMAND`.
+Do not use `docker exec` inside a running Paper container for migration.
+
+Use `status` to inspect a phase and `resume --digest PLAN_DIGEST` after an
+interruption. Resume also completes interrupted rollback. A pending phase blocks
+ordinary startup. Use `abort` to abandon a stale preview before activation;
+backups remain available and a new preview can then be created.
+
+## Reviewed identity choices
+
+Preview defaults to retaining historical rows without inferring publisher IDs.
+To provide reviewed mappings, pass `preview --choices /data/choices.json`. The
+file accepts these fields and has an 8 MiB limit:
+
+```json
+{
+  "mappings": [{
+    "subscriptionId": "feed/1",
+    "externalId": "publisher-guid",
+    "entryId": "tag:google.com,2005:reader/item/0000000000000001",
+    "evidence": "Compared the publisher item with this frozen source article."
+  }],
+  "ambiguities": [],
+  "pausedSubscriptions": [],
+  "folderTitles": {}
+}
+```
+
+These IDs are synthetic examples. Use only evidence you have reviewed. An
+ambiguity record contains `subscriptionId`, `externalId` and `candidateIds`.
+`folderTitles` maps an existing folder ID to its reviewed replacement title.
+The plan records the exact source and target instances and every accepted
+mapping. Similar URLs or publication dates never establish alias equivalence.
+
+If a preview rejects a missing or unsafe active feed URL, list its subscription
+ID in `pausedSubscriptions` after review. It stays visible but is not fetched.
+If folder titles collide under standalone naming rules, supply distinct titles
+through `folderTitles`; their IDs and memberships stay unchanged.
+
+## Run a rollback
+
+Stop Paper and every briefing command again, then inspect the changes that would
+be removed from the live database:
+
+```sh
+docker compose run --rm --no-deps paper node dist-server/migration-cli.js rollback-preview
+docker compose run --rm --no-deps paper node dist-server/migration-cli.js rollback-apply --digest ROLLBACK_DIGEST --acknowledge-loss
+```
+
+Use the rollback preview's `digest`, not the original plan digest. Rollback first
+preserves and validates a post-activation backup of the current database and
+private settings. It then restores the source snapshot. Later standalone edits
+remain only in that backup; they are not merged into FreshRSS. Restore the
+original FreshRSS configuration before restarting. Keep both sets of backups.
 
 ## Process coordination
 
@@ -36,8 +117,8 @@ pre-upgrade backup. It then reacquires shared and inspects again before returnin
 storage to the caller. A busy upgrade retries inspection for up to five seconds;
 another first start can finish the upgrade during that interval. No application
 handle survives the lock transition. Pending migration recovery blocks startup
-before database initialization. The helper remains separate from the unwired
-server and briefing entrypoints.
+before database initialization. Both server and briefing entrypoints use this
+helper before account binding or settings writes.
 
 ## Schema 10
 
@@ -54,8 +135,9 @@ exact source and target instances and its source and plan digests.
 
 `undo_actions` gains `backend_id` and `expected_revisions_json`. Existing tokens
 and article references remain unchanged. The empty backend and absent revision
-context on legacy tokens must not authorize standalone undo when route wiring
-is added.
+context on legacy tokens cannot authorize standalone undo. New local undo
+records commit with state and activity, then restore state only if all captured
+revisions still match. Events are emitted after commit.
 
 ## Preview and identity decisions
 
@@ -197,6 +279,8 @@ schema upgrades, a current-schema briefing participant joining a server
 participant, failed initialization cleanup, and migration exclusion. Current
 participants leave SQLite's schema version unchanged.
 
-Actual server-plus-briefing coexistence, startup recovery gating, standalone
-routes, conditional undo, scheduler lifecycle, browser setup and container
-migration proof remain required when the runtime integration lands.
+Actual server-plus-briefing tests exercise simultaneous first starts, a completed
+briefing write alongside the server, migration exclusion in both directions,
+restart identity and secret persistence, SIGKILL release and configuration-only
+ownership rejection. Route tests cover conditional state writes, committed
+events, stale bulk previews and undo conflicts.

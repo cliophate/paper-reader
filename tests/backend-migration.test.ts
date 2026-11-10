@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { BackendMigration, type MigrationBoundary } from '../src/server/backend-migration.js'
@@ -50,6 +50,36 @@ function session<T>(operation: (migration: BackendMigration) => T, boundary?: (p
 const choices = { mappings: [{ subscriptionId: feed.id, externalId: 'publisher-guid', entryId, evidence: 'Operator reviewed the publisher item against the frozen source article.' }], ambiguities: [{ subscriptionId: 'feed/2', externalId: 'unresolved-publisher-id', candidateIds: ['historical-inactive'] }] }
 
 describe('offline backend migration', () => {
+  it('runs the offline CLI through reviewed apply, stale rollback rejection and preserved rollback', () => {
+    const cli = (...args: string[]) => spawnSync(process.execPath, ['--import', 'tsx', 'src/server/migration-cli.ts', ...args], {
+      encoding: 'utf8', env: { PATH: process.env.PATH, NODE_NO_WARNINGS: '1', STATE_DIR: directory,
+        FRESHRSS_BASE_URL: 'https://fixture.example.test', FRESHRSS_USERNAME: 'synthetic' },
+    })
+    const preview = cli('preview')
+    expect(preview.status, preview.stderr).toBe(0)
+    expect(preview.stdout).not.toContain('synthetic-private-token')
+    expect(preview.stdout).not.toContain('synthetic-signing-secret')
+    const frozen = JSON.parse(preview.stdout)
+    expect(cli('apply', '--digest', '0'.repeat(64)).status).toBe(1)
+    const applied = cli('apply', '--digest', frozen.planDigest)
+    expect(applied.status, applied.stderr).toBe(0)
+    expect(JSON.parse(applied.stdout).phase).toBe('active')
+    expect(cli('resume', '--digest', frozen.planDigest).status).toBe(0)
+    const firstRollback = JSON.parse(cli('rollback-preview').stdout)
+    const db = new PaperDatabase(file)
+    db.commitLocalEntryState(frozen.plan.targetBackend, [entryId], 'unread')
+    db.close()
+    expect(cli('rollback-apply', '--digest', firstRollback.digest, '--acknowledge-loss').status).toBe(1)
+    const rollback = JSON.parse(cli('rollback-preview').stdout)
+    expect(rollback.plan.changedTables).toContain('entries')
+    expect(cli('rollback-apply', '--digest', rollback.digest).status).toBe(1)
+    const restored = cli('rollback-apply', '--digest', rollback.digest, '--acknowledge-loss')
+    expect(restored.status, restored.stderr).toBe(0)
+    expect(JSON.parse(restored.stdout).phase).toBe('rolled-back')
+    expect(sql(db => db.prepare('SELECT read FROM entries WHERE id = ?').get(entryId)?.read)).toBe(1)
+    expect(fs.readdirSync(path.join(directory, 'migrations', frozen.plan.id)).some(name => name.startsWith('post-'))).toBe(true)
+  }, 20000)
+
   it('preserves IDs, source aliases, references and inactive/orphan history while establishing scoped local ownership', () => {
     const original = sql(databaseDigest), originalSettings = settingsDigest(directory)
     const preview = session(migration => migration.preview(source.id, choices))

@@ -1,9 +1,8 @@
 # Feed parsing and ingestion
 
 [#16](https://github.com/cliophate/paper-reader/issues/16) adds internal feed
-parsing and ingestion for the standalone backend planned in
-[#1](https://github.com/cliophate/paper-reader/issues/1). FreshRSS remains the only
-selectable backend. These modules do not fetch URLs, schedule work, reconcile
+parsing and ingestion for the standalone backend in
+[#1](https://github.com/cliophate/paper-reader/issues/1). These modules do not fetch URLs, schedule work, reconcile
 reading state or change subscription organization.
 
 ## Supported feeds

@@ -1,8 +1,8 @@
 # Paper
 
-A self-hosted FreshRSS reader with full-text articles, search, filters, keyboard
-shortcuts, and offline reading. Works on desktop and mobile. FreshRSS keeps your
-subscriptions, read state, and stars in sync.
+A self-hosted feed reader with full-text articles, search, filters, keyboard
+shortcuts, and offline reading. Works on desktop and mobile. Run Paper on its own
+or connect it to FreshRSS to share subscriptions, read state, and stars.
 
 Entirely AI-coded. If this steals kittens, don't blame me.
 
@@ -23,37 +23,47 @@ use an [authenticated HTTPS proxy](docs/access.md) for remote access.
 
 ## Quick start
 
-You need Docker Compose 2.24.4 or newer and a working FreshRSS installation.
-The published image supports Linux amd64.
+You need Docker Compose 2.24.4 or newer. Standalone mode needs one Paper
+container and a persistent data directory. No FreshRSS or optional integration
+credentials are needed.
 
-1. Enable the Google Reader API in FreshRSS and set an API password for your
-   user. Paper uses this separate password to connect.
-2. Clone Paper and create its configuration:
+Standalone setup is currently available in source builds. Use a reviewed release
+that includes it before relying on a published image; `0.1.0-alpha.2` predates it.
 
-   ```sh
-   git clone https://github.com/cliophate/paper-reader.git
-   cd paper-reader
-   sh scripts/setup.sh
-   ```
+```sh
+git clone https://github.com/cliophate/paper-reader.git
+cd paper-reader
+sh scripts/setup.sh
+docker compose build paper
+docker compose up -d --no-build paper
+```
 
-3. Edit `.env` and fill in `FRESHRSS_BASE_URL`, `FRESHRSS_USERNAME`, and
-   `FRESHRSS_API_PASSWORD`. Use your FreshRSS root URL, such as
-   `https://rss.example.com`. Set `PUBLIC_URL` to the address you will use to
-   open Paper, which defaults to `http://localhost:8080`.
-4. Start Paper:
+Setup creates private configuration with `PAPER_BACKEND=standalone`. Open
+[localhost:8080](http://localhost:8080), choose **Add feeds**, and add an RSS or
+Atom feed, discover a feed from a website, or preview an OPML import. Paper
+fetches active feeds automatically. Search and reading state work immediately.
 
-   ```sh
-   docker compose config --quiet
-   sh scripts/pull-image.sh
-   docker compose up -d --no-build paper
-   ```
+For a source image outside Compose, set `PAPER_BACKEND=standalone`, mount a
+persistent volume at `/data`, and publish port 8080 to loopback. Paper creates
+private internal and signing secrets on first start. Keep the volume when
+recreating the container.
 
-Open [localhost:8080](http://localhost:8080). Paper imports your FreshRSS archive
-in the background. Search becomes available when the initial import finishes.
+### FreshRSS mode
 
-FreshRSS must be reachable from Paper's container. If both run on the same
-Docker host, use a shared network or a reachable host address. `localhost`
-inside the container refers to Paper itself.
+Set `PAPER_BACKEND=freshrss` and provide `FRESHRSS_BASE_URL`, `FRESHRSS_USERNAME`
+and `FRESHRSS_API_PASSWORD` in your private configuration. Enable FreshRSS's
+Google Reader API and use its separate API password. Paper imports your archive
+in the background; search becomes available after that initial import.
+
+Existing installations that omit `PAPER_BACKEND` retain FreshRSS behavior.
+FreshRSS must be reachable from Paper's container. `localhost` inside the
+container refers to Paper itself. Use a shared Docker network or reachable URL.
+
+The database binds to one backend instance. Changing the backend or FreshRSS
+account in configuration does not transfer its data. Follow the
+[offline migration guide](docs/backend-migration.md) to move an existing FreshRSS
+snapshot to standalone. Settings > Backend & data shows the current mode and
+migration commands.
 
 To use a different local port, change `PAPER_PORT` and `PUBLIC_URL` in `.env`.
 For access from other devices, follow the [remote access guide](docs/access.md).
@@ -76,7 +86,9 @@ See the [integration guide](docs/integrations.md) for full setup instructions.
 
 Back up `./data` and your private `.env`. The data directory holds reading
 positions, discussions, filters, saved briefings, and any connection tokens
-entered in Settings. FreshRSS needs its own backup too.
+entered in Settings, generated signing secrets and migration backups. Standalone
+subscriptions and article state also live there. In FreshRSS mode, back up
+FreshRSS separately.
 
 See [backup, restore, and upgrades](docs/recovery.md) before updating Paper,
 and [security and privacy](SECURITY.md) for details about stored data and

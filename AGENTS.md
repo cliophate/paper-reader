@@ -7,7 +7,7 @@ or in the development guide.
 
 ## Features and integrations
 
-FreshRSS is required. AI, Readwise Reader, and Kirby are optional and must remain
+Select standalone or FreshRSS explicitly for new installations. Omitted backend selection retains legacy FreshRSS mode. AI, Readwise Reader, and Kirby are optional and must remain
 usable without credentials. Keep setup guidance in Settings current when changing
 an integration. Never return saved tokens to the browser or put credentials in
 Git, screenshots, examples, logs, or model subprocess environments.

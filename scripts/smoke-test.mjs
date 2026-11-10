@@ -78,6 +78,9 @@ async function stop() {
 }
 try {
   await start(path.join(temporary, 'data'))
+  const rootPage = await fetch(base + '/')
+  assert.equal(rootPage.status, 200); assert.match(rootPage.headers.get('content-type'), /text\/html/)
+  assert.match(await rootPage.text(), /<div id="root">/)
   await until(async () => (await request('/api/status')).data.localReadsActive === true)
   const status = (await request('/api/status')).data
   assert.equal(status.readwiseConfigured, false); assert.equal(status.kirbyConfigured, false)

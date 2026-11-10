@@ -1,6 +1,8 @@
 # Optional connections
 
-Paper's reader needs a FreshRSS instance with the Google Reader API enabled.
+Paper runs standalone or connects to FreshRSS through its Google Reader API.
+Select the backend in private configuration; existing data requires the offline
+migration command before ownership can change.
 All other connections can be left disabled. Never commit authentication files,
 tokens, or a real .env. Open Settings > Reading & connections to enable or disable
 AI, Readwise Reader, and Kirby notes. Changes take effect without restarting
