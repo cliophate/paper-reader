@@ -246,17 +246,19 @@ export class PaperDatabase {
   importSourceEntries(backendId: string, subscriptionId: string, items: Array<{
     identity: SourceItemIdentity
     entry: Omit<Entry, 'id' | 'feedId' | 'read' | 'starred' | 'sourceOrder'>
-  }>): IdentityResolution[] {
+  }>, options: { checkpoint?: { key: string; value: string } } = {}): IdentityResolution[] {
     return transaction(this.db, () => {
       this.assertLocalBackend(backendId)
       this.identities.assertSubscription(backendId, subscriptionId)
-      return items.map(item => {
+      const results = items.map(item => {
         const result = this.identities.resolve(backendId, subscriptionId, item.identity)
         if (result.status === 'resolved') {
           this.upsertEntries([{ ...item.entry, id: result.id, feedId: subscriptionId, read: false, starred: false, sourceOrder: '' }])
         }
         return result
       })
+      if (options.checkpoint) this.identities.setCheckpoint(backendId, options.checkpoint.key, options.checkpoint.value)
+      return results
     })
   }
 

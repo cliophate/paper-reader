@@ -1,0 +1,4 @@
+<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel r:about="feed"><title>Synthetic RDF</title><link>/</link><items><r:Seq><r:li r:resource="post"/></r:Seq></items></channel>
+  <item r:about="post"><title>An RDF story</title><link>post</link><dc:date>2024-01-01T00:00:00Z</dc:date><dc:creator>Ada</dc:creator><description>RDF body</description></item>
+</r:RDF>

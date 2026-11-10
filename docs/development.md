@@ -4,6 +4,8 @@ The [backend implementation plan](backend-plan.md) records the FreshRSS dependen
 audit, standalone stages, and article identity and state requirements.
 [Article identity and state ownership](article-identity.md) documents schema v7,
 the automatic pre-upgrade backup, account binding and recovery.
+[Feed ingestion](feed-ingestion.md) documents supported formats, identity matching
+and the successful-fetch contract for the future HTTP collector.
 
 Use Node 24 or newer. From the repository root:
 
