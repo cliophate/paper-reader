@@ -3,7 +3,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 export class StateLockError extends Error {
-  constructor() { super('Paper storage is in use or its coordination lock is unavailable. Stop Paper before running migration commands.') }
+  constructor(readonly busy = false) { super('Paper storage is in use or its coordination lock is unavailable. Stop Paper before running migration commands.') }
 }
 
 export interface StateLock {
@@ -43,8 +43,8 @@ export function acquireStateLock(directory: string, mode: StateLock['mode']): St
       released = true
       try { held.exec('ROLLBACK') } finally { held.close() }
     } }
-  } catch {
+  } catch (error) {
     db?.close()
-    throw new StateLockError()
+    throw new StateLockError((error as { errcode?: number }).errcode === 5)
   }
 }

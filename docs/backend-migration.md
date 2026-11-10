@@ -28,6 +28,17 @@ creating secrets. It must retain the lock until its requests, workers and
 database handles have stopped. The lock does not protect against older Paper
 binaries or unrelated database tools. Those must be stopped separately.
 
+`openCoordinatedStorage` inspects the schema while holding a shared lock. A
+current-schema participant opens its database with that lock and performs no
+schema DDL. When initialization or upgrade is needed, it releases shared,
+acquires exclusive, and rechecks before creating the database or taking the
+pre-upgrade backup. It then reacquires shared and inspects again before returning
+storage to the caller. A busy upgrade retries inspection for up to five seconds;
+another first start can finish the upgrade during that interval. No application
+handle survives the lock transition. Pending migration recovery blocks startup
+before database initialization. The helper remains separate from the unwired
+server and briefing entrypoints.
+
 ## Schema 10
 
 Startup first takes the existing consistent pre-upgrade backup at
@@ -180,6 +191,11 @@ stale source and rollback previews, account and mapping rejection, reference
 preservation, private settings restoration, and rollback after new local work.
 A 2,000-subscription fixture interrupts after 1,000 completed transfers and
 resumes without repeating identities.
+
+Separate-process bootstrap tests cover simultaneous new installations and old
+schema upgrades, a current-schema briefing participant joining a server
+participant, failed initialization cleanup, and migration exclusion. Current
+participants leave SQLite's schema version unchanged.
 
 Actual server-plus-briefing coexistence, startup recovery gating, standalone
 routes, conditional undo, scheduler lifecycle, browser setup and container

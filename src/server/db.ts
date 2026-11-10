@@ -172,7 +172,10 @@ export class PaperDatabase {
       this.backupBeforeMigration(8, 'organization')
       this.backupBeforeMigration(9, 'feed-fetch')
       this.backupBeforeMigration(10, 'standalone-setup')
-      this.migrate()
+      const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
+      // Current-schema participants must not drop/recreate triggers on every
+      // open. Coordinated bootstrap performs upgrades under exclusive access.
+      if (version < 10 || this.getSyncValue('fulltext_search_v1') !== 'true') this.migrate()
       this.identities = new IdentityStore(this.db)
       this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
       this.feedFetch = new FeedFetchStore(this.db, id => this.assertLocalBackend(id))
