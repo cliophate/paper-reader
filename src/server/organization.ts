@@ -2,21 +2,8 @@ import crypto from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { transaction } from './transaction.js'
 import type { NavigationPayload } from './types.js'
-
-export interface OrganizationCapabilities {
-  stableFolderIds: boolean
-  createEmptyFolder: boolean
-  renameFolder: boolean
-  removeFolder: boolean
-  atomicMerge: boolean
-  orderFolders: boolean
-  orderFeeds: boolean
-  multipleMemberships: boolean
-  conditionalWrites: boolean
-  renameFeed: boolean
-  moveFeed: boolean
-  unsubscribe: boolean
-}
+import type { OrganizationCapabilities, OrganizationCommand, OrganizationErrorCode, OrganizationItemResult, OrganizationSnapshot } from '../shared/organization.js'
+export type { OrganizationCapabilities, OrganizationCommand, OrganizationErrorCode, OrganizationItemResult, OrganizationSnapshot } from '../shared/organization.js'
 
 export const LOCAL_ORGANIZATION_CAPABILITIES: Readonly<OrganizationCapabilities> = Object.freeze({
   stableFolderIds: true, createEmptyFolder: true, renameFolder: true, removeFolder: true,
@@ -32,34 +19,10 @@ export const FRESHRSS_ORGANIZATION_CAPABILITIES: Readonly<OrganizationCapabiliti
   conditionalWrites: false, renameFeed: true, moveFeed: true, unsubscribe: true,
 })
 
-export type OrganizationCommand =
-  | { type: 'create-folder'; title: string }
-  | { type: 'rename-folder'; folderId: string; title: string }
-  | { type: 'move-folder'; folderId: string; beforeId: string | null }
-  | { type: 'merge-folders'; sourceId: string; destinationId: string }
-  | { type: 'remove-folder'; folderId: string }
-  | { type: 'order-folders'; folderIds: string[] }
-  | { type: 'order-feeds'; folderId: string | null; feedIds: string[] }
-  | { type: 'add-membership' | 'remove-membership'; feedId: string; folderId: string }
-  | { type: 'move-feed'; feedId: string; fromFolderId: string | null; toFolderId: string | null }
-  | { type: 'rename-feed'; feedId: string; title: string }
-  | { type: 'unsubscribe'; feedId: string }
-
-export type OrganizationErrorCode = 'not-found' | 'collision' | 'invalid' | 'conflict'
-
 export class OrganizationError extends Error {
   constructor(readonly code: OrganizationErrorCode, message: string, readonly currentRevision?: number) {
     super(message)
   }
-}
-
-export type OrganizationItemResult =
-  | { index: number; status: 'applied'; changed: boolean; id?: string }
-  | { index: number; status: 'failed'; code: OrganizationErrorCode; message: string }
-
-export interface OrganizationSnapshot {
-  revision: number
-  navigation: NavigationPayload
 }
 
 export function migrateOrganization(db: DatabaseSync) {
