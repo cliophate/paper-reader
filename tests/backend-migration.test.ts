@@ -50,6 +50,48 @@ function session<T>(operation: (migration: BackendMigration) => T, boundary?: (p
 const choices = { mappings: [{ subscriptionId: feed.id, externalId: 'publisher-guid', entryId, evidence: 'Operator reviewed the publisher item against the frozen source article.' }], ambiguities: [{ subscriptionId: 'feed/2', externalId: 'unresolved-publisher-id', candidateIds: ['historical-inactive'] }] }
 
 describe('offline backend migration', () => {
+  it('reports every blocked decision through the offline CLI before creating a plan', () => {
+    sql(db => {
+      db.prepare('UPDATE folders SET title = ? WHERE id = ?').run('Uncategorized', folderId)
+      db.prepare("INSERT INTO folders (id, title, position, synced_at) VALUES (?, ?, 0, '')").run('folder/news-a', 'News')
+      db.prepare("INSERT INTO folders (id, title, position, synced_at) VALUES (?, ?, 0, '')").run('folder/news-b', 'NEWS')
+      db.prepare("INSERT INTO folders (id, title, position, synced_at) VALUES (?, ?, 0, '')").run('folder/invalid', ' Trim ')
+      db.prepare('UPDATE feeds SET url = ? WHERE id = ?').run('https://private-user:private-password@example.test/feed?token=private-query', feed.id)
+    })
+    const before = sql(databaseDigest)
+    const cli = (...args: string[]) => spawnSync(process.execPath, ['--import', 'tsx', 'src/server/migration-cli.ts', ...args], {
+      encoding: 'utf8', env: { PATH: process.env.PATH, NODE_NO_WARNINGS: '1', STATE_DIR: directory,
+        FRESHRSS_BASE_URL: 'https://fixture.example.test', FRESHRSS_USERNAME: 'synthetic' },
+    })
+    const rejected = cli('preview')
+    expect(rejected.status).toBe(1)
+    const report = JSON.parse(rejected.stderr)
+    expect(report.code).toBe('migration-decisions-required')
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      { kind: 'subscription', id: feed.id, title: feed.title, reason: 'unsafe-endpoint' },
+      { kind: 'folder', id: folderId, title: 'Uncategorized', reason: 'reserved-title' },
+      { kind: 'folder', id: 'folder/news-a', title: 'News', reason: 'title-collision' },
+      { kind: 'folder', id: 'folder/news-b', title: 'NEWS', reason: 'title-collision' },
+      { kind: 'folder', id: 'folder/invalid', title: ' Trim ', reason: 'invalid-title' },
+    ]))
+    expect(report.diagnostics).toHaveLength(5)
+    expect(rejected.stderr + rejected.stdout).not.toMatch(/private-user|private-password|private-query|synthetic-private-token/)
+    expect(fs.existsSync(path.join(directory, 'migration.json'))).toBe(false)
+    expect(fs.existsSync(path.join(directory, 'migrations'))).toBe(false)
+    expect(cli('apply', '--digest', '0'.repeat(64)).status).toBe(1)
+    expect(sql(databaseDigest)).toBe(before)
+    const choiceFile = path.join(directory, 'choices.json')
+    fs.writeFileSync(choiceFile, JSON.stringify({ pausedSubscriptions: [feed.id], folderTitles: {
+      [folderId]: 'Old folder', 'folder/news-b': 'News 2', 'folder/invalid': 'Trim',
+    } }))
+    const preview = cli('preview', '--choices', choiceFile)
+    expect(preview.status, preview.stderr).toBe(0)
+    const frozen = JSON.parse(preview.stdout)
+    expect(cli('apply', '--digest', frozen.planDigest).status).toBe(0)
+    expect(sql(db => db.prepare('SELECT id, title FROM folders WHERE id = ?').get(folderId))).toEqual({ id: folderId, title: 'Old folder' })
+    expect(sql(db => db.prepare('SELECT 1 FROM feed_fetch_state WHERE subscription_id = ?').get(feed.id))).toBeUndefined()
+  }, 20000)
+
   it('runs the offline CLI through reviewed apply, stale rollback rejection and preserved rollback', () => {
     const cli = (...args: string[]) => spawnSync(process.execPath, ['--import', 'tsx', 'src/server/migration-cli.ts', ...args], {
       encoding: 'utf8', env: { PATH: process.env.PATH, NODE_NO_WARNINGS: '1', STATE_DIR: directory,
@@ -202,8 +244,8 @@ describe('offline backend migration', () => {
 
   it('pauses unsafe endpoints explicitly and retains old folder IDs through approved renames', () => {
     sql(db => db.exec("UPDATE feeds SET url = '' WHERE id = 'feed/1'; UPDATE folders SET title = 'Uncategorized'"))
-    expect(() => session(migration => migration.preview(source.id))).toThrow(/Pause/)
-    expect(() => session(migration => migration.preview(source.id, { pausedSubscriptions: [feed.id] }))).toThrow(/collision/)
+    expect(() => session(migration => migration.preview(source.id))).toThrow(/reported subscriptions and folders/)
+    expect(() => session(migration => migration.preview(source.id, { pausedSubscriptions: [feed.id] }))).toThrow(/reported subscriptions and folders/)
     const preview = session(migration => migration.preview(source.id, { pausedSubscriptions: [feed.id], folderTitles: { [folderId]: 'Old folder' } }))
     session(migration => migration.apply(preview.planDigest))
     expect(sql(db => db.prepare('SELECT id, title FROM folders').all())).toEqual([{ id: folderId, title: 'Old folder' }])

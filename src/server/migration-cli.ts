@@ -1,5 +1,5 @@
 import fs from 'node:fs'
-import { BackendMigration, type MigrationChoices } from './backend-migration.js'
+import { BackendMigration, MigrationDecisionsRequiredError, type MigrationChoices } from './backend-migration.js'
 import { StateLockError } from './state-lock.js'
 import { stateDirectory } from './config.js'
 import { freshRssIdentity } from './identity.js'
@@ -79,6 +79,8 @@ try {
   // No stack traces or arbitrary filesystem/SQLite messages that might quote
   // supplied private settings. Domain errors contain only fixed explanations.
   const message = error instanceof StateLockError || error instanceof Error && error.constructor === Error && !('code' in error) ? error.message : 'Migration failed. Check the private data directory and preserved backups.'
-  console.error(message)
+  console.error(error instanceof MigrationDecisionsRequiredError
+    ? JSON.stringify({ code: error.code, error: error.message, diagnostics: error.diagnostics }, null, 2)
+    : message)
   process.exitCode = 1
 } finally { migration?.close() }

@@ -67,6 +67,15 @@ ambiguity record contains `subscriptionId`, `externalId` and `candidateIds`.
 The plan records the exact source and target instances and every accepted
 mapping. Similar URLs or publication dates never establish alias equivalence.
 
+When preview needs decisions, it exits with status 1 and writes a JSON report to
+stderr with code `migration-decisions-required`. Its `diagnostics` list every
+affected folder or subscription by `kind`, `id`, `title` and `reason`. Folder
+reasons are `invalid-title`, `reserved-title` and `title-collision`; both IDs in
+a collision are listed. Subscription reason `unsafe-endpoint` omits the URL to
+avoid exposing credentials. No plan or apply digest is created until these
+issues are resolved. Use the reported IDs in a choices file and rerun preview
+with `--choices`; Paper can remain stopped throughout.
+
 If a preview rejects a missing or unsafe active feed URL, list its subscription
 ID in `pausedSubscriptions` after review. It stays visible but is not fetched.
 If folder titles collide under standalone naming rules, supply distinct titles

@@ -14,6 +14,18 @@ export interface MigrationChoices {
   pausedSubscriptions?: string[]
   folderTitles?: Record<string, string>
 }
+export interface MigrationDiagnostic {
+  kind: 'subscription' | 'folder'
+  id: string
+  title: string
+  reason: 'unsafe-endpoint' | 'invalid-title' | 'reserved-title' | 'title-collision'
+}
+export class MigrationDecisionsRequiredError extends Error {
+  readonly code = 'migration-decisions-required'
+  constructor(readonly diagnostics: MigrationDiagnostic[]) {
+    super('Review the reported subscriptions and folders, then run preview again with --choices.')
+  }
+}
 export interface MigrationPlan {
   version: 1
   id: string
@@ -147,19 +159,32 @@ export class BackendMigration {
       for (const id of ambiguity.candidateIds) if (!db.prepare('SELECT 1 FROM article_identities WHERE id = ? AND subscription_id = ? AND backend_id = ?').get(id, ambiguity.subscriptionId, source)) fail('Ambiguity candidates must belong to the source subscription.')
     }
     for (const id of choices.pausedSubscriptions) owner(id)
-    for (const row of db.prepare('SELECT id, url FROM feeds WHERE active = 1').iterate()) {
-      if (!endpoint(String(row.url)) && !choices.pausedSubscriptions.includes(String(row.id))) fail('Pause subscriptions with missing or unsafe endpoints in the preview.')
+    const diagnostics: MigrationDiagnostic[] = []
+    // Do not include feed URLs: invalid endpoints may contain credentials.
+    for (const row of db.prepare('SELECT id, title, url FROM feeds WHERE active = 1 ORDER BY id').iterate()) {
+      if (!endpoint(String(row.url)) && !choices.pausedSubscriptions.includes(String(row.id))) {
+        diagnostics.push({ kind: 'subscription', id: String(row.id), title: String(row.title), reason: 'unsafe-endpoint' })
+      }
     }
     const folders = db.prepare('SELECT id, title FROM folders ORDER BY id').all()
     if (Object.keys(choices.folderTitles).some(id => !folders.some(row => row.id === id))) fail('Folder decision refers to an unknown folder.')
-    const names = new Set<string>()
+    const names = new Map<string, Array<{ id: string; title: string }>>()
     for (const folder of folders) {
-      const title = choices.folderTitles[String(folder.id)] ?? String(folder.title)
-      if (typeof title !== 'string' || !title.trim() || title.length > 120 || title !== title.trim().normalize('NFC')) fail('Folder names need explicit normalized titles in the preview.')
+      const id = String(folder.id)
+      const title = choices.folderTitles[id] ?? String(folder.title)
+      if (typeof title !== 'string' || !title.trim() || title.length > 120 || title !== title.trim().normalize('NFC')) {
+        diagnostics.push({ kind: 'folder', id, title: typeof title === 'string' ? title : String(folder.title), reason: 'invalid-title' })
+        continue
+      }
       const key = title.normalize('NFKC').toLowerCase()
-      if (names.has(key) || key === 'uncategorized') fail('Resolve folder-name collisions in the preview without merging folder IDs.')
-      names.add(key)
+      if (key === 'uncategorized') diagnostics.push({ kind: 'folder', id, title, reason: 'reserved-title' })
+      const group = names.get(key) || []
+      group.push({ id, title }); names.set(key, group)
     }
+    for (const group of names.values()) if (group.length > 1) {
+      for (const folder of group) diagnostics.push({ kind: 'folder', ...folder, reason: 'title-collision' })
+    }
+    if (diagnostics.length) throw new MigrationDecisionsRequiredError(diagnostics)
   }
 
   private verifySource(plan: MigrationPlan) {
