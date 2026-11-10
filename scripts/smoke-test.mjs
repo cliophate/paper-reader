@@ -89,6 +89,19 @@ try {
   const commands = { expectedRevision: null, commands: [{ type: 'create-folder', title: 'Unsupported' }] }
   assert.equal((await request('/api/organization/commands', commands, { Origin: 'https://untrusted.example' })).status, 403)
   assert.equal((await request('/api/organization/commands', commands)).data.results[0].code, 'unsupported')
+  const exportedSubscriptions = await request('/api/subscription-tools/export')
+  assert.equal(exportedSubscriptions.status, 200)
+  assert.equal(exportedSubscriptions.data.omitted, 0)
+  assert.ok(!exportedSubscriptions.data.xml.includes('synthetic-token'))
+  const subscriptionPreview = await request('/api/subscription-tools/preview', { xml: exportedSubscriptions.data.xml })
+  assert.equal(subscriptionPreview.status, 200)
+  assert.equal(subscriptionPreview.data.rows[0].suggestedId, 'feed/1')
+  const subscriptionChoices = [{ key: subscriptionPreview.data.rows[0].key, action: 'reuse', existingId: 'feed/1', folders: null }]
+  assert.equal((await request('/api/subscription-tools/apply', { token: subscriptionPreview.data.token, choices: subscriptionChoices }, { Origin: 'https://untrusted.example' })).status, 403)
+  const subscriptionImport = await request('/api/subscription-tools/apply', { token: subscriptionPreview.data.token, choices: subscriptionChoices })
+  assert.equal(subscriptionImport.data.results[0].status, 'reused')
+  assert.equal(subscriptionImport.data.results[0].id, 'feed/1')
+  assert.equal((await request('/api/subscription-tools/apply', { token: subscriptionPreview.data.token, choices: subscriptionChoices })).status, 409)
   const page = (await request('/api/entries?kind=all&id=all&unread=0&q=compositor')).data
   assert.equal(page.items.length, 2)
   const id = page.items[0].id

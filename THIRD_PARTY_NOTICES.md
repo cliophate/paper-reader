@@ -52,6 +52,11 @@ their Open Font License texts. Copies of the distributed notices follow.
 | debug | 4.4.3 | MIT | [LICENSE](licenses/npm/debug/LICENSE) |
 | decimal.js | 10.6.0 | MIT | [LICENCE.md](licenses/npm/decimal.js/LICENCE.md) |
 | depd | 2.0.0 | MIT | [LICENSE](licenses/npm/depd/LICENSE) |
+| dom-serializer | 2.0.0 | MIT | [LICENSE](licenses/npm/dom-serializer/LICENSE) |
+| entities | 4.5.0 | BSD-2-Clause | [LICENSE](licenses/npm/entities/LICENSE) |
+| domelementtype | 2.3.0 | BSD-2-Clause | [LICENSE](licenses/npm/domelementtype/LICENSE) |
+| domhandler | 5.0.3 | BSD-2-Clause | [LICENSE](licenses/npm/domhandler/LICENSE) |
+| domutils | 3.2.2 | BSD-2-Clause | [LICENSE](licenses/npm/domutils/LICENSE) |
 | dunder-proto | 1.0.1 | MIT | [LICENSE](licenses/npm/dunder-proto/LICENSE) |
 | ee-first | 1.1.1 | MIT | [LICENSE](licenses/npm/ee-first/LICENSE) |
 | encodeurl | 2.0.0 | MIT | [LICENSE](licenses/npm/encodeurl/LICENSE) |
@@ -73,6 +78,7 @@ their Open Font License texts. Copies of the distributed notices follow.
 | has-symbols | 1.1.0 | MIT | [LICENSE](licenses/npm/has-symbols/LICENSE) |
 | hasown | 2.0.4 | MIT | [LICENSE](licenses/npm/hasown/LICENSE) |
 | html-encoding-sniffer | 6.0.0 | MIT | [LICENSE.txt](licenses/npm/html-encoding-sniffer/LICENSE.txt) |
+| htmlparser2 | 10.1.0 | MIT | [LICENSE](licenses/npm/htmlparser2/LICENSE) |
 | http-errors | 2.0.1 | MIT | [LICENSE](licenses/npm/http-errors/LICENSE) |
 | iconv-lite | 0.7.3 | MIT | [LICENSE](licenses/npm/iconv-lite/LICENSE) |
 | inherits | 2.0.4 | ISC | [LICENSE](licenses/npm/inherits/LICENSE) |

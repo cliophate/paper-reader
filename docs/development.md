@@ -8,6 +8,8 @@ the automatic pre-upgrade backup, account binding and recovery.
 and the successful-fetch contract for the future HTTP collector.
 [Folder and subscription organization](organization.md) documents schema v8,
 revision-checked commands, collision rules and FreshRSS capability limits.
+[Feed discovery and OPML](subscription-tools.md) describes import identity policy,
+flat-folder mapping, partial failures and the bounded discovery transport.
 
 [Standalone feed scheduling](feed-scheduling.md) documents schema v9, durable
 leases and conditional requests. [Bounded HTTP transport](feed-http.md) defines
