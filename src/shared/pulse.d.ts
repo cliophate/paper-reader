@@ -1,4 +1,5 @@
 export interface PulseSource {
+  stateRevision?: number
   id: string
   feedId: string
   read: boolean

@@ -110,7 +110,7 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
     </fieldset>
     {preview && <form className="opml-preview" aria-label="Confirm subscription import" onSubmit={event => submit(event, apply)}>
       <h4 ref={previewHeading} tabIndex={-1}>Review {preview.rows.length} subscription{preview.rows.length === 1 ? '' : 's'}</h4>
-      <p>Duplicate policy: reuse a named subscription or skip it. Reuse keeps its title and URL. Distinct subscriptions are never merged by URL. FreshRSS cannot create a second subscription with an already subscribed URL.</p>
+      <p>Duplicate policy: reuse a named subscription or skip it. Reuse keeps its title and URL. Distinct subscriptions are never merged by URL.{!preview.multipleMemberships && ' FreshRSS cannot create a second subscription with an already subscribed URL.'}</p>
       {preview.warnings.map(warning => <p key={warning}>{warning}</p>)}
       <fieldset disabled={busy}>
         {preview.rows.map(row => {

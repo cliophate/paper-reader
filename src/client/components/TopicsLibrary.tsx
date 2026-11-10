@@ -27,7 +27,7 @@ interface TopicsLibraryProps {
   refreshKey: number
   onBack: () => void
   onOpenEntry: (id: string, context?: { id: string; title: string; ids: string[] }) => void
-  onMarkRead: (ids: string[]) => Promise<boolean>
+  onMarkRead: (ids: string[], expectedRevisions?: Record<string, number>) => Promise<boolean>
   notify: (message: string, action?: { label: string; run: () => void }) => void
 }
 
@@ -165,7 +165,9 @@ export function TopicsLibrary({ initialCollection, feedIcons, refreshKey, onBack
     onOpenEntry(id, { id: collection.id, title: collection.headline, ids })
   }
   const markRead = async (ids: string[]) => {
-    const saved = await onMarkRead(ids)
+    const displayed = new Map(current.current?.collections.flatMap(collection => collection.sources).map(source => [source.id, source.stateRevision]) || [])
+    const revisions = ids.every(id => displayed.get(id) !== undefined) ? Object.fromEntries(ids.map(id => [id, displayed.get(id)!])) : undefined
+    const saved = revisions ? await onMarkRead(ids, revisions) : await onMarkRead(ids)
     if (saved && current.current) {
       const marked = new Set(ids)
       install({ ...current.current, collections: current.current.collections.map(collection => {
@@ -239,7 +241,7 @@ export function TopicsLibrary({ initialCollection, feedIcons, refreshKey, onBack
 function CollectionCard({ collection, feedIcons, expanded, filter, unreadOnly, onExpand, onCollapse, onOpenEntry, onMarkRead, merging, mergingThis, onMerge, onStartMerge, onHide, onRemove }: {
   collection: PulseCollection; feedIcons: Map<string, string>; expanded: boolean; filter: ArticleFilter; unreadOnly: boolean
   onExpand: (filter: ArticleFilter) => void; onCollapse: () => void; onOpenEntry: (id: string) => void
-  onMarkRead: (ids: string[]) => Promise<boolean>; merging: boolean; mergingThis: boolean
+  onMarkRead: (ids: string[], expectedRevisions?: Record<string, number>) => Promise<boolean>; merging: boolean; mergingThis: boolean
   onMerge: () => void; onStartMerge: () => void; onHide: () => void; onRemove: (id: string) => void
 }) {
   const [marking, setMarking] = useState(false)

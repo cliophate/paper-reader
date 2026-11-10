@@ -1,14 +1,14 @@
-import { FRESHRSS_ORGANIZATION_CAPABILITIES } from '../src/server/organization'
+import { FRESHRSS_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES } from '../src/server/organization'
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../src/client/App'
-import { api } from '../src/client/api'
+import { api, ApiError } from '../src/client/api'
 import { offlineArticles } from '../src/client/offline'
 import type { Entry, EntryPage, Feed } from '../src/client/types'
 
-vi.mock('../src/client/api', () => ({ api: {
+vi.mock('../src/client/api', async () => ({ ...await vi.importActual('../src/client/api'), api: {
   organization: vi.fn(), organize: vi.fn(), recentReading: vi.fn(), navigation: vi.fn(), status: vi.fn(), entries: vi.fn(), entry: vi.fn(), editState: vi.fn(), markStreamRead: vi.fn(),
   markRelativeRead: vi.fn(), undo: vi.fn(),
   setStreamOrder: vi.fn(), removeFeed: vi.fn(), fullText: vi.fn(), previewRead: vi.fn(), confirmRead: vi.fn(),
@@ -49,7 +49,8 @@ beforeEach(() => {
     { id: 'tech', title: 'Tech', unread: 0, feeds: [] },
   ] })
   vi.mocked(api.organization).mockImplementation(async () => ({ backend: 'freshrss', capabilities: FRESHRSS_ORGANIZATION_CAPABILITIES, revision: null, navigation: await api.navigation() }))
-  vi.mocked(api.status).mockResolvedValue({ readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } })
+  vi.mocked(api.editState).mockResolvedValue({ ok: true })
+  vi.mocked(api.status).mockResolvedValue({ backend: 'freshrss', backendInstance: 'freshrss:fixture', discussionConfigured: false, readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } })
   vi.mocked(api.entry).mockResolvedValue({ entry: post('a') })
   container = document.createElement('div')
   document.body.append(container)
@@ -164,12 +165,43 @@ describe('mobile reader switching', () => {
     expect(api.editState).not.toHaveBeenCalled()
   })
 
+  it('sends the displayed standalone revision and restores server state after a conflict', async () => {
+    initialPage.items[0] = { ...post('a'), stateRevision: 4 }
+    vi.mocked(api.entry).mockResolvedValue({ entry: initialPage.items[0] })
+    vi.mocked(api.status).mockResolvedValue({ backend: 'standalone', backendInstance: 'standalone:fixture', discussionConfigured: false, readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } })
+    vi.mocked(api.editState).mockRejectedValue(new ApiError('Article state changed', 409, 'state-conflict', undefined, { a: { read: true, starred: true, revision: 5 } }))
+    await mount()
+    const star = container.querySelector<HTMLButtonElement>('[aria-label="Star article"]')!
+    await act(async () => { star.click() })
+    expect(api.editState).toHaveBeenCalledWith(['a'], 'star', 'reader', { expectedRevisions: { a: 4 }, undo: true })
+    expect(container.querySelector('[aria-label="Remove star"]')).not.toBeNull()
+    expect(container.textContent).toContain('Article state changed')
+    vi.mocked(api.editState).mockResolvedValue({ ok: true, revisions: { a: 6 }, undoToken: 'synthetic-undo' })
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Remove star"]')!.click() })
+    expect(api.editState).toHaveBeenLastCalledWith(['a'], 'unstar', 'reader', { expectedRevisions: { a: 5 }, undo: true })
+  })
+
+  it('allows opaque standalone subscription IDs and disables historical unsubscribed sources', async () => {
+    history.replaceState(null, '', '/?kind=category&id=instagram&title=Instagram&pane=list&unread=0')
+    initialPage = { items: [{ ...post('one'), feedId: 'paper:subscription:opaque' }, { ...post('two'), feedId: 'feed/historical' }], continuation: '' }
+    const navigation = { unread: 0, starred: 0, folders: [], uncategorized: [{ id: 'paper:subscription:opaque', title: 'Standalone feed', url: 'https://example.test/feed', siteUrl: '', iconUrl: '', categories: [], unread: 0, broken: false, lastCheckedAt: null, lastErrorAt: null, lastPublishedAt: null }] }
+    vi.mocked(api.navigation).mockResolvedValue(navigation)
+    vi.mocked(api.organization).mockResolvedValue({ backend: 'standalone', capabilities: LOCAL_ORGANIZATION_CAPABILITIES, revision: 0, navigation })
+    await mount()
+    const rows = [...container.querySelectorAll('.story-row')]
+    await act(async () => { rows[0].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })) })
+    expect(container.querySelector<HTMLButtonElement>('.entry-unsubscribe')!.disabled).toBe(false)
+    await act(async () => { rows[1].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })) })
+    expect(container.querySelector<HTMLButtonElement>('.entry-unsubscribe')!.disabled).toBe(true)
+  })
+
   it('unsubscribes from an article source in a mixed folder after confirming, keeping the other feed and folder', async () => {
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} })))
     history.replaceState(null, '', '/?kind=category&id=instagram&title=Instagram&entry=3&pane=list&unread=0')
     initialPage = { items: ['1', '2', '3'].map(id => ({ ...post(id), feedId: id === '3' ? 'feed/keep' : 'feed/remove', feedTitle: id === '3' ? 'Keep this feed' : 'Unwanted feed' })), continuation: '' }
     vi.mocked(api.entry).mockResolvedValue({ entry: initialPage.items[2] })
     vi.mocked(api.removeFeed).mockResolvedValue({ ok: true })
+    vi.mocked(api.navigation).mockResolvedValue({ unread: 0, starred: 0, uncategorized: [], folders: [{ id: 'instagram', title: 'Instagram', unread: 0, feeds: initialPage.items.map(entry => ({ id: entry.feedId, title: entry.feedTitle, url: entry.feedUrl, siteUrl: '', iconUrl: '', categories: ['Instagram'], unread: 0, broken: false, lastCheckedAt: null, lastErrorAt: null, lastPublishedAt: null })) }] })
     await mount()
     const rows = [...container.querySelectorAll('.story-row')]
     await act(async () => { rows[0].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 300, clientY: 200 })) })
@@ -193,6 +225,7 @@ describe('mobile reader switching', () => {
     initialPage = { items: ['1', '2'].map(id => ({ ...post(id), feedId: `feed/${id}`, feedTitle: `Feed ${id}` })), continuation: '' }
     vi.mocked(api.entry).mockResolvedValue({ entry: initialPage.items[0] })
     vi.mocked(api.removeFeed).mockRejectedValue(new Error('Could not unsubscribe'))
+    vi.mocked(api.navigation).mockResolvedValue({ unread: 0, starred: 0, uncategorized: [], folders: [{ id: 'instagram', title: 'Instagram', unread: 0, feeds: initialPage.items.map(entry => ({ id: entry.feedId, title: entry.feedTitle, url: entry.feedUrl, siteUrl: '', iconUrl: '', categories: ['Instagram'], unread: 0, broken: false, lastCheckedAt: null, lastErrorAt: null, lastPublishedAt: null })) }] })
     await mount()
     const rows = [...container.querySelectorAll('.story-row')]
     await act(async () => { rows[0].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })) })

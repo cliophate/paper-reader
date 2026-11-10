@@ -927,7 +927,7 @@ export class PaperDatabase {
   pulseCollections(): PulseCollection[] {
     const rows = this.db.prepare(`SELECT pulse_memberships.collection_id, pulse_memberships.sequence,
       pulse_memberships.added_at, pulse_memberships.development, entries.id, entries.feed_id,
-      entries.read, entries.feed_title, entries.title, entries.url, entries.feed_url, entries.author,
+      entries.read, entries.state_revision, entries.feed_title, entries.title, entries.url, entries.feed_url, entries.author,
       entries.published_at, entries.timestamp, entries.thumbnail_url
       FROM pulse_memberships JOIN entries ON entries.id = pulse_memberships.entry_id
       WHERE NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = entries.id)
@@ -936,7 +936,7 @@ export class PaperDatabase {
     for (const row of rows) {
       const id = String(row.collection_id)
       const members = sources.get(id) || []
-      members.push({ id: String(row.id), feedId: String(row.feed_id), read: Boolean(row.read), publication: decodeHtmlText(String(row.feed_title)),
+      members.push({ id: String(row.id), feedId: String(row.feed_id), read: Boolean(row.read), stateRevision: Number(row.state_revision), publication: decodeHtmlText(String(row.feed_title)),
         domain: sourceDomain(String(row.url)) || sourceDomain(String(row.feed_url)), title: decodeHtmlText(String(row.title)), url: String(row.url),
         author: decodeHtmlText(String(row.author)), publishedAt: String(row.published_at), timestamp: Number(row.timestamp),
         thumbnailUrl: normalizeFeedThumbnail({ url: String(row.url), thumbnailUrl: String(row.thumbnail_url) }),

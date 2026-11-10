@@ -4,7 +4,7 @@ import type { ConnectionsSettings, ConnectionsUpdate } from '../shared/connectio
 import type { ActivityRecord, ArticleReport, BriefingDetail, BriefingSummary, CoverageFeedback, Entry, EntryPage, FullArticle, MuteFilter, NavigationPayload, StreamRef, XThreadPost } from './types'
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code?: string, readonly currentRevision?: number) { super(message) }
+  constructor(message: string, readonly status: number, readonly code?: string, readonly currentRevision?: number, readonly states?: Record<string, { read: boolean; starred: boolean; revision: number }>) { super(message) }
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -14,7 +14,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
   const payload = await response.json().catch(() => null)
-  if (!response.ok) throw new ApiError(payload?.error || `Request failed with ${response.status}`, response.status, payload?.code, payload?.currentRevision)
+  if (!response.ok) throw new ApiError(payload?.error || `Request failed with ${response.status}`, response.status, payload?.code, payload?.currentRevision, payload?.states)
   return payload as T
 }
 
@@ -51,6 +51,8 @@ export const api = {
   setReportStatus: (id: string, status: ArticleReport['status']) =>
     request<{ ok: boolean }>(`/api/reports/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   status: () => request<{
+    backend: 'standalone' | 'freshrss'
+    backendInstance: string
     discussionConfigured: boolean
     readwiseConfigured: boolean
     kirbyConfigured: boolean
@@ -68,8 +70,8 @@ export const api = {
     return request<EntryPage>(`/api/entries?${params}`, { signal })
   },
   entry: (id: string) => request<{ entry: Entry | null }>('/api/entries/item', { method: 'POST', body: JSON.stringify({ id }) }),
-  editState: (ids: string[], operation: 'read' | 'unread' | 'star' | 'unstar', origin: 'reader' | 'pulse' | 'automatic' = 'reader') =>
-    request<{ ok: boolean }>('/api/entries/state', { method: 'POST', body: JSON.stringify({ ids, operation, origin }) }),
+  editState: (ids: string[], operation: 'read' | 'unread' | 'star' | 'unstar', origin: 'reader' | 'pulse' | 'automatic' = 'reader', options: { expectedRevisions?: Record<string, number>; undo?: boolean } = {}) =>
+    request<{ ok: boolean; revisions?: Record<string, number>; undoToken?: string }>('/api/entries/state', { method: 'POST', body: JSON.stringify({ ids, operation, origin, ...options }) }),
   markStreamRead: (stream: StreamRef) =>
     request<{ ok: boolean; count: number; undoToken?: string }>('/api/streams/mark-read', { method: 'POST', body: JSON.stringify(stream) }),
   markRelativeRead: (stream: StreamRef, anchorId: string, direction: 'above' | 'below', unreadOnly: boolean, query: string, order?: 'newest' | 'oldest', dates: { after?: string; before?: string } = {}) =>
