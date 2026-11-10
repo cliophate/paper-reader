@@ -1644,26 +1644,35 @@ export class PaperDatabase {
   }
 
   cacheArticle(article: ArticleCacheRecord) {
-    this.db.prepare(`
-      INSERT INTO article_cache (url, title, byline, excerpt, content_html, reading_minutes, fetched_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(url) DO UPDATE SET
-        title = excluded.title,
-        byline = excluded.byline,
-        excerpt = excluded.excerpt,
-        content_html = excluded.content_html,
-        reading_minutes = excluded.reading_minutes,
-        fetched_at = excluded.fetched_at
-    `).run(
-      article.url,
-      article.title,
-      article.byline,
-      article.excerpt,
-      article.contentHtml,
-      article.readingMinutes,
-      article.fetchedAt,
-    )
-    this.db.prepare('UPDATE entries SET full_content_text = ? WHERE url = ? OR canonical_url = ?').run(plainText(article.contentHtml), article.url, normalizeUrl(article.url))
+    transaction(this.db, () => {
+      this.db.prepare(`
+        INSERT INTO article_cache (url, title, byline, excerpt, content_html, reading_minutes, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(url) DO UPDATE SET
+          title = excluded.title,
+          byline = excluded.byline,
+          excerpt = excluded.excerpt,
+          content_html = excluded.content_html,
+          reading_minutes = excluded.reading_minutes,
+          fetched_at = excluded.fetched_at
+      `).run(
+        article.url,
+        article.title,
+        article.byline,
+        article.excerpt,
+        article.contentHtml,
+        article.readingMinutes,
+        article.fetchedAt,
+      )
+      const entries = this.db.prepare(`SELECT id FROM entries WHERE url = ? OR canonical_url = ? OR id IN (
+        SELECT entry_id FROM article_urls WHERE url = ? OR substr(url, 1, instr(url || '#', '#') - 1) = ?
+      )`).all(article.url, normalizeUrl(article.url), article.url, article.url)
+      const update = this.db.prepare('UPDATE entries SET full_content_text = ? WHERE id = ?')
+      for (const entry of entries) {
+        const preferred = this.getArticleForEntry(String(entry.id)) || article
+        update.run(plainText(preferred.contentHtml), entry.id)
+      }
+    })
   }
 
   createUndo(record: UndoRecord) {

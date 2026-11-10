@@ -120,6 +120,27 @@ describe('stable article identity', () => {
     expect(db.localEntriesPage(all).items.map(item => item.id)).toEqual([first, second])
   })
 
+  it('indexes late extractions through historical URLs without replacing preferred current text', () => {
+    const feed = local()
+    const id = ingest(feed, { externalId: 'stable' }, { url: `${content.url}#section` })
+    const moved = 'https://example.test/moved'
+    ingest(feed, { externalId: 'stable' }, { url: moved })
+    const cache = (url: string, word: string, fetchedAt: string) => db.cacheArticle({
+      url, title: 'Extraction', byline: '', excerpt: '', contentHtml: `<p>${word}</p>`, readingMinutes: 1, fetchedAt,
+    })
+    const search = (query: string) => db.localEntriesPage(all, { query, unreadOnly: false }).items.map(item => item.id)
+    cache(content.url, 'Latehistoricaltext', date)
+    expect(db.getArticleForEntry(id)?.contentHtml).toContain('Latehistoricaltext')
+    expect(search('Latehistoricaltext')).toEqual([id])
+    cache(moved, 'Preferredcurrenttext', date)
+    cache(content.url, 'Newerhistoricaltext', '2026-11-01T00:00:00.000Z')
+    reopen()
+    expect(db.getArticleForEntry(id)?.contentHtml).toContain('Preferredcurrenttext')
+    expect(search('Preferredcurrenttext')).toEqual([id])
+    expect(search('Newerhistoricaltext')).toEqual([])
+    expect(search('Latehistoricaltext')).toEqual([])
+  })
+
   it('preserves state and references when content, GUIDs and URLs change', () => {
     const feed = local()
     const id = ingest(feed, { externalId: 'old' })
