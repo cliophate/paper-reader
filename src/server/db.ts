@@ -7,6 +7,7 @@ import { isEditorialLinkedFeed } from './entry-kind.js'
 import { IdentityStore, migrateIdentity, type BackendIdentity, type SourceItemIdentity, type IdentityResolution } from './identity.js'
 import { transaction } from './transaction.js'
 import { FeedFetchStore, migrateFeedFetchState } from './feed-fetch-state.js'
+import { migrateStandaloneSetup } from './migration-schema.js'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
@@ -170,6 +171,7 @@ export class PaperDatabase {
       this.backupBeforeMigration(7, 'identity')
       this.backupBeforeMigration(8, 'organization')
       this.backupBeforeMigration(9, 'feed-fetch')
+      this.backupBeforeMigration(10, 'standalone-setup')
       this.migrate()
       this.identities = new IdentityStore(this.db)
       this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
@@ -192,7 +194,7 @@ export class PaperDatabase {
 
   private backupBeforeMigration(target: number, name: string) {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
-    if (version > 9) throw new Error('This database was created by a newer Paper version')
+    if (version > 10) throw new Error('This database was created by a newer Paper version')
     if (!version || version >= target) return
     const backupPath = `${this.databasePath}.before-${name}-v${target}`
     if (fs.existsSync(backupPath)) {
@@ -643,6 +645,7 @@ export class PaperDatabase {
     })
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 8) migrateOrganization(this.db)
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 9) migrateFeedFetchState(this.db)
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 10) migrateStandaloneSetup(this.db)
   }
 
   replaceNavigation(navigation: NavigationPayload) {
