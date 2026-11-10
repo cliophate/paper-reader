@@ -336,6 +336,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .topics-state h2 { margin: 0 0 8px; color: var(--ink); font-size: 19px; }
 .topics-state p { max-width: 420px; margin: 0; font-size: 13px; line-height: 1.5; }
 .topics-state button { margin-top: 15px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-strong); padding: 8px 12px; cursor: pointer; }
+.article-view[tabindex="-1"]:focus-visible { outline: none; }
 .article-view { position: relative; height: 100%; display: flex; flex-direction: column; overflow: hidden; outline: none; }
 .reader-toolbar { height: 54px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); padding: 0 18px; background: var(--panel-strong); }
 .reader-actions { display: flex; align-items: center; gap: 5px; }

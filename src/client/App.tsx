@@ -101,6 +101,10 @@ export default function App() {
   const [lastSync, setLastSync] = useState<string | null>(null)
   const [online, setOnline] = useState(navigator.onLine)
   const [syncError, setSyncError] = useState('')
+  const [navigationError, setNavigationError] = useState('')
+  const [statusError, setStatusError] = useState('')
+  const navigationRequest = useRef<AbortController | null>(null)
+  const statusRequest = useRef<AbortController | null>(null)
   const [autoRead, setAutoRead] = useState(() => localStorage.getItem('paper-auto-read') !== 'manual')
   const [fullMode, setFullMode] = useState<FullTextMode>('auto')
   const feedVersions = useRef(new Map<string, Entry>())
@@ -178,13 +182,16 @@ export default function App() {
   const readerChromeTap = useRef<(GesturePoint & { pointerId: number }) | null>(null)
 
   const selected = entries.find(entry => entry.id === selectedId) || null
+  const readerGeneration = useRef(0)
+  useLayoutEffect(() => { readerGeneration.current += 1 }, [view, stream.kind, stream.id, unreadOnly, query, libraryMode, searchStream.kind, searchStream.id, searchUnread, after, before, pulseContext?.id])
   const currentReader = useRef({ stream, selected })
   currentReader.current = { stream, selected }
   const selectedIndex = selected ? entries.findIndex(entry => entry.id === selected.id) : -1
-  const currentFolderIndex = stream.kind === 'category' ? navigation?.folders.findIndex(folder => folder.id === stream.id) ?? -1 : -1
+  const adjacentSources = stream.kind === 'category' ? navigation?.folders || [] : stream.kind === 'feed' ? navigationFeeds(navigation) : []
+  const currentFolderIndex = adjacentSources.findIndex(source => source.id === stream.id)
   const folderNavigation = libraryMode === 'stream' && !query && !pulseContext && currentFolderIndex >= 0
-  const previousFolder = folderNavigation ? navigation?.folders.slice(0, currentFolderIndex).reverse().find(folder => !unreadOnly || folder.unread > 0) : undefined
-  const nextFolder = folderNavigation ? navigation?.folders.slice(currentFolderIndex + 1).find(folder => !unreadOnly || folder.unread > 0) : undefined
+  const previousFolder = folderNavigation ? adjacentSources.slice(0, currentFolderIndex).reverse().find(folder => !unreadOnly || folder.unread > 0) : undefined
+  const nextFolder = folderNavigation ? adjacentSources.slice(currentFolderIndex + 1).find(folder => !unreadOnly || folder.unread > 0) : undefined
   const previousFolderAvailable = Boolean(previousFolder)
   const nextFolderAvailable = Boolean(nextFolder)
   const atStreamEnd = selectedIndex >= 0 && selectedIndex === entries.length - 1 && !continuation
@@ -236,8 +243,19 @@ export default function App() {
   }, [])
   useEffect(() => { const update = () => setFullMode(selected ? fullTextMode(selected.feedId) : 'auto'); update(); window.addEventListener('paper-preferences', update); return () => window.removeEventListener('paper-preferences', update) }, [selected?.feedId])
   const loadStatus = useCallback(async () => {
-    const next = await api.status()
-    setStatus(next); if (!next.discussionConfigured) setDiscussionTarget(null); setLastSync(next.sync?.lastCompletedAt || null); setSyncError(next.sync?.lastError || '')
+    statusRequest.current?.abort()
+    const controller = new AbortController()
+    statusRequest.current = controller
+    try {
+      const next = await api.status(controller.signal)
+      if (controller.signal.aborted) return
+      setStatusError('')
+      setStatus(next); if (!next.discussionConfigured) setDiscussionTarget(null); setLastSync(next.sync?.lastCompletedAt || null); setSyncError(next.sync?.lastError || '')
+    } catch (error) {
+      if (controller.signal.aborted) return
+      setStatusError(error instanceof Error ? error.message : 'Could not fetch status')
+      throw error
+    }
   }, [])
 
   const applyOrganizationSnapshot = useCallback((snapshot: OrganizationView) => {
@@ -251,9 +269,20 @@ export default function App() {
     })
   }, [])
   const loadNavigation = useCallback(async () => {
-    const snapshot = await api.organization()
-    applyOrganizationSnapshot(snapshot)
-    return snapshot.navigation
+    navigationRequest.current?.abort()
+    const controller = new AbortController()
+    navigationRequest.current = controller
+    try {
+      const snapshot = await api.organization(false, controller.signal)
+      if (controller.signal.aborted) return
+      applyOrganizationSnapshot(snapshot)
+      setNavigationError('')
+      return snapshot.navigation
+    } catch (error) {
+      if (controller.signal.aborted) return
+      setNavigationError(error instanceof Error ? error.message : 'Could not fetch sources')
+      throw error
+    }
   }, [applyOrganizationSnapshot])
 
   const loadEntries = useCallback(async (target = currentReader.current.stream, select: 'keep' | 'first' | 'last' = 'keep', background: boolean | 'replace-in-place' = false) => {
@@ -496,14 +525,20 @@ export default function App() {
   }, [revealReaderChrome])
 
   useEffect(() => {
-    Promise.all([loadNavigation(), loadStatus()]).catch(error => setSyncError(error.message))
+    const abort = () => { navigationRequest.current?.abort(); statusRequest.current?.abort() }
+    const reload = () => { void Promise.all([loadNavigation(), loadStatus()]).catch(() => {}) }
+    const restored = (event: PageTransitionEvent) => { if (event.persisted) reload() }
+    reload()
+    window.addEventListener('pagehide', abort)
+    window.addEventListener('pageshow', restored)
+    return () => { abort(); window.removeEventListener('pagehide', abort); window.removeEventListener('pageshow', restored) }
   }, [loadNavigation, loadStatus])
 
   useEffect(() => {
     const events = new EventSource('/api/events')
     const synced = () => {
-      void loadNavigation().catch(error => setSyncError(error.message))
-      void loadStatus().catch(error => setSyncError(error.message))
+      void loadNavigation().catch(() => {})
+      void loadStatus().catch(() => {})
       if (view === 'reader') void loadEntries(stream, 'keep', true)
       setTopicsRefreshKey(current => current + 1)
     }
@@ -513,7 +548,7 @@ export default function App() {
       const ids = new Set(change.ids)
       const patch = change.operation === 'read' ? { read: true } : change.operation === 'unread' ? { read: false } : change.operation === 'star' ? { starred: true } : { starred: false }
       setEntries(current => current.map(entry => ids.has(entry.id) ? { ...entry, ...patch, stateRevision: change.revisions?.[entry.id] ?? entry.stateRevision } : entry))
-      void loadNavigation().catch(error => setSyncError(error.message))
+      void loadNavigation().catch(() => {})
       setTopicsRefreshKey(value => value + 1)
     }
     const pulseUpdated = () => setTopicsRefreshKey(current => current + 1)
@@ -567,6 +602,7 @@ export default function App() {
 
   useEffect(() => {
     const onPopState = () => {
+      readerGeneration.current += 1
       const location = readReaderLocation()
       setView(location.view)
       setLinkedCollection(location.view === 'pulse' ? location.collection : undefined)
@@ -622,6 +658,7 @@ export default function App() {
   }, [revealReaderChrome])
 
   const pushLocation = useCallback((next: Partial<ReaderLocation>) => {
+    readerGeneration.current += 1
     const location: ReaderLocation = { view, stream, selectedId, unreadOnly, query, mobilePane, searchStream, searchUnread, after, before, library: libraryMode, collection: view === 'pulse' ? linkedCollection : pulseContext?.id, ...next }
     history.pushState(location, '', readerLocationUrl(location))
   }, [mobilePane, query, selectedId, stream, unreadOnly, view, searchStream, searchUnread, after, before, libraryMode, pulseContext, linkedCollection])
@@ -997,14 +1034,15 @@ export default function App() {
       }
       cursor = result.continuation
     }
-    if (libraryMode !== 'stream' || query || stream.kind !== 'category' || !navigation) return null
-    const folderIndex = navigation.folders.findIndex(folder => folder.id === stream.id)
-    if (folderIndex < 0) return null
-    let candidateIndex = folderIndex + direction
-    while (candidateIndex >= 0 && candidateIndex < navigation.folders.length) {
-      const folder = navigation.folders[candidateIndex]
-      if (!unreadOnly || folder.unread > 0) {
-        const target = { kind: 'category' as const, id: folder.id, title: folder.title }
+    if (libraryMode !== 'stream' || query || pulseContext || !['category', 'feed'].includes(stream.kind) || !navigation) return null
+    const sources = stream.kind === 'category' ? navigation.folders : navigationFeeds(navigation)
+    const sourceIndex = sources.findIndex(source => source.id === stream.id)
+    if (sourceIndex < 0) return null
+    let candidateIndex = sourceIndex + direction
+    while (candidateIndex >= 0 && candidateIndex < sources.length) {
+      const source = sources[candidateIndex]
+      if (!unreadOnly || source.unread > 0) {
+        const target: StreamRef = { kind: stream.kind, id: source.id, title: source.title }
         const result = await api.entries(target, unreadOnly, '', '', signal)
         if (signal.aborted) return null
         if (result.items.length) return () => {
@@ -1059,26 +1097,33 @@ export default function App() {
   const markAllRead = useCallback(async () => {
     if (libraryMode !== 'stream' || !online) { notify('Open a feed or search while connected to mark articles read.'); return }
     if (query) {
-      try { const preview = await api.previewRead(searchStream, query, dates.after, dates.before); setBulkPreview({ ...preview, label: `Search results in ${searchStream.title}` }) }
+      const generation = readerGeneration.current
+      try { const preview = await api.previewRead(searchStream, query, dates.after, dates.before); if (generation !== readerGeneration.current) return; setBulkPreview({ ...preview, label: `Search results in ${searchStream.title}` }) }
       catch (error) { notify(error instanceof Error ? error.message : 'Could not preview this action') }
       return
     }
+    const generation = readerGeneration.current
+    const known = new Map(entries.map(entry => [entry.id, entry.stateRevision]))
     try {
       const result = await api.markStreamRead(stream)
-      if (streamUnreadOnly) {
+      const stillHere = generation === readerGeneration.current
+      if (stillHere && streamUnreadOnly) {
         articleNavigation.cancel()
         requestSerial.current += 1
         setContinuation('')
         setLoadingMore(false)
         setLoading(false)
       }
-      setEntries(current => streamUnreadOnly ? [] : current.map(entry => ({ ...entry, read: true })))
-      setSelectedId('')
+      setEntries(current => current.flatMap(entry => {
+        if (!known.has(entry.id) || known.get(entry.id) !== entry.stateRevision && !entry.read) return [entry]
+        return stillHere && streamUnreadOnly ? [] : [{ ...entry, read: true }]
+      }))
+      if (stillHere) setSelectedId('')
       await loadNavigation()
       if (result.count && result.undoToken) {
         notify(`Marked ${result.count} entries read`, { label: 'Undo', run: () => {
           void api.undo(result.undoToken!).then(async () => {
-            await Promise.all([loadNavigation(), loadEntries(stream)])
+            await Promise.all([loadNavigation(), generation === readerGeneration.current ? loadEntries(stream) : Promise.resolve()])
             notify('Mark all read undone')
           }).catch(error => notify(error instanceof Error ? error.message : 'Paper could not undo that change'))
         } })
@@ -1086,22 +1131,30 @@ export default function App() {
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Paper could not mark this stream read')
     }
-  }, [stream, streamUnreadOnly, loadNavigation, loadEntries, notify, query, searchStream, dates, libraryMode, online, articleNavigation])
+  }, [stream, streamUnreadOnly, loadNavigation, loadEntries, notify, query, searchStream, dates, libraryMode, online, articleNavigation, entries])
 
   const markFeedRead = useCallback(async (feed: Feed) => {
     const target: StreamRef = { kind: 'feed', id: feed.id, title: feed.title }
+    const known = new Map(entries.filter(entry => entry.feedId === feed.id).map(entry => [entry.id, entry.stateRevision]))
+    const generation = readerGeneration.current
     try {
       const result = await api.markStreamRead(target)
-      if (stream.id === feed.id) {
-        setEntries(current => unreadOnly ? [] : current.map(entry => ({ ...entry, read: true })))
-        if (unreadOnly) setSelectedId('')
+      const stillHere = generation === readerGeneration.current && currentReader.current.stream.kind === target.kind && currentReader.current.stream.id === target.id
+      setEntries(current => current.flatMap(entry => {
+        if (!known.has(entry.id) || known.get(entry.id) !== entry.stateRevision && !entry.read) return [entry]
+        return stillHere && unreadOnly ? [] : [{ ...entry, read: true }]
+      }))
+      if (stillHere && unreadOnly) {
+        articleNavigation.cancel()
+        requestSerial.current += 1
+        setContinuation(''); setLoadingMore(false); setLoading(false); setSelectedId('')
       }
       await loadNavigation()
       if (result.count && result.undoToken) {
         notify(`Marked ${result.count} ${feed.title} entries read`, { label: 'Undo', run: () => {
           void api.undo(result.undoToken!).then(async () => {
             await loadNavigation()
-            if (stream.id === feed.id) await loadEntries(target)
+            if (generation === readerGeneration.current && currentReader.current.stream.kind === target.kind && currentReader.current.stream.id === target.id) await loadEntries(target)
             notify('Mark feed read undone')
           }).catch(error => notify(error instanceof Error ? error.message : 'Paper could not undo that change'))
         } })
@@ -1109,22 +1162,30 @@ export default function App() {
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Paper could not mark this feed read')
     }
-  }, [loadEntries, loadNavigation, notify, stream.id, unreadOnly])
+  }, [loadEntries, loadNavigation, notify, unreadOnly, entries, articleNavigation])
 
   const markFolderRead = useCallback(async (folder: Folder) => {
     const target: StreamRef = { kind: 'category', id: folder.id, title: folder.title }
+    const known = new Map(entries.filter(entry => folder.feeds.some(feed => feed.id === entry.feedId)).map(entry => [entry.id, entry.stateRevision]))
+    const generation = readerGeneration.current
     try {
       const result = await api.markStreamRead(target)
-      if (stream.id === folder.id) {
-        setEntries(current => unreadOnly ? [] : current.map(entry => ({ ...entry, read: true })))
-        if (unreadOnly) setSelectedId('')
+      const stillHere = generation === readerGeneration.current && currentReader.current.stream.kind === target.kind && currentReader.current.stream.id === target.id
+      setEntries(current => current.flatMap(entry => {
+        if (!known.has(entry.id) || known.get(entry.id) !== entry.stateRevision && !entry.read) return [entry]
+        return stillHere && unreadOnly ? [] : [{ ...entry, read: true }]
+      }))
+      if (stillHere && unreadOnly) {
+        articleNavigation.cancel()
+        requestSerial.current += 1
+        setContinuation(''); setLoadingMore(false); setLoading(false); setSelectedId('')
       }
       await loadNavigation()
       if (result.count && result.undoToken) {
         notify(`Marked ${result.count} ${folder.title} entries read`, { label: 'Undo', run: () => {
           void api.undo(result.undoToken!).then(async () => {
             await loadNavigation()
-            if (stream.id === folder.id) await loadEntries(target)
+            if (generation === readerGeneration.current && currentReader.current.stream.kind === target.kind && currentReader.current.stream.id === target.id) await loadEntries(target)
             notify('Mark folder read undone')
           }).catch(error => notify(error instanceof Error ? error.message : 'Paper could not undo that change'))
         } })
@@ -1132,7 +1193,7 @@ export default function App() {
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Paper could not mark this folder read')
     }
-  }, [loadEntries, loadNavigation, notify, stream.id, unreadOnly])
+  }, [loadEntries, loadNavigation, notify, unreadOnly, entries, articleNavigation])
 
   const markRelativeRead = useCallback(async (entry: Entry, direction: 'above' | 'below') => {
     setEntryContext(null)
@@ -1218,7 +1279,8 @@ export default function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (discussionTarget || bulkPreview || reportEntry || selectionContext || entryContext) return
       const target = event.target as HTMLElement
-      const typing = target.matches('input,textarea,select,[contenteditable="true"]')
+      const typing = Boolean(target.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])'))
+      if (event.defaultPrevented || target.closest('[role="dialog"],[role="menu"],[data-organization-handle]')) return
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
         setOverlays({ ...closedOverlays, command: true })
@@ -1346,7 +1408,7 @@ export default function App() {
           <button className={`icon-button ${refreshing ? 'spinning' : ''}`} onClick={() => void refresh()} aria-label="Refresh"><Icon name="refresh" /></button>
           <button className="icon-button" disabled={!online || libraryMode !== 'stream'} onClick={() => void markAllRead()} aria-label={query ? "Mark search results read" : "Mark stream read"}><Icon name="check" /></button>
         </div>
-        <div className="reader-status" role="status">{!online ? 'Offline. Saved articles are available below.' : syncError ? `Sync needs attention: ${syncError}` : lastSync ? `Last synced ${relativeDate(lastSync)}` : status.backend === 'standalone' ? 'Ready to fetch feeds' : 'Waiting for synchronization'}{syncError && online && <button onClick={() => void refresh()}>Retry</button>}</div>
+        <div className="reader-status" role="status">{!online ? 'Offline. Saved articles are available below.' : (navigationError || statusError || syncError) ? `Sync needs attention: ${navigationError || statusError || syncError}` : lastSync ? `Last synced ${relativeDate(lastSync)}` : status.backend === 'standalone' ? 'Ready to fetch feeds' : 'Waiting for synchronization'}{(navigationError || statusError || syncError) && online && <button onClick={() => void refresh()}>Retry</button>}</div>
         {query && <div className="search-controls">
           <label>Search in<select aria-label="Search scope" value={searchStream.id} onChange={event => {
             const id = event.target.value
@@ -1457,8 +1519,9 @@ export default function App() {
       </nav>
 
       {bulkPreview && <Modal title="Mark search results read" onClose={() => !bulkBusy && setBulkPreview(null)}><p>{bulkPreview.label}: {bulkPreview.count} unread articles will be marked read.</p><button disabled={bulkBusy || !bulkPreview.count} onClick={() => {
+        const generation = readerGeneration.current
         setBulkBusy(true)
-        void api.confirmRead(bulkPreview.token).then(async result => { setBulkPreview(null); await Promise.all([loadEntries(), loadNavigation()]); notify(`Marked ${result.count} articles read`, { label: 'Undo', run: () => void api.undo(result.undoToken).then(() => Promise.all([loadEntries(), loadNavigation()])).catch(error => notify(error.message)) }) }).catch(error => notify(error.message)).finally(() => setBulkBusy(false))
+        void api.confirmRead(bulkPreview.token).then(async result => { setBulkPreview(null); await Promise.all([generation === readerGeneration.current ? loadEntries() : Promise.resolve(), loadNavigation()]); notify(`Marked ${result.count} articles read`, { label: 'Undo', run: () => void api.undo(result.undoToken).then(() => Promise.all([generation === readerGeneration.current ? loadEntries() : Promise.resolve(), loadNavigation()])).catch(error => notify(error.message)) }) }).catch(error => notify(error.message)).finally(() => setBulkBusy(false))
       }}>{bulkBusy ? 'Marking read...' : `Mark ${bulkPreview.count} read`}</button><button disabled={bulkBusy} onClick={() => setBulkPreview(null)}>Cancel</button></Modal>}
       {overlays.command && <CommandPalette commands={commands} onClose={() => setOverlays(closedOverlays)} />}
       {overlays.help && <ShortcutHelp onClose={() => setOverlays(closedOverlays)} />}
@@ -2129,7 +2192,7 @@ function Settings({ backend, section, setSection, initialFeedId, navigation, onC
   setSection: (value: SettingsSection) => void
   initialFeedId: string
   navigation: NavigationPayload | null
-  onChanged: () => Promise<NavigationPayload>
+  onChanged: () => Promise<unknown>
   onFiltersChanged: () => Promise<unknown>
   notify: (message: string) => void
   autoRead: boolean
@@ -2217,7 +2280,7 @@ function ReadingChoice({ label, values, active, onChange }: { label: string; val
 function FeedManager({ initialFeedId, navigation, onChanged, notify }: {
   initialFeedId: string
   navigation: NavigationPayload | null
-  onChanged: () => Promise<NavigationPayload>
+  onChanged: () => Promise<unknown>
   notify: (message: string) => void
 }) {
   const feeds = useMemo(() => uniqueFeeds(navigation), [navigation])
@@ -2487,6 +2550,12 @@ function streamUnreadCount(navigation: NavigationPayload | null, stream: StreamR
   if (stream.kind === 'category') return navigation.folders.find(folder => folder.id === stream.id)?.unread ?? null
   if (stream.kind === 'feed') return uniqueFeeds(navigation).find(feed => feed.id === stream.id)?.unread ?? null
   return null
+}
+
+function navigationFeeds(navigation: NavigationPayload | null): Feed[] {
+  const seen = new Set<string>()
+  return [...(navigation?.folders.flatMap(folder => folder.feeds) || []), ...(navigation?.uncategorized || [])]
+    .filter(feed => { if (seen.has(feed.id)) return false; seen.add(feed.id); return true })
 }
 
 function uniqueFeeds(navigation: NavigationPayload | null): Feed[] {

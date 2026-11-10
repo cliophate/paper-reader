@@ -19,7 +19,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  organization: (refresh = false) => request<OrganizationView>(`/api/organization${refresh ? '?refresh=1' : ''}`),
+  organization: (refresh = false, signal?: AbortSignal) => request<OrganizationView>(`/api/organization${refresh ? '?refresh=1' : ''}`, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(90000)]) : undefined }),
   organize: (requestBody: OrganizationRequest) => request<OrganizationResponse>('/api/organization/commands', { method: 'POST', body: JSON.stringify(requestBody) }),
   connections: () => request<ConnectionsSettings>('/api/settings/connections'),
   updateConnections: (settings: ConnectionsUpdate) => request<ConnectionsSettings>('/api/settings/connections', { method: 'PATCH', body: JSON.stringify(settings) }),
@@ -50,7 +50,7 @@ export const api = {
     request<ArticleReport>('/api/reports', { method: 'POST', body: JSON.stringify({ entryId, issue, note, client }) }),
   setReportStatus: (id: string, status: ArticleReport['status']) =>
     request<{ ok: boolean }>(`/api/reports/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
-  status: () => request<{
+  status: (signal?: AbortSignal) => request<{
     backend: 'standalone' | 'freshrss'
     backendInstance: string
     discussionConfigured: boolean
@@ -58,7 +58,7 @@ export const api = {
     kirbyConfigured: boolean
     briefingConfigured: boolean
     sync: { lastCompletedAt: string | null; running?: boolean; lastError?: string | null }
-  }>('/api/status'),
+  }>('/api/status', { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(90000)]) : undefined }),
   sync: () => request<{ ok: boolean }>('/api/sync', { method: 'POST' }),
   setStreamOrder: (stream: StreamRef, order: 'newest' | 'oldest') => request<{ ok: boolean; order: 'newest' | 'oldest' }>('/api/streams/order', { method: 'POST', body: JSON.stringify({ stream, order }) }),
   entries: (stream: StreamRef, unread: boolean, query = '', continuation = '', signal?: AbortSignal, dates: { after?: string; before?: string } = {}) => {
