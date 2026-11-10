@@ -9,7 +9,7 @@ import { HeadlineService } from './headlines.js'
 import { loadConfig } from './config.js'
 import { ConnectionSettings, SettingsValidationError } from './connections.js'
 import { PaperDatabase } from './db.js'
-import { FreshRssClient } from './freshrss.js'
+import { createReaderBackend } from './create-backend.js'
 import { KirbyPublisher } from './kirby.js'
 import { PaperRepository, switchingEntrySource } from './repository.js'
 import { requireSameOrigin } from './request-origin.js'
@@ -17,13 +17,14 @@ import { previewFeed } from './feed-repair.js'
 import { ReaderService } from './reader.js'
 import { ReadwiseClient } from './readwise.js'
 import { entryMatchesSearch } from './search.js'
-import { FreshRssSynchronizer } from './sync.js'
+import { BackendSynchronizer } from './sync.js'
 import { escapeHtml } from './text.js'
 import { TopicService } from './topics.js'
 import { PulseService } from './pulse.js'
 import { runOpenCode } from './opencode.js'
 import { streamXMedia } from './x-media.js'
 import { XThreadService } from './x-thread.js'
+import { BackendValidationError, type EntryStateOperation } from './backend.js'
 import type { Entry } from './types.js'
 import type { StreamKind, StreamRef } from './types.js'
 
@@ -38,9 +39,9 @@ const discussionEnabled = () => config.codex.enabled && config.ai.discussionEnab
 logMemory('database opening')
 const database = new PaperDatabase(config.databasePath)
 logMemory('database ready')
-const freshRss = new FreshRssClient(config.freshRss, config.trustedFeedOrigins)
+const backend = createReaderBackend(config)
 const repository = new PaperRepository(database)
-const synchronizer = new FreshRssSynchronizer(database, freshRss, config.sync.enabled, config.sync.minutes)
+const synchronizer = new BackendSynchronizer(database, backend, config.sync.enabled, config.sync.minutes)
 const readwise = new ReadwiseClient(config.readwise)
 const kirby = new KirbyPublisher(config.kirby)
 const reader = new ReaderService(database, config.readerFallbackEnabled)
@@ -50,7 +51,7 @@ const headlines = new HeadlineService(database, url => reader.fetch(url, 0), (st
   `${config.headlines.writerModel}:${config.headlines.reviewerModel}`)
 const xThreads = new XThreadService(config.rssHub.baseUrl)
 let localReadsActive = config.sync.localReads && database.getSyncValue('backfill_complete') === 'true'
-const entriesSource = switchingEntrySource(() => localReadsActive, repository, freshRss)
+const entriesSource = switchingEntrySource(() => localReadsActive, repository, backend)
 const pulse = new PulseService(database, (prompt, input, schema) => config.codex.enabled
   ? runCodex(config.codex, config.collections.model, prompt, input, schema, 'medium')
   : runOpenCode(config.openCode, `openai/${config.collections.model}`, prompt, input),
@@ -215,7 +216,11 @@ app.post('/api/filters', (request, response) => {
   const feedId = String(request.body?.feedId || '').trim()
   if (phrase.length < 2) return response.status(400).json({ error: 'Enter at least two characters to mute' })
   if (!['title', 'content', 'any'].includes(scope)) return response.status(400).json({ error: 'Unknown filter scope' })
-  if (feedId && !feedId.startsWith('feed/')) return response.status(400).json({ error: 'Unknown feed' })
+  try { if (feedId) backend.validateFeedId(feedId, 'filter') }
+  catch (error) {
+    if (error instanceof BackendValidationError) return response.status(400).json({ error: 'Unknown feed' })
+    throw error
+  }
   const filter = database.createMuteFilter(phrase, scope as import('./db.js').MuteFilterScope, feedId)
   database.recordActivity({ kind: 'filter', origin: 'settings', summary: `Muted "${phrase}"`, count: filter.matchCount, details: { filterId: filter.id, scope, feedId } })
   response.status(201).json(filter)
@@ -363,14 +368,14 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
     return response.json({ ...headlines.page(page), order, continuation: page.continuation ? `${order}|${page.continuation}` : '' })
   }
   if (!query) {
-    const page = await freshRss.entriesPage(stream, { unreadOnly, limit: ENTRY_PAGE_SIZE, continuation })
+    const page = await backend.entriesPage(stream, { unreadOnly, limit: ENTRY_PAGE_SIZE, continuation })
     return response.json(headlines.page(page))
   }
 
   const items: Entry[] = []
   const seenContinuations = new Set<string>()
   while (items.length < ENTRY_PAGE_SIZE) {
-    const page = await freshRss.entriesPage(stream, { unreadOnly, limit: SEARCH_SCAN_SIZE, continuation })
+    const page = await backend.entriesPage(stream, { unreadOnly, limit: SEARCH_SCAN_SIZE, continuation })
     items.push(...page.items.filter(entry => entryMatchesSearch(entry, query)))
     if (!page.continuation || page.continuation === continuation || seenContinuations.has(page.continuation)) {
       continuation = ''
@@ -393,7 +398,7 @@ app.post('/api/entries/state', asyncRoute(async (request, response) => {
   const operation = String(request.body?.operation || '')
   if (!['read', 'unread', 'star', 'unstar'].includes(operation)) return response.status(400).json({ error: 'Unknown state operation' })
   const origin = ['reader', 'pulse', 'automatic'].includes(String(request.body?.origin)) ? String(request.body.origin) : 'reader'
-  await synchronizer.editEntries(ids, operation as 'read' | 'unread' | 'star' | 'unstar', origin)
+  await synchronizer.editEntries(ids, operation as EntryStateOperation, origin)
   response.json({ ok: true })
 }))
 
@@ -402,7 +407,7 @@ app.post('/api/streams/preview-read', asyncRoute(async (request, response) => {
   const input = request.body || {}
   const stream = parseStreamBody(input.stream)
   if (!localReadsActive && (input.query || input.after || input.before)) return response.status(409).json({ error: 'Search actions need the local Paper index.' })
-  const ids = localReadsActive ? database.matchingEntryIds(stream, { unreadOnly: true, query: String(input.query || ''), after: String(input.after || ''), before: String(input.before || '') }) : await freshRss.entryIds(stream, true)
+  const ids = localReadsActive ? database.matchingEntryIds(stream, { unreadOnly: true, query: String(input.query || ''), after: String(input.after || ''), before: String(input.before || '') }) : await backend.entryIds(stream, true)
   for (const [key, preview] of bulkPreviews) if (preview.expires < Date.now()) bulkPreviews.delete(key)
   const token = crypto.randomUUID()
   bulkPreviews.set(token, { ids, expires: Date.now() + 60000 })
@@ -422,7 +427,7 @@ app.post('/api/streams/confirm-read', asyncRoute(async (request, response) => {
 
 app.post('/api/streams/mark-read', asyncRoute(async (request, response) => {
   const stream = parseStreamBody(request.body)
-  const remoteIds = await freshRss.entryIds(stream, true)
+  const remoteIds = await backend.entryIds(stream, true)
   const localIds = localReadsActive ? database.localEntryIds(stream, true) : []
   const ids = [...new Set([...remoteIds, ...localIds])]
   await synchronizer.editEntries(ids, 'read', 'stream')
@@ -452,8 +457,8 @@ app.post('/api/streams/mark-relative-read', asyncRoute(async (request, response)
   } else {
     if (query) return response.status(409).json({ error: 'Relative read actions need the local Paper index while searching' })
     const [orderedIds, unreadIds] = await Promise.all([
-      freshRss.entryIds(stream, false),
-      freshRss.entryIds(stream, true),
+      backend.entryIds(stream, false),
+      backend.entryIds(stream, true),
     ])
     const anchorIndex = orderedIds.indexOf(anchorId)
     const candidates = anchorIndex < 0 ? [] : direction === 'above' ? orderedIds.slice(0, anchorIndex) : orderedIds.slice(anchorIndex + 1)
@@ -520,7 +525,7 @@ app.post('/api/feeds/preview', asyncRoute(async (request, response) => {
 }))
 app.post('/api/feeds/repair', asyncRoute(async (request, response) => {
   const id = String(request.body?.id || '')
-  if (!/^feed\/\d+$/.test(id)) return response.status(400).json({ error: 'Choose a FreshRSS feed' })
+  backend.validateFeedId(id, 'repair')
   const preview = await previewFeed(String(request.body?.url || ''), config.trustedFeedOrigins)
   await synchronizer.repairFeed(id, preview.url, String(request.body?.expectedUrl || ''))
   response.json({ ok: true })
@@ -540,7 +545,7 @@ app.patch('/api/feeds', asyncRoute(async (request, response) => {
   const title = String(request.body?.title || '').trim().slice(0, 240)
   const folder = String(request.body?.folder || '').trim().slice(0, 120)
   const currentFolder = String(request.body?.currentFolder || '').trim().slice(0, 120)
-  if (!id.startsWith('feed/')) return response.status(400).json({ error: 'A FreshRSS feed ID is required' })
+  backend.validateFeedId(id, 'edit')
   if (!title) return response.status(400).json({ error: 'The feed needs a title' })
   await synchronizer.editFeed(id, title, folder, currentFolder)
   response.json({ ok: true })
@@ -548,7 +553,7 @@ app.patch('/api/feeds', asyncRoute(async (request, response) => {
 
 app.delete('/api/feeds', asyncRoute(async (request, response) => {
   const id = String(request.body?.id || '').trim()
-  if (!id.startsWith('feed/')) return response.status(400).json({ error: 'A FreshRSS feed ID is required' })
+  backend.validateFeedId(id, 'remove')
   await synchronizer.removeFeed(id)
   response.json({ ok: true })
 }))
@@ -612,6 +617,7 @@ app.use(express.static(clientPath, { index: false, maxAge: '1h' }))
 app.get('*splat', (_request, response) => response.sendFile(path.join(clientPath, 'index.html')))
 
 app.use((error: Error, request: Request, response: Response, _next: NextFunction) => {
+  if (error instanceof BackendValidationError) return response.status(400).json({ error: error.message })
   console.error(`${request.method} ${request.path}`, error)
   response.status(500).json({ error: error.message || 'Paper could not complete the request' })
 })

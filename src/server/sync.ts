@@ -1,37 +1,26 @@
 import type { PaperDatabase, SyncStatus } from './db.js'
-import type { Entry, NavigationPayload, StreamRef } from './types.js'
+import type { EntryStateOperation, ReaderBackend } from './backend.js'
+import type { NavigationPayload, StreamRef } from './types.js'
 
 const ALL: StreamRef = { kind: 'all', id: 'all', title: 'All articles' }
 const STARRED: StreamRef = { kind: 'starred', id: 'starred', title: 'Starred' }
 const INCREMENTAL_OVERLAP_MS = 10 * 60 * 1000
 const SOURCE_CONTENT_MARKER = 'source_content_restored_v6'
 
-interface FreshRssSyncSource {
-  navigation(): Promise<NavigationPayload>
-  entriesPage(stream: StreamRef, options?: { unreadOnly?: boolean; limit?: number; after?: Date; continuation?: string }): Promise<{ items: Entry[]; continuation: string }>
-  entriesByIds?(ids: string[]): Promise<Entry[]>
-  entryIds(stream: StreamRef, unreadOnly?: boolean): Promise<string[]>
-  editEntries(ids: string[], operation: 'read' | 'unread' | 'star' | 'unstar'): Promise<void>
-  addFeed(url: string, title?: string, folder?: string): Promise<void>
-  editFeed(id: string, title: string, folder: string, currentFolder: string): Promise<void>
-  removeFeed(id: string): Promise<void>
-  repairFeed?(id: string, url: string, expectedUrl: string): Promise<void>
-}
-
-export class FreshRssSynchronizer {
+export class BackendSynchronizer {
   private running: Promise<void> | null = null
   private queue: Promise<void> = Promise.resolve()
   private timer: NodeJS.Timeout | null = null
-  private stateListeners = new Set<(change: { ids: string[]; operation: 'read' | 'unread' | 'star' | 'unstar' } | null) => void>()
+  private stateListeners = new Set<(change: { ids: string[]; operation: EntryStateOperation } | null) => void>()
 
-  onStateChanged(listener: (change: { ids: string[]; operation: 'read' | 'unread' | 'star' | 'unstar' } | null) => void) { this.stateListeners.add(listener); return () => { this.stateListeners.delete(listener) } }
-  private stateChanged(change: { ids: string[]; operation: 'read' | 'unread' | 'star' | 'unstar' } | null = null) { for (const listener of this.stateListeners) listener(change) }
+  onStateChanged(listener: (change: { ids: string[]; operation: EntryStateOperation } | null) => void) { this.stateListeners.add(listener); return () => { this.stateListeners.delete(listener) } }
+  private stateChanged(change: { ids: string[]; operation: EntryStateOperation } | null = null) { for (const listener of this.stateListeners) listener(change) }
 
   private syncListeners = new Set<(completedAt: string) => void>()
 
   constructor(
     private readonly db: PaperDatabase,
-    private readonly freshRss: FreshRssSyncSource,
+    private readonly backend: ReaderBackend,
     private readonly enabled: boolean,
     private readonly syncMinutes: number[],
   ) {}
@@ -71,10 +60,10 @@ export class FreshRssSynchronizer {
     await this.exclusive(() => this.pullNavigation())
   }
 
-  async editEntries(ids: string[], operation: 'read' | 'unread' | 'star' | 'unstar', origin = 'reader') {
+  async editEntries(ids: string[], operation: EntryStateOperation, origin = 'reader') {
     if (!ids.length) return
     await this.exclusive(async () => {
-      await this.freshRss.editEntries(ids, operation)
+      await this.backend.editEntries(ids, operation)
       this.db.editLocalEntryState(ids, operation)
       this.db.recordActivity({
         kind: 'state',
@@ -89,7 +78,7 @@ export class FreshRssSynchronizer {
 
   async addFeed(url: string, title: string, folder: string) {
     await this.exclusive(async () => {
-      await this.freshRss.addFeed(url, title, folder)
+      await this.backend.addFeed(url, title, folder)
       if (this.enabled) await this.pullNavigation()
       this.db.recordActivity({ kind: 'feed', origin: 'settings', summary: `Added ${title || url}`, count: 1, details: { url, title, folder } })
     })
@@ -97,7 +86,7 @@ export class FreshRssSynchronizer {
 
   async editFeed(id: string, title: string, folder: string, currentFolder: string) {
     await this.exclusive(async () => {
-      await this.freshRss.editFeed(id, title, folder, currentFolder)
+      await this.backend.editFeed(id, title, folder, currentFolder)
       if (this.enabled) await this.pullNavigation()
       this.db.recordActivity({ kind: 'feed', origin: 'settings', summary: `Updated ${title}`, count: 1, details: { id, title, folder, currentFolder } })
     })
@@ -105,7 +94,7 @@ export class FreshRssSynchronizer {
 
   async removeFeed(id: string) {
     await this.exclusive(async () => {
-      await this.freshRss.removeFeed(id)
+      await this.backend.removeFeed(id)
       if (this.enabled) await this.pullNavigation()
       this.db.recordActivity({ kind: 'feed', origin: 'settings', summary: 'Unsubscribed from a feed', count: 1, details: { id } })
     })
@@ -113,8 +102,8 @@ export class FreshRssSynchronizer {
 
   async repairFeed(id: string, url: string, expectedUrl: string) {
     await this.exclusive(async () => {
-      if (!this.freshRss.repairFeed) throw new Error('Feed repair is not available')
-      await this.freshRss.repairFeed(id, url, expectedUrl)
+      if (!this.backend.repairFeed) throw new Error('Feed repair is not available')
+      await this.backend.repairFeed(id, url, expectedUrl)
       if (this.enabled) await this.pullNavigation()
       this.db.recordActivity({ kind: 'feed', origin: 'settings', summary: 'Repaired a feed URL', count: 1, details: { id } })
       this.stateChanged()
@@ -128,10 +117,10 @@ export class FreshRssSynchronizer {
   async parity() {
     return this.exclusive(async () => {
       const [remoteNavigation, remoteAll, remoteUnread, remoteStarred] = await Promise.all([
-        this.freshRss.navigation(),
-        this.freshRss.entriesPage(ALL, { unreadOnly: false, limit: 80 }),
-        this.freshRss.entriesPage(ALL, { unreadOnly: true, limit: 80 }),
-        this.freshRss.entriesPage(STARRED, { unreadOnly: false, limit: 80 }),
+        this.backend.navigation(),
+        this.backend.entriesPage(ALL, { unreadOnly: false, limit: 80 }),
+        this.backend.entriesPage(ALL, { unreadOnly: true, limit: 80 }),
+        this.backend.entriesPage(STARRED, { unreadOnly: false, limit: 80 }),
       ])
       const localNavigation = this.db.localNavigation(true)
       const localAll = this.db.syncEntryIds(ALL)
@@ -213,9 +202,8 @@ export class FreshRssSynchronizer {
       ...this.db.localEntryIds(STARRED),
       ...this.db.recentEntryIds(1000),
     ])]
-    if (ids.length && !this.freshRss.entriesByIds) throw new Error('FreshRSS source cannot restore cached entries')
     for (let offset = 0; offset < ids.length; offset += 100) {
-      const entries = await this.freshRss.entriesByIds!(ids.slice(offset, offset + 100))
+      const entries = await this.backend.entriesByIds(ids.slice(offset, offset + 100))
       this.db.upsertEntries(entries)
     }
     this.db.clearArticleCache()
@@ -226,7 +214,7 @@ export class FreshRssSynchronizer {
     let continuation = this.db.getSyncValue('backfill_continuation')
     const seen = new Set<string>()
     while (true) {
-      const page = await this.freshRss.entriesPage(ALL, { unreadOnly: false, limit: 250, continuation })
+      const page = await this.backend.entriesPage(ALL, { unreadOnly: false, limit: 250, continuation })
       this.db.upsertEntries(page.items)
       const next = page.continuation
       if (!next || next === continuation || seen.has(next)) {
@@ -248,7 +236,7 @@ export class FreshRssSynchronizer {
     const seen = new Set<string>()
     const pageSize = 100
     while (true) {
-      const page = await this.freshRss.entriesPage(ALL, { unreadOnly: false, limit: pageSize, after, continuation })
+      const page = await this.backend.entriesPage(ALL, { unreadOnly: false, limit: pageSize, after, continuation })
       const currentItems = page.items.filter(entry => (entry.crawledAt || entry.timestamp) >= after.getTime())
       this.db.upsertEntries(currentItems)
       const reachedWindowStart = page.items.some(entry => (entry.crawledAt || entry.timestamp) < after.getTime())
@@ -262,14 +250,14 @@ export class FreshRssSynchronizer {
 
   private async reconcileState() {
     const [unreadIds, starredIds] = await Promise.all([
-      this.freshRss.entryIds(ALL, true),
-      this.freshRss.entryIds(STARRED, false),
+      this.backend.entryIds(ALL, true),
+      this.backend.entryIds(STARRED, false),
     ])
     return { remoteUnread: unreadIds.length, ...this.db.reconcileEntryState(unreadIds, starredIds) }
   }
 
   private async pullNavigation() {
-    const navigation = await this.freshRss.navigation()
+    const navigation = await this.backend.navigation()
     this.db.replaceNavigation(navigation)
   }
 
@@ -280,7 +268,7 @@ export class FreshRssSynchronizer {
   }
 }
 
-function stateActivitySummary(operation: 'read' | 'unread' | 'star' | 'unstar', count: number): string {
+function stateActivitySummary(operation: EntryStateOperation, count: number): string {
   const subject = `${count} ${count === 1 ? 'article' : 'articles'}`
   if (operation === 'read') return `Marked ${subject} read`
   if (operation === 'unread') return `Marked ${subject} unread`
