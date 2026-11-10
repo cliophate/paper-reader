@@ -254,9 +254,10 @@ export default function App() {
     return snapshot.navigation
   }, [applyOrganizationSnapshot])
 
-  const loadEntries = useCallback(async (target = stream, select: 'keep' | 'first' | 'last' = 'keep', background: boolean | 'replace-in-place' = false) => {
+  const loadEntries = useCallback(async (target = currentReader.current.stream, select: 'keep' | 'first' | 'last' = 'keep', background: boolean | 'replace-in-place' = false) => {
     const serial = ++requestSerial.current
-    const scope = JSON.stringify([libraryMode, query ? searchStream : target, query ? searchUnread : unreadOnly && target.kind !== 'starred', query, query ? dates : {}])
+    const source = query ? searchStream : target
+    const scope = JSON.stringify([libraryMode, source.kind, source.id, query ? searchUnread : unreadOnly && target.kind !== 'starred', query, query ? dates : {}])
     setLoadingMore(false)
     if (!background) setLoading(true)
     try {
@@ -323,7 +324,7 @@ export default function App() {
     } finally {
       if (serial === requestSerial.current) setLoading(false)
     }
-  }, [stream, unreadOnly, query, notify, searchStream, searchUnread, dates, libraryMode])
+  }, [stream.kind, stream.id, unreadOnly, query, notify, searchStream, searchUnread, dates, libraryMode])
 
   const changeEntryOrder = async (order: 'newest' | 'oldest') => {
     if (savingOrder || order === entryOrder) return
@@ -527,6 +528,7 @@ export default function App() {
     }
   }, [loadEntries, loadNavigation, loadStatus, stream, view])
 
+  // Label changes keep pagination and the mounted article intact.
   useEffect(() => {
     if (preparedStreamLoad.current === stream) {
       preparedStreamLoad.current = null
@@ -534,7 +536,7 @@ export default function App() {
     }
     const timer = window.setTimeout(() => void loadEntries(stream), query ? 260 : 0)
     return () => window.clearTimeout(timer)
-  }, [stream, unreadOnly, query, loadEntries])
+  }, [stream.kind, stream.id, unreadOnly, query, loadEntries])
 
   useEffect(() => {
     if (libraryMode === 'offline' || !online || !selectedId || entries.some(entry => entry.id === selectedId)) return

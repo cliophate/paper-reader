@@ -593,11 +593,28 @@ describe('saved reading navigation', () => {
 })
 
 describe('organization keeps the reading session', () => {
-  it('retains the selected article and current history entry while renaming its folder', async () => {
+  it.each(['all', 'unread', 'later-page'])('retains the %s reading session while renaming its folder', async mode => {
     const { LOCAL_ORGANIZATION_CAPABILITIES } = await import('../src/server/organization')
-    const navigation = { unread: 0, starred: 0, uncategorized: [], folders: [{ id: 'instagram', title: 'Instagram', unread: 0, feeds: [feed('a', 0)] }] }
+    const navigation = { unread: 1, starred: 0, uncategorized: [], folders: [{ id: 'instagram', title: 'Instagram', unread: 1, feeds: [feed('a', 1)] }] }
     vi.mocked(api.organization).mockResolvedValue({ backend: 'standalone', revision: 1, capabilities: LOCAL_ORGANIZATION_CAPABILITIES, navigation })
+    if (mode === 'unread') {
+      history.replaceState(null, '', '/?kind=category&id=instagram&title=Instagram&entry=a&pane=article&unread=1')
+      initialPage = { items: [{ ...post('b'), read: false }], continuation: '' }
+    } else if (mode === 'later-page') {
+      initialPage = { items: [post('a')], continuation: 'page2' }
+    }
     await mount()
+    if (mode === 'later-page') {
+      vi.mocked(api.entries).mockResolvedValueOnce({ items: [post('b')], continuation: '' })
+      await edge()
+      vi.mocked(api.entry).mockResolvedValue({ entry: post('b') })
+    }
+    const video = container.querySelector('video')!
+    expect(video).not.toBeNull()
+    video.currentTime = 12
+    const entryRequests = vi.mocked(api.entries).mock.calls.length
+    const missingEntryRequests = vi.mocked(api.entry).mock.calls.length
+    const rows = [...container.querySelectorAll('.story-row')]
     const historyLength = history.length
     const originalEntry = new URLSearchParams(location.search).get('entry')
     const options = container.querySelector<HTMLButtonElement>('button[aria-label="Options for Instagram"]')!
@@ -615,7 +632,12 @@ describe('organization keeps the reading session', () => {
     expect(new URLSearchParams(location.search).get('entry')).toBe(originalEntry)
     expect(new URLSearchParams(location.search).get('title')).toBe('Photos')
     expect(history.length).toBe(historyLength)
-    expect(container.querySelector('.social-author')?.textContent).toContain('Instagram a')
+    expect(container.querySelector('.social-author')?.textContent).toContain(`Instagram ${mode === 'later-page' ? 'b' : 'a'}`)
+    expect(api.entries).toHaveBeenCalledTimes(entryRequests)
+    expect(api.entry).toHaveBeenCalledTimes(missingEntryRequests)
+    expect(container.querySelector('video')).toBe(video)
+    expect(video.currentTime).toBe(12)
+    expect([...container.querySelectorAll('.story-row')]).toEqual(rows)
     expect(document.activeElement?.getAttribute('aria-label')).toBe('Options for Photos')
   })
 })
