@@ -15,6 +15,10 @@ flat-folder mapping, partial failures and the bounded discovery transport.
 leases and conditional requests. [Bounded HTTP transport](feed-http.md) defines
 the shared collector, discovery and repair fetch contract.
 
+[Backend migration core](backend-migration.md) documents schema v10, offline
+staging, process coordination and rollback. Runtime activation remains pending
+the standalone setup integration.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh
