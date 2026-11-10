@@ -146,3 +146,69 @@ appropriate pre-upgrade backup as the configured database, with no stale WAL or
 SHM sidecars, then start the matching older release. Changes after the backup
 are absent from the restored copy. Never run both releases against one database.
 Backups contain private reading data and settings and must remain private.
+
+## HTTP and client contract
+
+`GET /api/organization` returns `{backend, capabilities, revision, navigation}`.
+It uses the selected backend's capabilities and the existing navigation read
+source. FreshRSS has a null revision, including for cached reads. Standalone
+snapshots use the bound local organization service. The route never binds a
+database or selects standalone. `?refresh=1` explicitly refreshes FreshRSS
+navigation through its queue before reading the remote snapshot.
+
+`POST /api/organization/commands` accepts `{expectedRevision, commands}`.
+Standalone requires the numeric revision from the snapshot. FreshRSS requires
+null. The server validates the complete payload before writes, limits batches to
+200 commands, and checks its own capabilities for each command. Client-supplied
+capabilities have no authority. Existing `/api/navigation` and `/api/feeds`
+contracts remain available.
+
+The response is `{snapshot, results, refreshError?}`. Each result retains its
+input index and is either applied or failed. Unsupported operations return
+`unsupported`; uncertain remote outcomes return `remote-failure`. Standalone
+validation failures retain the service's error codes. A stale standalone batch
+returns HTTP 409 with `{code: 'conflict', error, currentRevision}` and applies
+nothing. `ApiError` retains these fields for clients. Do not retry a stale batch
+automatically. Reload and ask the reader to review the changed organization.
+
+FreshRSS resolves feed metadata and source membership inside the synchronizer's
+existing write queue. A queued move therefore uses the title from a preceding
+rename. This serializes Paper's operations only. FreshRSS has no compare-and-set
+guarantee against edits from other clients. Bulk requests can partly succeed,
+and transport failure can leave an uncertain remote outcome. Writes remain
+remote-first; rejected writes never update local navigation.
+
+An acknowledged remote write stays applied even if the following cache refresh
+fails. The response reports `refreshError`. If the final snapshot cannot be read,
+`snapshot` is null, while indexed outcomes remain intact. Disable further writes
+until an explicit reload succeeds. Show the affected feed names and errors;
+never replay already applied items as part of a failed bulk request.
+
+## Sidebar controls
+
+The sidebar options buttons work with touch, mouse and keyboard. Right-click or
+Shift+F10 opens a row's menu; arrow keys, Home and End move through its actions.
+Escape closes a menu or form and returns focus to its opener. If an operation
+removes that row, focus returns to Organize feeds. Tab stays inside open forms.
+
+Organize feeds reveals empty folders and read feeds while the unread filter is
+active. It adds membership checkboxes, bulk move and confirmed unsubscribe.
+Selecting a feed in two folders moves the selected memberships; bulk unsubscribe
+deduplicates that feed. A partial result retains failed selections and names the
+failed feeds. Form revisions are captured when editing starts, so a background
+refresh cannot silently authorize an older edit.
+
+Supported menus offer folder creation, rename, merge, removal and ordering, and
+feed rename, move and ordering. Dragging shows explicit insertion and destination
+targets, including empty folders. Move up and Move down provide keyboard and
+touch alternatives. Ordering uses the backend's commands and navigation order;
+the client no longer places particular folder names at the end of the sidebar.
+
+FreshRSS shows only its supported feed operations. A move without a chosen
+folder returns the feed to FreshRSS's default category. FreshRSS may report that
+as a named Uncategorized folder; Paper preserves its remote ID and membership.
+It does not replace that category with a local folder or ordering override.
+Renames and membership changes retain the reader's current article, expansion
+state and history entry. Folder removal explains which feeds become
+uncategorized and which retain other memberships. Unsubscribe has its own
+confirmation and retains article history.

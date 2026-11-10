@@ -1,3 +1,4 @@
+import { FRESHRSS_ORGANIZATION_CAPABILITIES } from '../src/server/organization'
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -8,7 +9,7 @@ import { offlineArticles } from '../src/client/offline'
 import type { Entry, EntryPage, Feed } from '../src/client/types'
 
 vi.mock('../src/client/api', () => ({ api: {
-  recentReading: vi.fn(), navigation: vi.fn(), status: vi.fn(), entries: vi.fn(), entry: vi.fn(), editState: vi.fn(), markStreamRead: vi.fn(),
+  organization: vi.fn(), organize: vi.fn(), recentReading: vi.fn(), navigation: vi.fn(), status: vi.fn(), entries: vi.fn(), entry: vi.fn(), editState: vi.fn(), markStreamRead: vi.fn(),
   markRelativeRead: vi.fn(), undo: vi.fn(),
   setStreamOrder: vi.fn(), removeFeed: vi.fn(), fullText: vi.fn(), previewRead: vi.fn(), confirmRead: vi.fn(),
 } }))
@@ -47,6 +48,7 @@ beforeEach(() => {
     { id: 'instagram', title: 'Instagram', unread: 0, feeds: [] },
     { id: 'tech', title: 'Tech', unread: 0, feeds: [] },
   ] })
+  vi.mocked(api.organization).mockImplementation(async () => ({ backend: 'freshrss', capabilities: FRESHRSS_ORGANIZATION_CAPABILITIES, revision: null, navigation: await api.navigation() }))
   vi.mocked(api.status).mockResolvedValue({ readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } })
   vi.mocked(api.entry).mockResolvedValue({ entry: post('a') })
   container = document.createElement('div')
@@ -587,5 +589,33 @@ describe('saved reading navigation', () => {
     await click([...container.querySelectorAll<HTMLButtonElement>('.source-nav button')].find(item => item.textContent?.startsWith('All articles'))!)
     expect(container.querySelector('.stream-title h1')?.textContent).toBe('All articles')
     expect(new URLSearchParams(location.search).get('library')).not.toBe(mode)
+  })
+})
+
+describe('organization keeps the reading session', () => {
+  it('retains the selected article and current history entry while renaming its folder', async () => {
+    const { LOCAL_ORGANIZATION_CAPABILITIES } = await import('../src/server/organization')
+    const navigation = { unread: 0, starred: 0, uncategorized: [], folders: [{ id: 'instagram', title: 'Instagram', unread: 0, feeds: [feed('a', 0)] }] }
+    vi.mocked(api.organization).mockResolvedValue({ backend: 'standalone', revision: 1, capabilities: LOCAL_ORGANIZATION_CAPABILITIES, navigation })
+    await mount()
+    const historyLength = history.length
+    const originalEntry = new URLSearchParams(location.search).get('entry')
+    const options = container.querySelector<HTMLButtonElement>('button[aria-label="Options for Instagram"]')!
+    await act(async () => { options.focus(); options.click() })
+    await act(async () => { [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === 'Rename folder')!.click() })
+    const form = document.querySelector<HTMLFormElement>('[role="dialog"] form')!
+    await act(async () => {
+      const input = form.querySelector('input')!
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Photos')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    vi.mocked(api.organize).mockResolvedValue({ results: [{ index: 0, status: 'applied', changed: true }], snapshot: { backend: 'standalone', revision: 2, capabilities: LOCAL_ORGANIZATION_CAPABILITIES, navigation: { ...navigation, folders: [{ ...navigation.folders[0], title: 'Photos' }] } } })
+    await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(new URLSearchParams(location.search).get('entry')).toBe(originalEntry)
+    expect(new URLSearchParams(location.search).get('title')).toBe('Photos')
+    expect(history.length).toBe(historyLength)
+    expect(container.querySelector('.social-author')?.textContent).toContain('Instagram a')
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Options for Photos')
   })
 })

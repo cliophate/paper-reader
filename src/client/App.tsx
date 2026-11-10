@@ -1,3 +1,6 @@
+import { OrganizationSidebar } from './components/OrganizationSidebar'
+import { FeedMark } from './components/FeedMark'
+import type { OrganizationView } from '../shared/organization'
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createArticleBoundaryStore, type ArticleBoundaryStore } from './articleBoundaryStore'
 import { createArticleNavigation } from './articleNavigation'
@@ -44,10 +47,6 @@ function savedPulseContext(id?: string): PulseContext | null {
 
 const starredStream: StreamRef = { kind: 'starred', id: 'starred', title: 'Starred' }
 
-function sidebarFolderRank(folder: Folder): number {
-  return ['games', 'tech'].indexOf(folder.title.trim().toLowerCase()) + 1
-}
-
 interface OverlayState {
   command: boolean
   help: boolean
@@ -65,18 +64,6 @@ interface ToastState {
   action?: () => void
 }
 
-interface FeedContextState {
-  feed: Feed
-  left: number
-  top: number
-}
-
-interface FolderContextState {
-  folder: Folder
-  left: number
-  top: number
-}
-
 interface EntryContextState {
   entry: Entry
   left: number
@@ -92,6 +79,7 @@ interface SelectionContextState {
 export default function App() {
   const [initialLocation] = useState(() => readReaderLocation())
   const [view, setView] = useState(initialLocation.view)
+  const [organization, setOrganization] = useState<OrganizationView | null>(null)
   const [navigation, setNavigation] = useState<NavigationPayload | null>(null)
   const [stream, setStream] = useState<StreamRef>(initialLocation.stream)
   const [entries, setEntries] = useState<Entry[]>([])
@@ -132,14 +120,11 @@ export default function App() {
   const [fetchingFullTextId, setFetchingFullTextId] = useState('')
   const [fullTextError, setFullTextError] = useState<{ id: string; message: string } | null>(null)
   const [sidebarVisible, setSidebarVisible] = useState(true)
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [mobilePane, setMobilePane] = useState<MobilePane>(initialLocation.mobilePane)
   const [mobileLayout, setMobileLayout] = useState(() => window.matchMedia('(max-width: 1040px)').matches)
   const [overlays, setOverlays] = useState<OverlayState>(closedOverlays)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('feeds')
   const [settingsFeedId, setSettingsFeedId] = useState('')
-  const [feedContext, setFeedContext] = useState<FeedContextState | null>(null)
-  const [folderContext, setFolderContext] = useState<FolderContextState | null>(null)
   const [entryContext, setEntryContext] = useState<EntryContextState | null>(null)
   const [selectionContext, setSelectionContext] = useState<SelectionContextState | null>(null)
   const [discussionTarget, setDiscussionTarget] = useState<{ entry: Entry; quote: string } | null>(null)
@@ -223,11 +208,6 @@ export default function App() {
     .map(folder => ({ ...folder, feeds: unreadOnly ? folder.feeds.filter(feed => feed.unread > 0) : folder.feeds })), [navigation, unreadOnly])
   const visibleUncategorized = useMemo(() => (navigation?.uncategorized || [])
     .filter(feed => !unreadOnly || feed.unread > 0), [navigation, unreadOnly])
-  const sidebarFolders = useMemo(() => [
-    ...visibleFolders.filter(folder => sidebarFolderRank(folder) === 0),
-    null,
-    ...visibleFolders.filter(folder => sidebarFolderRank(folder) > 0),
-  ], [visibleFolders])
   const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches
   const darkThemeActive = isDarkTheme(theme, systemDark)
 
@@ -258,12 +238,21 @@ export default function App() {
     setStatus(next); if (!next.discussionConfigured) setDiscussionTarget(null); setLastSync(next.sync?.lastCompletedAt || null); setSyncError(next.sync?.lastError || '')
   }, [])
 
-  const loadNavigation = useCallback(async () => {
-    const payload = await api.navigation()
-    const result = { ...payload, folders: [...payload.folders].sort((a, b) => sidebarFolderRank(a) - sidebarFolderRank(b)) }
-    setNavigation(result)
-    return result
+  const applyOrganizationSnapshot = useCallback((snapshot: OrganizationView) => {
+    setOrganization(snapshot)
+    setNavigation(snapshot.navigation)
+    // Keep the selected article and history entry when labels or memberships change.
+    setStream(current => {
+      const title = current.kind === 'category' ? snapshot.navigation.folders.find(folder => folder.id === current.id)?.title
+        : current.kind === 'feed' ? uniqueFeeds(snapshot.navigation).find(feed => feed.id === current.id)?.title : undefined
+      return title && title !== current.title ? { ...current, title } : current
+    })
   }, [])
+  const loadNavigation = useCallback(async () => {
+    const snapshot = await api.organization()
+    applyOrganizationSnapshot(snapshot)
+    return snapshot.navigation
+  }, [applyOrganizationSnapshot])
 
   const loadEntries = useCallback(async (target = stream, select: 'keep' | 'first' | 'last' = 'keep', background: boolean | 'replace-in-place' = false) => {
     const serial = ++requestSerial.current
@@ -635,8 +624,6 @@ export default function App() {
 
   const openStream = useCallback((target: StreamRef) => {
     setLibraryMode('stream'); setPulseContext(null)
-    setFeedContext(null)
-    setFolderContext(null)
     pushLocation({ view: 'reader', stream: target, selectedId: '', query: '', mobilePane: 'stories', library: 'stream', collection: undefined })
     setView('reader')
     setStream(target)
@@ -649,8 +636,6 @@ export default function App() {
   const openLibrary = useCallback((mode: 'recent' | 'offline') => {
     setLibraryMode(mode)
     setPulseContext(null)
-    setFeedContext(null)
-    setFolderContext(null)
     setEntryContext(null)
     pushLocation({ view: 'reader', stream: allStream, library: mode, selectedId: '', query: '', mobilePane: 'stories', collection: undefined })
     setView('reader')
@@ -661,29 +646,7 @@ export default function App() {
     requestAnimationFrame(() => listRef.current?.focus())
   }, [pushLocation])
 
-  const openFeedContext = useCallback((feed: Feed, left: number, top: number) => {
-    setFolderContext(null)
-    setEntryContext(null)
-    setFeedContext({
-      feed,
-      left: Math.max(8, Math.min(left, window.innerWidth - 224)),
-      top: Math.max(8, Math.min(top, window.innerHeight - 224)),
-    })
-  }, [])
-
-  const openFolderContext = useCallback((folder: Folder, left: number, top: number) => {
-    setFeedContext(null)
-    setEntryContext(null)
-    setFolderContext({
-      folder,
-      left: Math.max(8, Math.min(left, window.innerWidth - 224)),
-      top: Math.max(8, Math.min(top, window.innerHeight - 142)),
-    })
-  }, [])
-
   const openEntryContext = useCallback((entry: Entry, left: number, top: number) => {
-    setFeedContext(null)
-    setFolderContext(null)
     setEntryContext({
       entry,
       left: Math.max(8, Math.min(left, window.innerWidth - 224)),
@@ -740,14 +703,12 @@ export default function App() {
   }, [releasePull, stream.kind, switchFolder])
 
   const manageFeed = useCallback((feed: Feed) => {
-    setFeedContext(null)
     setSettingsFeedId(feed.id)
     setSettingsSection('feeds')
     setOverlays({ ...closedOverlays, settings: true })
   }, [])
 
   const unsubscribeFeed = useCallback(async (feed: Pick<Feed, 'id' | 'title'>) => {
-    setFeedContext(null)
     setEntryContext(null)
     try {
       await api.removeFeed(feed.id)
@@ -1106,7 +1067,6 @@ export default function App() {
 
   const markFeedRead = useCallback(async (feed: Feed) => {
     const target: StreamRef = { kind: 'feed', id: feed.id, title: feed.title }
-    setFeedContext(null)
     try {
       const result = await api.markStreamRead(target)
       if (stream.id === feed.id) {
@@ -1130,7 +1090,6 @@ export default function App() {
 
   const markFolderRead = useCallback(async (folder: Folder) => {
     const target: StreamRef = { kind: 'category', id: folder.id, title: folder.title }
-    setFolderContext(null)
     try {
       const result = await api.markStreamRead(target)
       if (stream.id === folder.id) {
@@ -1234,7 +1193,7 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (discussionTarget || bulkPreview || reportEntry || selectionContext || feedContext || folderContext || entryContext) return
+      if (discussionTarget || bulkPreview || reportEntry || selectionContext || entryContext) return
       const target = event.target as HTMLElement
       const typing = target.matches('input,textarea,select,[contenteditable="true"]')
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -1288,7 +1247,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [closeEntry, move, openEntry, overlays, selected, refresh, fetchFullText, markAllRead, saveReadwise, setEntryState, discussionTarget, bulkPreview, reportEntry, selectionContext, feedContext, folderContext, entryContext])
+  }, [closeEntry, move, openEntry, overlays, selected, refresh, fetchFullText, markAllRead, saveReadwise, setEntryState, discussionTarget, bulkPreview, reportEntry, selectionContext, entryContext])
 
   const appClass = `app ${sidebarVisible ? '' : 'sidebar-hidden'} ${readerChromeHidden ? 'mobile-reader-chrome-hidden' : ''}`
   return (
@@ -1348,45 +1307,7 @@ export default function App() {
             <p>All caught up</p>
             <button onClick={() => changeUnreadOnly(false)}>Show all feeds</button>
           </div>}
-          {sidebarFolders.map(folder => {
-            if (!folder) return visibleUncategorized.length > 0 && <div className="folder" key="__uncategorized__">
-              <button className="folder-row" onClick={() => setExpandedFolders(current => {
-                const next = new Set(current)
-                if (next.has('__uncategorized__')) next.delete('__uncategorized__')
-                else next.add('__uncategorized__')
-                return next
-              })}>
-                <span className="folder-toggle"><Icon name="chevron" className={expandedFolders.has('__uncategorized__') ? 'rotated' : ''} /></span>
-                <span className="source-label">Uncategorized</span>
-                {visibleUncategorized.reduce((sum, feed) => sum + feed.unread, 0) > 0 && <span className="source-count">{visibleUncategorized.reduce((sum, feed) => sum + feed.unread, 0)}</span>}
-              </button>
-              {expandedFolders.has('__uncategorized__') && <div className="feed-list">
-                {visibleUncategorized.map(feed => <FeedRowButton key={feed.id} feed={feed} active={!query && stream.id === feed.id} onOpen={() => openStream({ kind: 'feed', id: feed.id, title: feed.title })} onContext={(left, top) => openFeedContext(feed, left, top)} />)}
-              </div>}
-            </div>
-            const expanded = expandedFolders.has(folder.id)
-            return <div className="folder" key={folder.id}>
-              <FolderRowButton
-                folder={folder}
-                active={!query && stream.id === folder.id}
-                expanded={expanded}
-                onOpen={() => openStream({ kind: 'category', id: folder.id, title: folder.title })}
-                onToggle={event => {
-                  event.stopPropagation()
-                  setExpandedFolders(current => {
-                    const next = new Set(current)
-                    if (next.has(folder.id)) next.delete(folder.id)
-                    else next.add(folder.id)
-                    return next
-                  })
-                }}
-                onContext={(left, top) => openFolderContext(folder, left, top)}
-              />
-              {expanded && <div className="feed-list">
-                {folder.feeds.map(feed => <FeedRowButton key={feed.id} feed={feed} active={!query && stream.id === feed.id} onOpen={() => openStream({ kind: 'feed', id: feed.id, title: feed.title })} onContext={(left, top) => openFeedContext(feed, left, top)} />)}
-              </div>}
-            </div>
-          })}
+          <OrganizationSidebar snapshot={organization} navigation={navigation} active={!query ? stream : null} unreadOnly={unreadOnly} online={online} onSnapshot={applyOrganizationSnapshot} onOpen={openStream} onMarkFeed={feed => void markFeedRead(feed)} onMarkFolder={folder => void markFolderRead(folder)} onManage={manageFeed} />
           </div>
         </nav>
         <footer className="sidebar-footer">
@@ -1518,8 +1439,6 @@ export default function App() {
       }}>{bulkBusy ? 'Marking read...' : `Mark ${bulkPreview.count} read`}</button><button disabled={bulkBusy} onClick={() => setBulkPreview(null)}>Cancel</button></Modal>}
       {overlays.command && <CommandPalette commands={commands} onClose={() => setOverlays(closedOverlays)} />}
       {overlays.help && <ShortcutHelp onClose={() => setOverlays(closedOverlays)} />}
-      {folderContext && <FolderContextMenu state={folderContext} onClose={() => setFolderContext(null)} onOpen={() => openStream({ kind: 'category', id: folderContext.folder.id, title: folderContext.folder.title })} onMarkRead={() => void markFolderRead(folderContext.folder)} />}
-      {feedContext && <FeedContextMenu state={feedContext} onClose={() => setFeedContext(null)} onOpen={() => openStream({ kind: 'feed', id: feedContext.feed.id, title: feedContext.feed.title })} onMarkRead={() => void markFeedRead(feedContext.feed)} onManage={() => manageFeed(feedContext.feed)} onUnsubscribe={() => void unsubscribeFeed(feedContext.feed)} onCopy={() => void navigator.clipboard.writeText(feedContext.feed.url).then(() => { setFeedContext(null); notify('Feed URL copied') })} />}
       {entryContext && <EntryContextMenu key={entryContext.entry.id} state={entryContext} relativeAvailable={libraryMode === 'stream' && online} onClose={() => setEntryContext(null)} onOpen={() => { setEntryContext(null); openEntry(entryContext.entry) }} onCopyUrl={() => { void copyArticleUrl(entryContext.entry); setEntryContext(null) }} onToggleRead={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.read ? 'unread' : 'read') }} onToggleStar={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.starred ? 'unstar' : 'star') }} onReport={() => { setReportEntry(entryContext.entry); setEntryContext(null) }} onMarkAbove={() => void markRelativeRead(entryContext.entry, 'above')} onMarkBelow={() => void markRelativeRead(entryContext.entry, 'below')} onUnsubscribe={() => void unsubscribeFeed({ id: entryContext.entry.feedId, title: entryContext.entry.feedTitle })} />}
       {selectionContext && (status.kirbyConfigured || status.discussionConfigured) && <SelectionContextMenu state={selectionContext} kirbyConfigured={status.kirbyConfigured} discussionConfigured={status.discussionConfigured} onClose={() => setSelectionContext(null)} onCreate={() => void createKirbyNote(selectionContext.quote)} onDiscuss={() => { if (!status.discussionConfigured) return notify('Article discussion is not configured'); if (selected) setDiscussionTarget({ entry: selected, quote: selectionContext.quote }); setSelectionContext(null) }} />}
       {discussionTarget && <ArticleDiscussion key={discussionTarget.entry.id} entry={discussionTarget.entry} initialQuote={discussionTarget.quote} onClose={() => setDiscussionTarget(null)} />}
@@ -1539,207 +1458,6 @@ function ArticleFilter({ unreadOnly, onChange }: { unreadOnly: boolean; onChange
   return <div className="segmented" role="group" aria-label="Article filter">
     <button className={unreadOnly ? 'active' : ''} aria-pressed={unreadOnly} onClick={() => onChange(true)}>Unread</button>
     <button className={!unreadOnly ? 'active' : ''} aria-pressed={!unreadOnly} onClick={() => onChange(false)}>All</button>
-  </div>
-}
-
-function FolderRowButton({ folder, active, expanded, onOpen, onToggle, onContext }: {
-  folder: Folder
-  active: boolean
-  expanded: boolean
-  onOpen: () => void
-  onToggle: (event: React.MouseEvent<HTMLButtonElement>) => void
-  onContext: (left: number, top: number) => void
-}) {
-  const pressTimer = useRef<number | undefined>(undefined)
-  const pressOrigin = useRef({ x: 0, y: 0 })
-  const suppressClick = useRef(false)
-
-  const cancelPress = () => {
-    window.clearTimeout(pressTimer.current)
-    pressTimer.current = undefined
-  }
-
-  useEffect(() => cancelPress, [])
-
-  const beginPress = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (event.pointerType === 'mouse') return
-    cancelPress()
-    suppressClick.current = false
-    const { clientX, clientY } = event
-    pressOrigin.current = { x: clientX, y: clientY }
-    pressTimer.current = window.setTimeout(() => {
-      suppressClick.current = true
-      navigator.vibrate?.(12)
-      onContext(clientX, clientY)
-    }, 450)
-  }
-
-  const movePress = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (Math.hypot(event.clientX - pressOrigin.current.x, event.clientY - pressOrigin.current.y) > 8) cancelPress()
-  }
-
-  const openContextMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.preventDefault()
-    event.stopPropagation()
-    cancelPress()
-    onContext(event.clientX, event.clientY)
-  }
-
-  return <div className="folder-row-wrapper"><button className="folder-expand" aria-label={`${expanded ? 'Collapse' : 'Expand'} ${folder.title}`} aria-expanded={expanded} onClick={onToggle}><Icon name="chevron" className={expanded ? 'rotated' : ''} /></button><button
-    className={`folder-row ${active ? 'active' : ''}`}
-    onPointerDown={beginPress}
-    onPointerMove={movePress}
-    onPointerUp={cancelPress}
-    onPointerCancel={cancelPress}
-    onContextMenu={openContextMenu}
-    onClick={event => {
-      if (suppressClick.current) {
-        event.preventDefault()
-        event.stopPropagation()
-        suppressClick.current = false
-        return
-      }
-      onOpen()
-    }}
-  >
-    <span className="source-label">{folder.title}</span>
-    {folder.unread > 0 && <span className="source-count">{folder.unread}</span>}
-  </button><button className="row-options" aria-label={`Options for ${folder.title}`} onClick={event => { const box = event.currentTarget.getBoundingClientRect(); onContext(box.left, box.bottom) }}>⋯</button></div>
-}
-
-function FeedRowButton({ feed, active, onOpen, onContext }: {
-  feed: Feed
-  active: boolean
-  onOpen: () => void
-  onContext: (left: number, top: number) => void
-}) {
-  const pressTimer = useRef<number | undefined>(undefined)
-  const pressOrigin = useRef({ x: 0, y: 0 })
-  const suppressClick = useRef(false)
-
-  const cancelPress = () => {
-    window.clearTimeout(pressTimer.current)
-    pressTimer.current = undefined
-  }
-
-  useEffect(() => cancelPress, [])
-
-  const beginPress = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (event.pointerType === 'mouse') return
-    cancelPress()
-    suppressClick.current = false
-    const { clientX, clientY } = event
-    pressOrigin.current = { x: clientX, y: clientY }
-    pressTimer.current = window.setTimeout(() => {
-      suppressClick.current = true
-      navigator.vibrate?.(12)
-      onContext(clientX, clientY)
-    }, 450)
-  }
-
-  const movePress = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (Math.hypot(event.clientX - pressOrigin.current.x, event.clientY - pressOrigin.current.y) > 8) cancelPress()
-  }
-
-  const openContextMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.preventDefault()
-    event.stopPropagation()
-    cancelPress()
-    onContext(event.clientX, event.clientY)
-  }
-
-  return <div className="feed-row-wrapper"><button
-    className={`feed-row ${active ? 'active' : ''}`}
-    onPointerDown={beginPress}
-    onPointerMove={movePress}
-    onPointerUp={cancelPress}
-    onPointerCancel={cancelPress}
-    onContextMenu={openContextMenu}
-    onClick={event => {
-      if (suppressClick.current) {
-        event.preventDefault()
-        event.stopPropagation()
-        suppressClick.current = false
-        return
-      }
-      onOpen()
-    }}
-  >
-    <FeedMark title={feed.title} url={feed.siteUrl || feed.url} iconUrl={feed.iconUrl} />
-    <span className="source-label">{feed.title}</span>
-    {feed.unread > 0 && <span className="source-count">{feed.unread}</span>}
-  </button><button className="row-options" aria-label={`Options for ${feed.title}`} onClick={event => { const box = event.currentTarget.getBoundingClientRect(); onContext(box.left, box.bottom) }}>⋯</button></div>
-}
-
-function FolderContextMenu({ state, onClose, onOpen, onMarkRead }: {
-  state: FolderContextState
-  onClose: () => void
-  onOpen: () => void
-  onMarkRead: () => void
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-  useMenuFocus(ref)
-
-  useEffect(() => {
-    const closePointer = (event: PointerEvent) => { if (!ref.current?.contains(event.target as Node)) onClose() }
-    const closeKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
-    const closeScroll = () => onClose()
-    window.addEventListener('pointerdown', closePointer)
-    window.addEventListener('keydown', closeKey)
-    window.addEventListener('resize', closeScroll)
-    window.addEventListener('scroll', closeScroll, true)
-    return () => {
-      window.removeEventListener('pointerdown', closePointer)
-      window.removeEventListener('keydown', closeKey)
-      window.removeEventListener('resize', closeScroll)
-      window.removeEventListener('scroll', closeScroll, true)
-    }
-  }, [onClose])
-
-  return <div ref={ref} className="feed-context-menu" role="menu" aria-label={`${state.folder.title} options`} style={{ left: state.left, top: state.top }}>
-    <strong>{state.folder.title}</strong>
-    <button role="menuitem" onClick={onOpen}><Icon name="folder" /> Open folder</button>
-    <button role="menuitem" disabled={state.folder.unread === 0} onClick={onMarkRead}><Icon name="check" /> {state.folder.unread > 0 ? 'Mark folder read' : 'All read'}</button>
-  </div>
-}
-
-function FeedContextMenu({ state, onClose, onOpen, onMarkRead, onManage, onUnsubscribe, onCopy }: {
-  state: FeedContextState
-  onClose: () => void
-  onOpen: () => void
-  onMarkRead: () => void
-  onManage: () => void
-  onUnsubscribe: () => void
-  onCopy: () => void
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-  useMenuFocus(ref)
-  const [confirmRemove, setConfirmRemove] = useState(false)
-
-  useEffect(() => {
-    const closePointer = (event: PointerEvent) => { if (!ref.current?.contains(event.target as Node)) onClose() }
-    const closeKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
-    const closeScroll = () => onClose()
-    window.addEventListener('pointerdown', closePointer)
-    window.addEventListener('keydown', closeKey)
-    window.addEventListener('resize', closeScroll)
-    window.addEventListener('scroll', closeScroll, true)
-    return () => {
-      window.removeEventListener('pointerdown', closePointer)
-      window.removeEventListener('keydown', closeKey)
-      window.removeEventListener('resize', closeScroll)
-      window.removeEventListener('scroll', closeScroll, true)
-    }
-  }, [onClose])
-
-  return <div ref={ref} className="feed-context-menu" role="menu" aria-label={`${state.feed.title} options`} style={{ left: state.left, top: state.top }}>
-    <strong>{state.feed.title}</strong>
-    <button role="menuitem" onClick={onOpen}><Icon name="feed" /> Open feed</button>
-    <button role="menuitem" disabled={state.feed.unread === 0} onClick={onMarkRead}><Icon name="check" /> Mark feed read</button>
-    <button role="menuitem" onClick={onManage}><Icon name="settings" /> Edit feed</button>
-    {state.feed.siteUrl && <a role="menuitem" href={state.feed.siteUrl} target="_blank" rel="noopener noreferrer" onClick={onClose}><Icon name="external" /> Open website</a>}
-    <button role="menuitem" onClick={onCopy}><Icon name="bookmark" /> Copy feed URL</button>
-    <button role="menuitem" className={`danger ${confirmRemove ? 'confirming' : ''}`} onClick={() => confirmRemove ? onUnsubscribe() : setConfirmRemove(true)}><Icon name="close" /> {confirmRemove ? 'Confirm unsubscribe' : 'Unsubscribe'}</button>
   </div>
 }
 
@@ -1899,18 +1617,6 @@ function briefingStatus(item: BriefingSummary): string {
   return 'Generated, not delivered'
 }
 
-function FeedMark({ title, url, iconUrl = '' }: { title: string; url: string; iconUrl?: string }) {
-  const [iconFailed, setIconFailed] = useState(false)
-  useEffect(() => setIconFailed(false), [iconUrl])
-  const trimmedTitle = title.trim()
-  let letter = (trimmedTitle.startsWith('@') ? trimmedTitle.charAt(1) : trimmedTitle.charAt(0)).toUpperCase() || '•'
-  let hue = 210
-  try { hue = [...new URL(url).hostname].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 360 } catch { letter = title.charAt(0) }
-  const showIcon = Boolean(iconUrl && !iconFailed)
-  return <span className={`feed-mark ${showIcon ? 'has-icon' : ''}`} style={{ '--feed-hue': hue } as React.CSSProperties}>
-    {showIcon ? <img src={iconUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setIconFailed(true)} /> : letter}
-  </span>
-}
 
 const StoryRow = forwardRef<HTMLElement, { entry: Entry; active: boolean; onOpen: () => void; onContext: (left: number, top: number) => void }>(function StoryRow({ entry, active, onOpen, onContext }, ref) {
   const [thumbnailReady, setThumbnailReady] = useState(false)

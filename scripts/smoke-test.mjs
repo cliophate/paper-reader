@@ -83,6 +83,12 @@ try {
   assert.equal(status.readwiseConfigured, false); assert.equal(status.kirbyConfigured, false)
   assert.equal(status.briefingConfigured, false); assert.equal(status.discussionConfigured, false)
   assert.equal((await request('/api/sync/parity')).data.ready, true)
+  const organization = (await request('/api/organization')).data
+  assert.equal(organization.backend, 'freshrss'); assert.equal(organization.revision, null)
+  assert.equal(organization.capabilities.renameFeed, true); assert.equal(organization.capabilities.orderFolders, false)
+  const commands = { expectedRevision: null, commands: [{ type: 'create-folder', title: 'Unsupported' }] }
+  assert.equal((await request('/api/organization/commands', commands, { Origin: 'https://untrusted.example' })).status, 403)
+  assert.equal((await request('/api/organization/commands', commands)).data.results[0].code, 'unsupported')
   const page = (await request('/api/entries?kind=all&id=all&unread=0&q=compositor')).data
   assert.equal(page.items.length, 2)
   const id = page.items[0].id
