@@ -11,6 +11,7 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
   const [xml, setXml] = useState('')
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [choices, setChoices] = useState<ImportChoice[]>([])
+  const [folderDrafts, setFolderDrafts] = useState<Record<string, string>>({})
   const [result, setResult] = useState<{ result: ImportResult; rows: ImportRow[] } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -28,7 +29,7 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
     finally { setBusy(false) }
   }
   function showPreview(value: ImportPreview) {
-    setPreview(value); setResult(null)
+    setPreview(value); setResult(null); setFolderDrafts({})
     setChoices(value.rows.map(row => ({
       key: row.key,
       action: row.problem ? 'skip' : row.suggestedId ? 'reuse' : row.matches.length || row.repeatedUrl || row.folderConflict || row.folders.length > 1 ? 'skip' : 'create',
@@ -41,7 +42,10 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
     catch { setRefreshFailed(true) }
   }
   function submit(event: FormEvent, action: () => Promise<void>) { event.preventDefault(); void run(action) }
-  function update(key: string, patch: Partial<ImportChoice>) { setChoices(previous => previous.map(choice => choice.key === key ? { ...choice, ...patch } : choice)) }
+  function update(key: string, patch: Partial<ImportChoice>, folderDraft = '') {
+    setChoices(previous => previous.map(choice => choice.key === key ? { ...choice, ...patch } : choice))
+    setFolderDrafts(previous => ({ ...previous, [key]: folderDraft }))
+  }
   async function apply() {
     if (!preview) return
     const current = preview
@@ -131,7 +135,7 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
                 {choice.action === 'reuse' && <option value="keep">Keep existing folders</option>}
                 <option value="none">Uncategorized</option>{folderOptions.map(folder => <option key={folder} value={`folder:${folder}`}>{folder}</option>)}
               </select></label>}
-              {(choice.action === 'create' || preview.multipleMemberships) && <label>Use a different flat folder name<input type="text" maxLength={120} value={choice.folders?.[0] && !preview.folders.includes(choice.folders[0]) && !row.folders.includes(choice.folders[0]) ? choice.folders[0] : ''} onChange={event => update(row.key, { folders: event.target.value ? [event.target.value] : [] })} placeholder="New folder name" /></label>}
+              {(choice.action === 'create' || preview.multipleMemberships) && <label>Use a different flat folder name<input type="text" maxLength={120} value={folderDrafts[row.key] || ''} onChange={event => update(row.key, { folders: event.target.value ? [event.target.value] : [] }, event.target.value)} placeholder="New folder name" /></label>}
             </>}
           </fieldset>
         })}

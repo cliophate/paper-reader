@@ -106,6 +106,34 @@ describe('subscription settings', () => {
     expect(api.apply).toHaveBeenCalledWith('synthetic-preview', [{ key: '1', action: 'create', folders: ['__keep'] }])
   })
 
+  it.each(['existing', 'source'])('keeps typing a folder name that extends the %s name', async source => {
+    if (source === 'existing') preview.folders = ['News']
+    else preview.rows[0].folders = ['News']
+    await render(); await importPreview()
+    const input = form('Confirm subscription import').querySelector<HTMLInputElement>('input[type="text"]')!
+    const name = 'News 2'
+    for (const [index, character] of [...name].entries()) {
+      await enter(input, input.value + character)
+      expect(input.value).toBe(name.slice(0, index + 1))
+    }
+    await submit('Confirm subscription import')
+    expect(api.apply).toHaveBeenCalledWith('synthetic-preview', [{ key: '1', action: 'create', folders: [name] }])
+  })
+
+  it('clears the custom draft when choosing another destination or making a new preview', async () => {
+    await render(); await importPreview()
+    const input = form('Confirm subscription import').querySelector<HTMLInputElement>('input[type="text"]')!
+    await enter(input, 'Custom folder')
+    await select(form('Confirm subscription import').querySelectorAll<HTMLSelectElement>('select')[1], 'folder:Reading')
+    expect(input.value).toBe('')
+    await submit('Confirm subscription import')
+    expect(api.apply).toHaveBeenLastCalledWith('synthetic-preview', [{ key: '1', action: 'create', folders: ['Reading'] }])
+    await importPreview()
+    await enter(form('Confirm subscription import').querySelector<HTMLInputElement>('input[type="text"]')!, 'Another draft')
+    await importPreview()
+    expect(form('Confirm subscription import').querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe('')
+  })
+
   it('keeps per-item outcomes after navigation refresh fails, and refresh does not replay writes', async () => {
     changed.mockRejectedValueOnce(new Error('offline'))
     vi.mocked(api.apply).mockResolvedValue({ results: [{ key: '1', status: 'failed', message: 'May have been partly applied. Preview again.' }] })
