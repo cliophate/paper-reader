@@ -24,6 +24,11 @@ describe('feed discovery documents', () => {
     await expect(discoverFeeds('https://user:password@example.test/', transport)).rejects.toThrow()
     expect(transport).toHaveBeenCalledTimes(1)
   })
+  it('rejects deeply nested HTML before constructing a large tree and ignores inert links', () => {
+    expect(() => parse('<div>'.repeat(10000) + '</div>'.repeat(10000))).toThrow(/structure limit/)
+    expect(() => parse('<br>'.repeat(100001))).toThrow(/structure limit/)
+    expect(parse('<template><base href="https://bad.test/"><link rel="alternate" type="application/rss+xml" href="/rss"></template><title>A &amp; B</title><link rel="alternate" type="application/rss+xml" href="feed">').candidates).toEqual([{ url: 'https://example.test/redirected/feed', title: 'A & B', format: 'rss' }])
+  })
   it('bounds advertised candidates', () => {
     expect(() => parse(Array.from({ length: 101 }, (_, i) => `<link rel="alternate" type="application/rss+xml" href="/${i}">`).join(''))).toThrow(/100 feeds/)
   })

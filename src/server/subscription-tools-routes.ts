@@ -1,4 +1,4 @@
-import { Router } from 'express'
+import { Router, json } from 'express'
 import { discoverFeeds, type DiscoveryTransport } from './feed-discovery.js'
 import { exportOpml, portableUrl, SubscriptionInputError } from './opml.js'
 import { ImportConflictError, SubscriptionImporter, type SubscriptionImportStore } from './subscription-import.js'
@@ -8,6 +8,7 @@ export function subscriptionToolsRoutes(store: SubscriptionImportStore, transpor
   const router = Router()
   const importer = new SubscriptionImporter(store)
   router.use((_request, response, next) => { response.set('Cache-Control', 'no-store'); next() })
+  router.use(json({ limit: '7mb' }))
   router.post('/discover', async (request, response, next) => {
     try {
       if (typeof request.body?.url !== 'string' || request.body.url.length > 4096) throw new SubscriptionInputError('Enter a complete website or feed URL.')
@@ -41,6 +42,8 @@ export function subscriptionToolsRoutes(store: SubscriptionImportStore, transpor
     } catch (error) { next(error) }
   })
   router.use((error: unknown, _request: import('express').Request, response: import('express').Response, _next: import('express').NextFunction) => {
+    if ((error as { type?: string })?.type === 'entity.too.large') return response.status(413).json({ error: 'The import request is too large.' })
+    if (error instanceof SyntaxError) return response.status(400).json({ error: 'Send a valid JSON subscription request.' })
     if (error instanceof ImportConflictError) return response.status(409).json({ code: error.code, error: error.message, currentRevision: error.currentRevision })
     if (error instanceof SubscriptionInputError) return response.status(400).json({ error: error.message })
     // Provider/transport exceptions can contain URLs or tokens. Never echo them.

@@ -12,6 +12,7 @@ import { fullTextMode, setFullTextMode, type FullTextMode } from './fullTextPref
 import { FeedRepair } from './components/FeedRepair'
 import { ArticleDiscussion } from './components/ArticleDiscussion'
 import { ConnectionSettings } from './components/ConnectionSettings'
+import { FeedSettings } from './components/FeedSettings'
 import { isDarkTheme, toggledTheme } from './appearance'
 import { removeBrokenArticleImage, shouldShowArticleLeadImage } from './articleImages'
 import { Icon } from './components/Icon'
@@ -2115,7 +2116,7 @@ function Settings({ section, setSection, initialFeedId, navigation, onChanged, o
   onClose: () => void
 }) {
   const content = section === 'feeds'
-    ? <FeedManager initialFeedId={initialFeedId} navigation={navigation} onChanged={onChanged} notify={notify} />
+    ? <FeedSettings onChanged={onChanged}><FeedManager initialFeedId={initialFeedId} navigation={navigation} onChanged={onChanged} notify={notify} /></FeedSettings>
     : section === 'filters'
       ? <FiltersSettings feeds={uniqueFeeds(navigation)} onChanged={onFiltersChanged} notify={notify} />
       : section === 'reports'

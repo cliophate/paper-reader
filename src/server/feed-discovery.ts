@@ -1,4 +1,4 @@
-import { JSDOM } from 'jsdom'
+import { Parser } from 'htmlparser2'
 import { parseFeed, feedUrl, FEED_LIMITS } from './feed-parser.js'
 import { SubscriptionInputError, portableUrl } from './opml.js'
 import type { DiscoveryCandidate, DiscoveryResult } from '../shared/subscription-tools.js'
@@ -6,7 +6,7 @@ import type { DiscoveryCandidate, DiscoveryResult } from '../shared/subscription
 export interface DiscoveryDocument { body: string; responseUrl: string; contentType: string }
 export type DiscoveryTransport = (url: string) => Promise<DiscoveryDocument>
 
-// No resources or scripts are loaded by JSDOM. Network policy belongs to the
+// Streaming HTML parsing loads no resources or scripts. Network policy belongs to the
 // shared HTTP transport, including the final URL and every redirect.
 export function parseDiscoveryDocument({ body, responseUrl, contentType }: DiscoveryDocument): DiscoveryResult {
   if (Buffer.byteLength(body, 'utf8') > FEED_LIMITS.bytes) throw new SubscriptionInputError('Discovery document exceeds the size limit.')
@@ -22,23 +22,38 @@ export function parseDiscoveryDocument({ body, responseUrl, contentType }: Disco
       if (/xml|rss|atom/i.test(contentType) || /^\s*(?:<\?xml|<rss[\s>]|<feed[\s>])/i.test(body)) throw new SubscriptionInputError('The URL did not return a valid RSS or Atom feed.')
     }
   }
-  const dom = new JSDOM(body, { url: responseUrl })
-  try {
-    const document = dom.window.document
-    const rawBase = document.querySelector('base[href]')?.getAttribute('href')
-    const base = rawBase ? feedUrl(rawBase, responseUrl) || responseUrl : responseUrl
-    const candidates: DiscoveryCandidate[] = []
-    for (const link of document.querySelectorAll('link[href]')) {
-      if (!(link.getAttribute('rel') || '').toLowerCase().split(/\s+/).includes('alternate')) continue
-      const type = (link.getAttribute('type') || '').split(';')[0].trim().toLowerCase()
+  let base = responseUrl, sawBase = false, title = '', sawTitle = false, titleDepth = 0, nodes = 0
+  const stack: string[] = []
+  const links: Array<{ href: string; title: string; format: DiscoveryCandidate['format'] }> = []
+  const parser = new Parser({
+    onopentag(name, attributes) {
+      if (++nodes > FEED_LIMITS.nodes || stack.length >= FEED_LIMITS.depth) throw new SubscriptionInputError('Discovery HTML exceeds the structure limit.')
+      stack.push(name)
+      if (stack.some(tag => ['script', 'template', 'svg', 'math'].includes(tag))) return
+      if (name === 'base' && !sawBase && attributes.href !== undefined) {
+        sawBase = true; base = feedUrl(attributes.href, responseUrl) || responseUrl
+      }
+      if (name === 'title' && !sawTitle) { sawTitle = true; titleDepth = stack.length }
+      if (name !== 'link' || !(attributes.rel || '').toLowerCase().split(/\s+/).includes('alternate')) return
+      const type = (attributes.type || '').split(';')[0].trim().toLowerCase()
       const format = type === 'application/atom+xml' ? 'atom' : type === 'application/rss+xml' ? 'rss' : type === 'application/rdf+xml' ? 'rdf' : null
-      const url = portableUrl(feedUrl(link.getAttribute('href') || '', base))
-      if (!format || !url || candidates.some(candidate => candidate.url === url)) continue
-      if (candidates.length >= 100) throw new SubscriptionInputError('The page advertises more than 100 feeds. Use a feed URL directly.')
-      candidates.push({ url, title: (link.getAttribute('title') || document.title || url).trim().slice(0, 240), format })
-    }
-    return { responseUrl: safeResponseUrl, candidates }
-  } finally { dom.window.close() }
+      if (format && attributes.href) {
+        if (links.length >= 1000) throw new SubscriptionInputError('The page advertises too many feed links. Use a feed URL directly.')
+        links.push({ href: attributes.href, title: (attributes.title || '').trim().slice(0, 240), format })
+      }
+    },
+    ontext(text) { if (titleDepth && stack.length === titleDepth) title = (title + text).slice(0, 240) },
+    onclosetag() { if (titleDepth === stack.length) titleDepth = 0; stack.pop() },
+  }, { decodeEntities: true })
+  parser.write(body); parser.end()
+  const candidates: DiscoveryCandidate[] = []
+  for (const link of links) {
+    const url = portableUrl(feedUrl(link.href, base))
+    if (!url || candidates.some(candidate => candidate.url === url)) continue
+    if (candidates.length >= 100) throw new SubscriptionInputError('The page advertises more than 100 feeds. Use a feed URL directly.')
+    candidates.push({ url, title: link.title || title.trim() || url, format: link.format })
+  }
+  return { responseUrl: safeResponseUrl, candidates }
 }
 
 export async function discoverFeeds(url: string, transport: DiscoveryTransport): Promise<DiscoveryResult> {

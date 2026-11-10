@@ -15,7 +15,7 @@ afterEach(() => { resources.reverse().forEach(cleanup => cleanup()); resources.l
 function local() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-opml-'))
   const db = new PaperDatabase(path.join(directory, 'paper.sqlite'))
-  db.bindBackend({ id: 'synthetic-standalone', kind: 'standalone', displayName: 'Synthetic' })
+  db.bindBackend({ id: 'synthetic-standalone', kind: 'standalone' })
   resources.push(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
   const store = localImportStore(db, 'synthetic-standalone')
   return { db, store, importer: new SubscriptionImporter(store) }

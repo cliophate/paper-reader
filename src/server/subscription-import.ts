@@ -9,8 +9,8 @@ export interface SubscriptionImportStore {
   backendId: string
   kind: 'freshrss' | 'standalone'
   snapshot(): Promise<ImportSnapshot>
-  create(row: ImportRow, folders: string[], expectedRevision: number | null): Promise<string | undefined>
-  setFolders(id: string, folders: string[], expectedRevision: number | null): Promise<void>
+  create(row: ImportRow, folders: string[], expectedRevision: number | null): Promise<string | { id?: string; refreshError?: string } | undefined>
+  setFolders(id: string, folders: string[], expectedRevision: number | null): Promise<{ refreshError?: string } | void>
 }
 export class ImportConflictError extends Error {
   readonly code = 'conflict'
@@ -37,7 +37,7 @@ export class SubscriptionImporter {
       multipleMemberships: snapshot.capabilities.multipleMemberships,
     }
     if (this.store.kind === 'freshrss') value.warnings.push('FreshRSS applies one subscription at a time and cannot guarantee atomic imports. A failed request may have changed the remote account. Refresh and preview again before retrying.')
-    if (!value.multipleMemberships) value.warnings.push('Choose one folder per imported subscription. FreshRSS does not support multiple memberships through Paper. Keep existing folders leaves a reused subscription unchanged.')
+    if (!value.multipleMemberships) value.warnings.push('Choose one folder per imported subscription. FreshRSS does not support multiple memberships through Paper. Keep existing folders leaves a reused subscription unchanged. Reused feeds can move to existing folders; new folder names can accompany new subscriptions.')
     for (const [token, preview] of this.previews) if (preview.expires <= this.now()) this.previews.delete(token)
     while (this.previews.size >= 8) this.previews.delete(this.previews.keys().next().value!)
     this.previews.set(value.token, { value, fingerprint: signature(snapshot), expires: this.now() + 10 * 60_000 })
@@ -67,16 +67,20 @@ export class SubscriptionImporter {
           if (choice.action === 'create') {
             if (choice.folders === null) throw new SubscriptionInputError('Choose a folder or Uncategorized for a new subscription.')
             if (this.store.kind === 'freshrss' && subscriptionList(snapshot.navigation).some(({ feed }) => subscriptionUrl(feed.url) === row.url)) throw new SubscriptionInputError('FreshRSS cannot create a distinct subscription at this URL. Choose an existing subscription explicitly or skip this row.')
-            const id = await this.store.create(row, choice.folders, snapshot.revision)
-            results.push({ key: row.key, status: 'created', ...(id ? { id } : {}), message: 'Subscription added.' })
+            const created = await this.store.create(row, choice.folders, snapshot.revision)
+            const id = typeof created === 'string' ? created : created?.id
+            const warning = typeof created === 'object' ? created.refreshError : undefined
+            results.push({ key: row.key, status: 'created', ...(id ? { id } : {}), message: `Subscription added.${warning ? ` ${warning}` : ''}` })
           } else {
             const existing = subscriptionList(snapshot.navigation).find(({ feed }) => feed.id === choice.existingId)
             if (!existing || !row.matches.some(match => match.id === choice.existingId)) throw new SubscriptionInputError('Choose an existing subscription shown in this preview, or preview again.')
+            let refreshError: string | undefined
             if (choice.folders !== null) {
               if (!snapshot.capabilities.moveFeed) throw new SubscriptionInputError('Folder changes are not supported by this backend.')
-              await this.store.setFolders(existing.feed.id, choice.folders, snapshot.revision)
+              const outcome = await this.store.setFolders(existing.feed.id, choice.folders, snapshot.revision)
+              refreshError = outcome?.refreshError
             }
-            results.push({ key: row.key, status: 'reused', id: existing.feed.id, message: choice.folders === null ? 'Existing subscription kept, including its title, URL and folders.' : 'Existing subscription kept with the chosen folder mapping. Its title and URL were unchanged.' })
+            results.push({ key: row.key, status: 'reused', id: existing.feed.id, message: choice.folders === null ? 'Existing subscription kept, including its title, URL and folders.' : `Existing subscription kept with the chosen folder mapping. Its title and URL were unchanged.${refreshError ? ` ${refreshError}` : ''}` })
           }
         } catch (error) {
           results.push({ key: row.key, status: 'failed', message: error instanceof SubscriptionInputError || error instanceof ImportConflictError ? error.message : 'Could not finish this item. It may have been partly applied. Refresh subscriptions and make a new preview before retrying.' })
@@ -104,7 +108,7 @@ export function validateFolderNames(folders: string[] | null, navigation: Naviga
   const key = (name: string) => name.normalize('NFKC').toLowerCase()
   const used = new Set<string>()
   for (const name of folders) {
-    if (!name.trim() || name !== name.trim().normalize('NFC') || name.length > 120 || key(name) === 'uncategorized' || /[\u0000-\u001f]/.test(name)) throw new SubscriptionInputError('Folder names must be 1–120 characters. Choose Uncategorized with the empty folder option.')
+    if (!name.trim() || name !== name.trim().normalize('NFC') || name.length > 120 || key(name) === 'uncategorized' || /[\u0000-\u001f]/.test(name)) throw new SubscriptionInputError('Folder names must be 1 to 120 characters. Choose Uncategorized with the empty folder option.')
     if (used.has(key(name)) || navigation.folders.some(folder => key(folder.title) === key(name) && folder.title !== name)) throw new SubscriptionInputError('Folder names collide. Choose an existing folder or use a distinct name.')
     used.add(key(name))
   }

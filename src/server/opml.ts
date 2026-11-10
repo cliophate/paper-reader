@@ -37,7 +37,7 @@ export function portableUrl(value: string): string {
 export function parseOpml(xml: string): OpmlDocument {
   if (Buffer.byteLength(xml, 'utf8') > OPML_LIMITS.bytes) throw new SubscriptionInputError('OPML exceeds the 1 MiB limit.')
   const parser = new SaxesParser({ xmlns: true })
-  const stack: Array<{ name: string; path: string[]; outline: boolean }> = []
+  const stack: Array<{ name: string; path: string[]; outline: boolean; body: boolean }> = []
   const subscriptions: OpmlSubscription[] = []
   const warnings = new Set<string>()
   let nodes = 0, bodies = 0, outlines = 0
@@ -48,8 +48,9 @@ export function parseOpml(xml: string): OpmlDocument {
     const parent = stack.at(-1)
     const name = tag.uri ? '' : tag.local
     if (!parent && name !== 'opml') throw new SubscriptionInputError('Expected an OPML document.')
-    if (name === 'body' && parent?.name === 'opml') bodies++
-    const outline = name === 'outline' && (parent?.name === 'body' || parent?.outline === true)
+    if (name === 'body' && stack.length === 1 && parent?.name === 'opml') bodies++
+    const body = name === 'body' && stack.length === 1 && parent?.name === 'opml'
+    const outline = name === 'outline' && (parent?.body === true || parent?.outline === true)
     let path = parent?.path || []
     if (outline) {
       const attribute = (name: string, uri = '') => Object.values(tag.attributes).find(a => a.local === name && a.uri === uri)?.value || ''
@@ -63,6 +64,7 @@ export function parseOpml(xml: string): OpmlDocument {
         // Only this extension identifies repeated memberships. Equal URLs do not.
         const previous = identity && /^[a-f0-9]{64}$/.test(identity) ? subscriptions.find(row => row.identity === identity) : undefined
         if (previous && previous.url === url && !problem && !previous.problem) {
+          if (title && title !== previous.title) warnings.add('Repeated membership outlines disagree on a title. The first title is shown; reused subscriptions keep their current title.')
           if (!previous.paths.some(p => JSON.stringify(p) === JSON.stringify(path))) previous.paths.push(path)
         } else {
           subscriptions.push({ key: String(outlines), title: title.slice(0, 240) || url || 'Invalid subscription', url, paths: [path], identity: /^[a-f0-9]{64}$/.test(identity) ? identity : '', ...(problem ? { problem } : {}) })
@@ -73,7 +75,7 @@ export function parseOpml(xml: string): OpmlDocument {
         else warnings.add('An unnamed group was flattened into its parent group.')
       }
     }
-    stack.push({ name, path, outline })
+    stack.push({ name, path, outline, body })
   })
   parser.on('closetag', () => { stack.pop() })
   parser.write(xml).close()
@@ -119,7 +121,7 @@ export function previewOpml(document: OpmlDocument, navigation: NavigationPayloa
   })
 }
 
-const escapeXml = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[char]!)
+const escapeXml = (value: string) => value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g, '').replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\ufffd').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[char]!)
 
 export function exportOpml(navigation: NavigationPayload, backendId: string): { xml: string; omitted: number } {
   let omitted = 0

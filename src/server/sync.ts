@@ -80,11 +80,18 @@ export class BackendSynchronizer {
     })
   }
 
+  // A resolved result confirms the remote add. A later local refresh failure
+  // is a warning and must not invite callers to replay the add.
   async addFeed(url: string, title: string, folder: string) {
-    await this.exclusive(async () => {
+    return this.exclusive(async (): Promise<{ refreshError?: string }> => {
       await this.backend.addFeed(url, title, folder)
-      if (this.enabled) await this.pullNavigation()
-      this.db.recordActivity({ kind: 'feed', origin: 'settings', summary: `Added ${title || url}`, count: 1, details: { url, title, folder } })
+      try {
+        if (this.enabled) await this.pullNavigation()
+        this.db.recordActivity({ kind: 'feed', origin: 'settings', summary: `Added ${title || url}`, count: 1, details: { url, title, folder } })
+        return {}
+      } catch {
+        return { refreshError: 'FreshRSS confirmed the subscription, but Paper could not refresh its local cache. Refresh before making more changes.' }
+      }
     })
   }
 

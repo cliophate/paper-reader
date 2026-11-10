@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { subscriptionToolsApi as api } from '../subscriptionToolsApi'
 import type { DiscoveryResult, ImportChoice, ImportPreview, ImportResult, ImportRow } from '../../shared/subscription-tools'
 import './SubscriptionTools.css'
@@ -14,12 +14,15 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
   const [result, setResult] = useState<{ result: ImportResult; rows: ImportRow[] } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [message, setMessage] = useState('')
   const [exported, setExported] = useState<{ xml: string; omitted: number } | null>(null)
   const [refreshFailed, setRefreshFailed] = useState(false)
+  const previewHeading = useRef<HTMLHeadingElement>(null)
+  const resultHeading = useRef<HTMLHeadingElement>(null)
+  useEffect(() => { if (preview) previewHeading.current?.focus() }, [preview])
+  useEffect(() => { if (result) resultHeading.current?.focus() }, [result])
 
   async function run(action: () => Promise<void>) {
-    setBusy(true); setError(''); setMessage('')
+    setBusy(true); setError('')
     try { await action() }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'The subscription request failed.') }
     finally { setBusy(false) }
@@ -43,7 +46,7 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
     if (!preview) return
     const current = preview
     // Clear before sending. A lost response must never invite replay of writes.
-    setPreview(null)
+    setPreview(null); setExported(null)
     try {
       const applied = await api.apply(current.token, choices)
       setResult({ result: applied, rows: current.rows })
@@ -102,13 +105,13 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
       </div>
     </fieldset>
     {preview && <form className="opml-preview" aria-label="Confirm subscription import" onSubmit={event => submit(event, apply)}>
-      <h4>Review {preview.rows.length} subscription{preview.rows.length === 1 ? '' : 's'}</h4>
+      <h4 ref={previewHeading} tabIndex={-1}>Review {preview.rows.length} subscription{preview.rows.length === 1 ? '' : 's'}</h4>
       <p>Duplicate policy: reuse a named subscription or skip it. Reuse keeps its title and URL. Distinct subscriptions are never merged by URL. FreshRSS cannot create a second subscription with an already subscribed URL.</p>
       {preview.warnings.map(warning => <p key={warning}>{warning}</p>)}
       <fieldset disabled={busy}>
         {preview.rows.map(row => {
           const choice = choices.find(choice => choice.key === row.key)!
-          const folderOptions = [...new Set([...preview.folders, ...row.folders.filter(Boolean)])]
+          const folderOptions = [...new Set([...preview.folders, ...(choice.action === 'reuse' && !preview.multipleMemberships ? [] : row.folders.filter(Boolean)), ...(choice.folders || [])])]
           return <fieldset className="opml-row" key={row.key}><legend>{row.title}</legend>
             <p className="subscription-url">{row.url}</p>
             <p>Source groups: {row.sourcePaths.map(path => path.length ? JSON.stringify(path) : 'Uncategorized').join(', ')}</p>
@@ -124,11 +127,11 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
               {row.matches.map(match => <option key={match.id} value={`reuse:${match.id}`}>Reuse {match.title} · {match.url} · {match.folders.join(', ') || 'Uncategorized'}</option>)}
             </>}</select></label>
             {choice.action !== 'skip' && <>
-              {preview.multipleMemberships ? <label>Destination folders, one per line<textarea value={choice.folders?.join('\n') ?? ''} onChange={event => update(row.key, { folders: event.target.value.split('\n').filter(Boolean) })} rows={2} /></label> : <label>Destination for {row.title}<select value={choice.folders === null ? '__keep' : choice.folders[0] || ''} onChange={event => update(row.key, { folders: event.target.value === '__keep' ? null : event.target.value ? [event.target.value] : [] })}>
-                {choice.action === 'reuse' && <option value="__keep">Keep existing folders</option>}
-                <option value="">Uncategorized</option>{folderOptions.map(folder => <option key={folder} value={folder}>{folder}</option>)}
+              {preview.multipleMemberships ? <label>Destination folders, one per line<textarea value={choice.folders?.join('\n') ?? ''} onChange={event => update(row.key, { folders: event.target.value.split('\n').filter(Boolean) })} rows={2} /></label> : <label>Destination for {row.title}<select value={choice.folders === null ? 'keep' : choice.folders[0] ? `folder:${choice.folders[0]}` : 'none'} onChange={event => update(row.key, { folders: event.target.value === 'keep' ? null : event.target.value.startsWith('folder:') ? [event.target.value.slice(7)] : [] })}>
+                {choice.action === 'reuse' && <option value="keep">Keep existing folders</option>}
+                <option value="none">Uncategorized</option>{folderOptions.map(folder => <option key={folder} value={`folder:${folder}`}>{folder}</option>)}
               </select></label>}
-              <label>Use a different flat folder name<input type="text" maxLength={120} value={choice.folders?.[0] && !folderOptions.includes(choice.folders[0]) ? choice.folders[0] : ''} onChange={event => update(row.key, { folders: event.target.value ? [event.target.value] : [] })} placeholder="New folder name" /></label>
+              {(choice.action === 'create' || preview.multipleMemberships) && <label>Use a different flat folder name<input type="text" maxLength={120} value={choice.folders?.[0] && !preview.folders.includes(choice.folders[0]) && !row.folders.includes(choice.folders[0]) ? choice.folders[0] : ''} onChange={event => update(row.key, { folders: event.target.value ? [event.target.value] : [] })} placeholder="New folder name" /></label>}
             </>}
           </fieldset>
         })}
@@ -136,9 +139,8 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
         <button type="button" onClick={() => setPreview(null)}>Cancel preview</button>
       </fieldset>
     </form>}
-    {result && <div className="opml-results" role="status"><h4>Import results</h4><ul>{result.result.results.map(item => <li key={item.key}><strong>{result.rows.find(row => row.key === item.key)?.title}</strong>: {item.status}. {item.message}</li>)}</ul><p>Make a new preview before retrying any failed items.</p></div>}
+    {result && <div className="opml-results" role="status"><h4 ref={resultHeading} tabIndex={-1}>Import results</h4><ul>{result.result.results.map(item => <li key={item.key}><strong>{result.rows.find(row => row.key === item.key)?.title}</strong>: {item.status}. {item.message}</li>)}</ul><p>Make a new preview before retrying any failed items.</p></div>}
     {busy && <p role="status">Working on subscriptions...</p>}
-    {message && <p role="status">{message}</p>}
     {error && <p role="alert">{error}</p>}
     {refreshFailed && <p role="alert">Subscription requests finished, but navigation could not refresh. Their results still apply. <button disabled={busy} onClick={() => void run(refresh)}>Refresh navigation</button></p>}
   </section>
