@@ -36,18 +36,25 @@ function remote() {
 }
 
 describe('subscription import application', () => {
-  it('imports, exports and repeats a local import without changing subscription identity', async () => {
-    const { store, importer } = local()
+  it('initializes schedules and preserves them with subscription identity through an OPML round trip', async () => {
+    const { db, store, importer } = local()
     const first = await importer.preview(xml)
     const added = await importer.apply(first.token, first.rows.map(row => ({ key: row.key, action: 'create', folders: row.folders.filter(Boolean) })))
     expect(added.results.map(result => result.status)).toEqual(['created', 'created'])
     const before = await store.snapshot()
+    const schedules = added.results.map(result => db.feedFetch.get(store.backendId, result.id!))
+    expect(schedules.map(schedule => schedule?.url)).toEqual(first.rows.map(row => row.url))
+    for (const schedule of schedules) {
+      expect(schedule).toMatchObject({ nextFetchAt: 0, availableAt: 0, failures: 0, etag: '', leaseToken: '' })
+      expect(schedule?.endpointGeneration).toMatch(/^[0-9a-f-]{36}$/)
+    }
     const exported = exportOpml(before.navigation, store.backendId)
     const second = await importer.preview(exported.xml)
     expect(second.rows.every(row => row.suggestedId)).toBe(true)
     const reused = await importer.apply(second.token, second.rows.map(row => ({ key: row.key, action: 'reuse', existingId: row.suggestedId, folders: row.folders.filter(Boolean) })))
     expect(reused.results.map(result => result.id)).toEqual(added.results.map(result => result.id))
     expect(await store.snapshot()).toEqual(before)
+    expect(added.results.map(result => db.feedFetch.get(store.backendId, result.id!))).toEqual(schedules)
   })
 
   it('preserves multiple memberships and distinct same-URL subscriptions in a round trip', async () => {
