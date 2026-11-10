@@ -70,15 +70,16 @@ discussions, briefings, collections and historical URL associations. Missing
 items are retained. Ingestion never treats absent feed state as an unread or
 starred snapshot.
 
-## Successful fetch contract for #17
+## Successful fetch contract
 
 The HTTP collector supplies `requestUrl`, final `responseUrl`, `fetchedAt`, and a
 persisted opaque `endpointGeneration`. Change the generation whenever the
 configured endpoint changes, including repairs back to a previously used URL.
 Keep the subscription ID. Before committing a response, the collector must
 verify that its subscription and generation are still current and serialize
-fetch commits for that subscription. These checks and conditional HTTP state
-belong to [#17](https://github.com/cliophate/paper-reader/issues/17).
+fetch commits for that subscription. The
+[standalone collector](feed-scheduling.md) enforces these checks and commits
+conditional HTTP state with the ingestion transaction.
 
 The ingestion module constructs a versioned checkpoint key from a structured
 subscription/generation tuple under the existing backend scope. It stores the
