@@ -21,6 +21,20 @@ afterEach(() => {
 })
 
 describe('Backend synchronization', () => {
+  it('rejects a changed backend before making upstream requests', () => {
+    const source = new FakeBackend([])
+    const navigation = vi.spyOn(source, 'navigation')
+    database.bindBackend({ id: 'fixture:original', kind: 'freshrss' })
+    expect(() => new BackendSynchronizer(database, source, true, [28, 58])).toThrow(/another backend/)
+    expect(navigation).not.toHaveBeenCalled()
+  })
+
+  it('cannot reconcile standalone state through remote snapshots', () => {
+    const source = new FakeBackend([])
+    const backend: ReaderBackend = { ...source, identity: { id: 'standalone:fixture', kind: 'standalone' } } as ReaderBackend
+    expect(() => new BackendSynchronizer(database, backend, true, [28, 58])).toThrow(/remote snapshot/)
+  })
+
   it('compares arrival order independently of publication dates and reader sort preferences', async () => {
     const entries = Array.from({ length: 100 }, (_, index) => entry({
       id: `tag:google.com,2005:reader/item/${index.toString(16).padStart(16, '0')}`,
@@ -330,6 +344,7 @@ describe('Backend synchronization', () => {
 })
 
 class FakeBackend implements ReaderBackend {
+  readonly identity = { id: 'fixture:freshrss', kind: 'freshrss' as const }
   validateFeedId() {}
   unreadIds: string[] = []
   starredIds: string[] = []

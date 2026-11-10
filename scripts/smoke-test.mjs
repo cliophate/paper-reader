@@ -164,7 +164,7 @@ try {
   await stop()
   const cli = spawnSync(process.execPath, ['dist-server/briefing-cli.js', 'morning'], { encoding: 'utf8', env: {
     PATH: process.env.PATH, HOME: temporary, STATE_DIR: path.join(temporary, 'restored'),
-    FRESHRSS_BASE_URL: 'https://example.test', FRESHRSS_USERNAME: 'fixture', FRESHRSS_API_PASSWORD: 'synthetic-password',
+    FRESHRSS_BASE_URL: `http://127.0.0.1:${fixture.address().port}`, FRESHRSS_USERNAME: 'fixture', FRESHRSS_API_PASSWORD: 'synthetic-password',
     PAPER_INTERNAL_SECRET: 'synthetic-internal', PAPER_SIGNING_SECRET: 'synthetic-signing', CODEX_ENABLED: 'true',
   } })
   assert.equal(cli.status, 1)

@@ -23,7 +23,10 @@ export class BackendSynchronizer {
     private readonly backend: ReaderBackend,
     private readonly enabled: boolean,
     private readonly syncMinutes: number[],
-  ) {}
+  ) {
+    if (backend.identity.kind !== 'freshrss') throw new Error('Local state cannot use remote snapshot synchronization')
+    db.bindBackend(backend.identity)
+  }
 
   start() {
     if (!this.enabled || this.timer) return

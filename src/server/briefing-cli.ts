@@ -12,6 +12,7 @@ const config = loadConfig()
 new ConnectionSettings(config)
 const database = new PaperDatabase(config.databasePath)
 const backend = createReaderBackend(config)
+database.bindBackend(backend.identity)
 const repository = new PaperRepository(database)
 const reader = new ReaderService(database, config.readerFallbackEnabled)
 const entries = config.sync.localReads && database.getSyncValue('backfill_complete') === 'true' ? repository : backend

@@ -4,6 +4,9 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { normalizeFeedContent, normalizeFeedThumbnail } from './feed-content.js'
 import { isEditorialLinkedFeed } from './entry-kind.js'
+import { IdentityStore, migrateIdentity, type BackendIdentity, type SourceItemIdentity, type IdentityResolution } from './identity.js'
+import { transaction } from './transaction.js'
+import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
 import type { BriefingSelection, Entry, Feed, Folder, NavigationPayload, StreamRef } from './types.js'
 import type { Topic } from './topics.js'
@@ -146,20 +149,160 @@ export interface CoverageFeedbackRecord {
   createdAt: string
 }
 
+const BACKEND_CHECKPOINTS = new Set(['backfill_complete', 'backfill_continuation', 'last_sync_started_at', 'last_sync_completed_at', 'last_sync_error', 'navigation_synced_at', 'state_synced_at', 'source_content_restored_v6', 'last_deep_sync_at'])
+
 export class PaperDatabase {
   private readonly db: DatabaseSync
   private readonly databasePath: string
+  readonly identities: IdentityStore
+  private activeBackendId = ''
 
   constructor(databasePath: string) {
     this.databasePath = databasePath
     fs.mkdirSync(path.dirname(databasePath), { recursive: true })
     this.db = new DatabaseSync(databasePath)
-    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
-    this.migrate()
+    try {
+      this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
+      this.backupBeforeIdentityMigration()
+      this.migrate()
+      this.identities = new IdentityStore(this.db)
+      this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
+    } catch (error) {
+      this.db.close()
+      throw error
+    }
   }
 
   close() {
     this.db.close()
+  }
+
+  private backupBeforeIdentityMigration() {
+    const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
+    if (version > 7) throw new Error('This database was created by a newer Paper version')
+    if (!version || version >= 7) return
+    const backupPath = `${this.databasePath}.before-identity-v7`
+    if (fs.existsSync(backupPath)) {
+      const backup = new DatabaseSync(backupPath, { readOnly: true })
+      try {
+        const savedVersion = Number(backup.prepare('PRAGMA user_version').get()?.user_version || 0)
+        if (savedVersion < 1 || savedVersion >= 7 || backup.prepare('PRAGMA integrity_check').get()?.integrity_check !== 'ok') {
+          throw new Error('The pre-identity backup is invalid. Preserve it for inspection and restore a verified backup before retrying.')
+        }
+      } finally { backup.close() }
+      return
+    }
+    const temporaryPath = `${backupPath}.${crypto.randomUUID()}.tmp`
+    fs.closeSync(fs.openSync(temporaryPath, 'wx', 0o600))
+    try {
+      this.db.prepare('VACUUM INTO ?').run(temporaryPath)
+      fs.renameSync(temporaryPath, backupPath)
+    } finally { fs.rmSync(temporaryPath, { force: true }) }
+  }
+
+  bindBackend(backend: BackendIdentity) {
+    transaction(this.db, () => {
+      const active = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
+      if (active && active !== backend.id) throw new Error('This database belongs to another backend. Use its original configuration or a separate data directory; backend migration is not enabled.')
+      this.identities.registerBackend(backend)
+      if (active) return
+      if (backend.kind === 'standalone' && (this.entryCount() || this.db.prepare('SELECT 1 FROM feeds LIMIT 1').get())) {
+        throw new Error('Existing FreshRSS data requires an explicit migration before local ownership')
+      }
+      for (const row of this.db.prepare('SELECT id FROM feeds UNION SELECT feed_id AS id FROM entries').all()) {
+        this.identities.subscription(backend.id, String(row.id), String(row.id))
+      }
+      for (const row of this.db.prepare('SELECT id, feed_id FROM entries').all()) {
+        this.identities.adoptArticle(backend.id, String(row.feed_id), String(row.id))
+      }
+      if (this.db.prepare(`SELECT 1 FROM entries e LEFT JOIN article_identities a ON a.id = e.id
+        WHERE a.id IS NULL OR a.backend_id != ? OR a.subscription_id != e.feed_id LIMIT 1`).get(backend.id)) {
+        throw new Error('Article identity adoption is incomplete')
+      }
+      // Legacy databases contain FreshRSS IDs, which encode its arrival order.
+      if (backend.kind === 'freshrss') this.db.prepare("UPDATE entries SET source_order = id WHERE source_order = ''").run()
+      for (const key of BACKEND_CHECKPOINTS) {
+        const row = this.db.prepare('SELECT value FROM sync_state WHERE key = ?').get(key)
+        if (row) this.identities.setCheckpoint(backend.id, key, String(row.value))
+      }
+      this.db.prepare("INSERT INTO sync_state(key, value) VALUES ('active_backend_id', ?)").run(backend.id)
+    })
+    this.activeBackendId = backend.id
+  }
+
+  saveLocalSubscription(backendId: string, feed: { id?: string; title: string; url: string; siteUrl?: string; iconUrl?: string }): string {
+    return transaction(this.db, () => {
+      this.assertLocalBackend(backendId)
+      const id = feed.id || this.identities.createSubscription(backendId)
+      this.identities.assertSubscription(backendId, id)
+      this.db.prepare(`INSERT INTO feeds(id, title, url, site_url, icon_url, synced_at) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET title = excluded.title, url = excluded.url,
+          site_url = excluded.site_url, icon_url = excluded.icon_url, synced_at = excluded.synced_at`)
+        .run(id, feed.title, feed.url, feed.siteUrl || '', feed.iconUrl || '', new Date().toISOString())
+      return id
+    })
+  }
+
+  importSourceEntries(backendId: string, subscriptionId: string, items: Array<{
+    identity: SourceItemIdentity
+    entry: Omit<Entry, 'id' | 'feedId' | 'read' | 'starred' | 'sourceOrder'>
+  }>): IdentityResolution[] {
+    return transaction(this.db, () => {
+      this.assertLocalBackend(backendId)
+      this.identities.assertSubscription(backendId, subscriptionId)
+      return items.map(item => {
+        const result = this.identities.resolve(backendId, subscriptionId, item.identity)
+        if (result.status === 'resolved') {
+          this.upsertEntries([{ ...item.entry, id: result.id, feedId: subscriptionId, read: false, starred: false, sourceOrder: '' }])
+        }
+        return result
+      })
+    })
+  }
+
+  private assertImportedIdentity(entry: Entry) {
+    if (!this.activeBackendId) return
+    const owner = this.identities.article(entry.id)
+    if (owner && (owner.backendId !== this.activeBackendId || owner.subscriptionId !== entry.feedId)) throw new Error('Content import cannot change article ownership')
+    if (this.identities.backend(this.activeBackendId).kind === 'freshrss') {
+      this.identities.subscription(this.activeBackendId, entry.feedId, entry.feedId)
+      this.identities.adoptArticle(this.activeBackendId, entry.feedId, entry.id)
+    } else if (!owner) throw new Error('Resolve local article identity before importing content')
+  }
+
+  private assertLocalBackend(backendId: string) {
+    if (backendId !== this.activeBackendId || this.identities.backend(backendId).kind !== 'standalone') throw new Error('Local state requires the active standalone backend')
+  }
+
+  entryState(id: string): { read: boolean; starred: boolean; revision: number } | null {
+    const row = this.db.prepare('SELECT read, starred, state_revision FROM entries WHERE id = ?').get(id)
+    return row ? { read: Boolean(row.read), starred: Boolean(row.starred), revision: Number(row.state_revision) } : null
+  }
+
+  commitLocalEntryState(backendId: string, ids: string[], operation: EntryStateOperation, options: {
+    expectedRevisions?: Record<string, number>; origin?: string
+  } = {}) {
+    return transaction(this.db, () => {
+      this.assertLocalBackend(backendId)
+      if (!['read', 'unread', 'star', 'unstar'].includes(operation)) throw new Error('Unknown article state operation')
+      const unique = [...new Set(ids)]
+      const states = unique.map(id => {
+        const owner = this.identities.article(id)
+        const state = this.entryState(id)
+        if (!state || owner?.backendId !== backendId) throw new Error('Article does not belong to this backend')
+        if (options.expectedRevisions && options.expectedRevisions[id] !== state.revision) throw new Error('Article state changed. Refresh before retrying.')
+        return { id, ...state }
+      })
+      const column = operation === 'read' || operation === 'unread' ? 'read' : 'starred'
+      const value = operation === 'read' || operation === 'star'
+      const changed = states.filter(state => state[column] !== value)
+      for (const state of changed) this.db.prepare(`UPDATE entries SET ${column} = ?, state_revision = state_revision + 1 WHERE id = ?`).run(value ? 1 : 0, state.id)
+      if (changed.length) this.recordActivity({
+        kind: 'state', origin: options.origin || 'reader', summary: `${operation}: ${changed.length} articles`, count: changed.length,
+        details: { operation, ids: changed.map(state => state.id).slice(0, 30) },
+      })
+      return { ids: changed.map(state => state.id), operation, revisions: Object.fromEntries(states.map(state => [state.id, this.entryState(state.id)!.revision])) }
+    })
   }
 
   discussion(entryId: string): Discussion | null {
@@ -471,14 +614,19 @@ export class PaperDatabase {
         this.db.exec('COMMIT')
       } catch (error) { this.db.exec('ROLLBACK'); throw error }
     }
-    this.db.exec('PRAGMA user_version = 6;')
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 7) transaction(this.db, () => {
+      this.ensureColumn('entries', 'state_revision', 'INTEGER NOT NULL DEFAULT 0')
+      this.ensureColumn('entries', 'source_order', "TEXT NOT NULL DEFAULT ''")
+      migrateIdentity(this.db)
+      this.db.exec('PRAGMA user_version = 7;')
+    })
   }
 
   replaceNavigation(navigation: NavigationPayload) {
+    if (this.activeBackendId && this.identities.backend(this.activeBackendId).kind === 'standalone') throw new Error('Local subscriptions cannot be replaced by remote navigation')
     const now = new Date().toISOString()
     const feeds = uniqueFeeds(navigation)
-    this.db.exec('BEGIN IMMEDIATE')
-    try {
+    transaction(this.db, () => {
       this.db.prepare('UPDATE feeds SET active = 0, synced_at = ?').run(now)
       const upsertFeed = this.db.prepare(`
         INSERT INTO feeds (
@@ -498,6 +646,7 @@ export class PaperDatabase {
           synced_at = excluded.synced_at
       `)
       for (const feed of feeds.values()) {
+        if (this.activeBackendId) this.identities.subscription(this.activeBackendId, feed.id, feed.id)
         upsertFeed.run(
           feed.id, feed.title, feed.url, feed.siteUrl, feed.iconUrl, feed.lastPublishedAt,
           feed.lastCheckedAt, feed.lastErrorAt, feed.broken ? 1 : 0, now,
@@ -513,11 +662,7 @@ export class PaperDatabase {
         for (const feed of folder.feeds) insertMembership.run(feed.id, folder.id)
       })
       this.setSyncValueInTransaction('navigation_synced_at', now)
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
-    }
+    })
   }
 
   upsertEntries(entries: Entry[]) {
@@ -527,8 +672,8 @@ export class PaperDatabase {
       INSERT INTO entries (
         id, feed_id, feed_title, feed_url, title, author, url, canonical_url,
         source_domain, content_html, content_text, excerpt, published_at, timestamp,
-        crawled_at, read, starred, reading_minutes, thumbnail_url, kind, synced_at, first_seen_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        crawled_at, read, starred, reading_minutes, thumbnail_url, kind, synced_at, first_seen_at, source_order
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         feed_id = excluded.feed_id,
         feed_title = excluded.feed_title,
@@ -545,6 +690,7 @@ export class PaperDatabase {
         published_at = excluded.published_at,
         timestamp = excluded.timestamp,
         crawled_at = excluded.crawled_at,
+        source_order = CASE WHEN excluded.source_order = '' THEN entries.source_order ELSE excluded.source_order END,
         read = entries.read,
         starred = entries.starred,
         reading_minutes = excluded.reading_minutes,
@@ -555,9 +701,9 @@ export class PaperDatabase {
     const muteRules = this.db.prepare('SELECT id, phrase, scope, feed_id FROM mute_filters').all() as Array<{ id: string; phrase: string; scope: MuteFilterScope; feed_id: string }>
     const clearMuteMatches = this.db.prepare('DELETE FROM muted_entries WHERE entry_id = ?')
     const addMuteMatch = this.db.prepare('INSERT OR IGNORE INTO muted_entries (filter_id, entry_id) VALUES (?, ?)')
-    this.db.exec('BEGIN IMMEDIATE')
-    try {
+    transaction(this.db, () => {
       for (const entry of entries) {
+        this.assertImportedIdentity(entry)
         const canonicalUrl = normalizeUrl(entry.url)
         statement.run(
           entry.id, entry.feedId, entry.feedTitle, entry.feedUrl, entry.title, entry.author,
@@ -565,23 +711,20 @@ export class PaperDatabase {
           plainText(entry.contentHtml), entry.excerpt, entry.publishedAt, entry.timestamp,
           entry.crawledAt || entry.timestamp,
           entry.read ? 1 : 0, entry.starred ? 1 : 0, entry.readingMinutes,
-          entry.thumbnailUrl, entry.kind, now, Date.parse(now),
+          entry.thumbnailUrl, entry.kind, now, Date.parse(now), entry.sourceOrder || '',
         )
-        const cached = this.getArticle(entry.url)
+        const cached = this.getArticleForEntry(entry.id)
         if (cached) this.db.prepare('UPDATE entries SET full_content_text = ? WHERE id = ?').run(plainText(cached.contentHtml), entry.id)
         clearMuteMatches.run(entry.id)
         for (const rule of muteRules) {
           if (entryMatchesMuteFilter(entry, rule)) addMuteMatch.run(rule.id, entry.id)
         }
       }
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
-    }
+    })
   }
 
   reconcileEntryState(unreadIds: string[], starredIds: string[]) {
+    if (this.activeBackendId && this.identities.backend(this.activeBackendId).kind === 'standalone') throw new Error('Remote snapshots cannot overwrite local state')
     this.db.exec(`
       CREATE TEMP TABLE IF NOT EXISTS incoming_unread (id TEXT PRIMARY KEY) WITHOUT ROWID;
       CREATE TEMP TABLE IF NOT EXISTS incoming_starred (id TEXT PRIMARY KEY) WITHOUT ROWID;
@@ -613,7 +756,8 @@ export class PaperDatabase {
     }
   }
 
-  editLocalEntryState(ids: string[], operation: 'read' | 'unread' | 'star' | 'unstar') {
+  editLocalEntryState(ids: string[], operation: EntryStateOperation) {
+    if (this.activeBackendId && this.identities.backend(this.activeBackendId).kind === 'standalone') throw new Error('Local state changes require an owned state transaction')
     if (!ids.length) return
     const column = operation === 'read' || operation === 'unread' ? 'read' : 'starred'
     const value = operation === 'read' || operation === 'star' ? 1 : 0
@@ -944,9 +1088,9 @@ export class PaperDatabase {
 
   syncEntryIds(stream: StreamRef, unreadOnly = false, limit = 80): string[] {
     const { clauses, parameters } = this.pageScope(stream, { unreadOnly, includeMuted: true })
-    // FreshRSS's API orders by arrival ID, encoded as fixed-width hexadecimal.
-    // Reader pages use publication dates and the user's preferred direction.
-    return this.db.prepare(`SELECT entries.id FROM entries ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY entries.id DESC LIMIT ?`)
+    // Adapters supply source_order; local articles use their durable arrival sequence.
+    // Neither order depends on the Paper article ID or publication date.
+    return this.db.prepare(`SELECT entries.id FROM entries JOIN article_arrivals ON article_arrivals.entry_id = entries.id ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY entries.source_order DESC, article_arrivals.sequence DESC LIMIT ?`)
       .all(...parameters, Math.min(Math.max(limit, 1), 250)).map(row => String(row.id))
   }
 
@@ -1001,7 +1145,8 @@ export class PaperDatabase {
 
   private decorateEntry(entry: Entry): Entry {
     const progress = this.db.prepare('SELECT position, updated_at FROM reading_progress WHERE entry_id = ?').get(entry.id)
-    const saved = this.db.prepare('SELECT saved_at FROM readwise_saves WHERE url = ?').get(entry.url)
+    const saved = this.db.prepare(`SELECT saved_at FROM readwise_saves WHERE url = ? OR url IN
+      (SELECT url FROM article_urls WHERE entry_id = ?) ORDER BY saved_at DESC LIMIT 1`).get(entry.url, entry.id)
     return { ...entry, readingPosition: progress ? Number(progress.position) : undefined, lastReadAt: progress ? String(progress.updated_at) : undefined, readwiseSavedAt: saved ? String(saved.saved_at) : undefined }
   }
 
@@ -1166,10 +1311,15 @@ export class PaperDatabase {
   }
 
   setSyncValue(key: string, value: string) {
+    if (this.activeBackendId && BACKEND_CHECKPOINTS.has(key)) {
+      this.identities.setCheckpoint(this.activeBackendId, key, value)
+      return
+    }
     this.db.prepare(`INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value)
   }
 
   getSyncValue(key: string): string {
+    if (this.activeBackendId && BACKEND_CHECKPOINTS.has(key)) return this.identities.checkpoint(this.activeBackendId, key)
     const row = this.db.prepare('SELECT value FROM sync_state WHERE key = ?').get(key) as { value?: string } | undefined
     return row?.value || ''
   }
@@ -1443,7 +1593,7 @@ export class PaperDatabase {
   }
 
   private setSyncValueInTransaction(key: string, value: string) {
-    this.db.prepare(`INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value)
+    this.setSyncValue(key, value)
   }
 
   private ensureColumn(table: string, column: string, definition: string) {
@@ -1481,6 +1631,16 @@ export class PaperDatabase {
       readingMinutes: Number(row.reading_minutes),
       fetchedAt: String(row.fetched_at),
     }
+  }
+
+  getArticleForEntry(id: string): ArticleCacheRecord | null {
+    const entry = this.db.prepare('SELECT url FROM entries WHERE id = ?').get(id)
+    if (!entry) return null
+    const current = this.getArticle(String(entry.url))
+    if (current) return current
+    const historical = this.db.prepare('SELECT url FROM article_urls WHERE entry_id = ?').all(id)
+      .flatMap(row => { const article = this.getArticle(String(row.url)); return article ? [article] : [] })
+    return historical.sort((left, right) => right.fetchedAt.localeCompare(left.fetchedAt))[0] || null
   }
 
   cacheArticle(article: ArticleCacheRecord) {
