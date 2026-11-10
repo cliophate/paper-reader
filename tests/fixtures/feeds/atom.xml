@@ -1,0 +1,10 @@
+<atom:feed xmlns:atom="http://www.w3.org/2005/Atom" xml:base="https://example.test/root/">
+  <atom:title type="html">Synthetic &lt;b&gt;Atom&lt;/b&gt;</atom:title><atom:author><atom:name>Ada</atom:name></atom:author>
+  <atom:link rel="self" href="feed.xml"/><atom:link href="./"/>
+  <atom:entry xml:base="posts/"><atom:id>urn:story:1</atom:id><atom:title>Plain &lt;title&gt;</atom:title>
+    <atom:link rel="enclosure" href="ignore.mp3"/><atom:link type="text/html" href="one"/>
+    <atom:published>2024-01-01T14:00:00+02:00</atom:published><atom:updated>2026-01-01T00:00:00Z</atom:updated>
+    <atom:content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p xml:base="../images/">Hello <img src="one.jpg"/><a href="../two">Two</a></p></div></atom:content>
+  </atom:entry>
+  <atom:entry><atom:id>urn:story:2</atom:id><atom:title>Updated only</atom:title><atom:updated>2026-01-01T00:00:00Z</atom:updated><atom:content src="https://example.test/private"/><atom:summary type="text">&lt;script&gt;literal&lt;/script&gt;</atom:summary></atom:entry>
+</atom:feed>

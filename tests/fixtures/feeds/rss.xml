@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<rss version="2.0" xmlns:body="http://purl.org/rss/1.0/modules/content/" xmlns:person="http://purl.org/dc/elements/1.1/" xmlns:fake="urn:ignored" xml:base="../">
+  <channel><title>Synthetic &amp; news</title><link>/</link>
+    <item><guid isPermaLink="false">story-1</guid><fake:title>Wrong title</fake:title><title>First &amp; best</title><link>posts/one</link><person:creator>Ada</person:creator><pubDate>Mon, 01 Jan 2024 12:00:00 GMT</pubDate>
+      <description>Short summary</description><body:encoded><![CDATA[<p>Long <b>body</b> <a href="more">more</a><img src="image.jpg" onerror="bad()"><script>bad()</script></p>]]></body:encoded>
+    </item>
+    <item><title>Without a date</title><link>posts/two</link><pubDate>not a date</pubDate><description>Only a summary</description><enclosure type="image/jpeg" url="cover.jpg"/></item>
+  </channel>
+</rss>

@@ -1,0 +1,172 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { PaperDatabase } from '../src/server/db.js'
+import { ingestFeed, successfulFeedFetch, type FeedEndpoint } from '../src/server/feed-ingestion.js'
+import { escapeHtml } from '../src/server/text.js'
+
+let directory: string
+let file: string
+let db: PaperDatabase
+let endpoint: FeedEndpoint
+const backend = { id: 'standalone:ingestion-fixture', kind: 'standalone' as const }
+const url = 'https://example.test/feed'
+const fetchedAt = '2026-11-01T00:00:00.000Z'
+const all = { kind: 'all' as const, id: 'all', title: 'All' }
+const rss = (items = '') => `<rss version="2.0"><channel><title>Fixture</title><link>https://example.test/</link>${items}</channel></rss>`
+function item(id = 'one', link = 'https://example.test/article', title = 'Original', date = '2024-01-01T00:00:00Z', body = '<p>Body</p>') {
+  return `<item>${id ? `<guid isPermaLink="false">${escapeHtml(id)}</guid>` : ''}<title>${escapeHtml(title)}</title><link>${escapeHtml(link)}</link><pubDate>${escapeHtml(date)}</pubDate><description>${escapeHtml(body)}</description></item>`
+}
+function ingest(xml = rss(item()), changes: Partial<Parameters<typeof ingestFeed>[1]> = {}) {
+  return ingestFeed(db, { ...endpoint, xml, requestUrl: url, responseUrl: url, fetchedAt, ...changes })
+}
+function resolvedId(result: ReturnType<typeof ingest>) {
+  const resolution = result.results[0]
+  if (resolution.status !== 'resolved') throw new Error('Expected resolved article')
+  return resolution.id
+}
+function sql<T>(run: (connection: DatabaseSync) => T): T {
+  const connection = new DatabaseSync(file)
+  try { return run(connection) } finally { connection.close() }
+}
+function reopen() { db.close(); db = new PaperDatabase(file) }
+function arrivals() { return sql(c => c.prepare('SELECT entry_id, sequence FROM article_arrivals ORDER BY sequence').all()) }
+
+beforeEach(() => {
+  directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-issue16-'))
+  file = path.join(directory, 'paper.sqlite')
+  db = new PaperDatabase(file)
+  db.bindBackend(backend)
+  endpoint = { backendId: backend.id, subscriptionId: db.saveLocalSubscription(backend.id, { title: 'Fixture', url }), endpointGeneration: 'generation-1' }
+})
+afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
+
+describe('repeatable feed ingestion', () => {
+  it('preserves state and references through updates, redirects, disappearance, repair and restart', () => {
+    const id = resolvedId(ingest())
+    const related = resolvedId(ingest(rss(item('related', '/related'))))
+    const third = resolvedId(ingest(rss(item('third', '/third'))))
+    const initialArrivals = arrivals()
+    const firstSeen = sql(c => c.prepare('SELECT first_seen_at FROM entries WHERE id = ?').get(id)?.first_seen_at)
+    db.commitLocalEntryState(backend.id, [id], 'read')
+    db.commitLocalEntryState(backend.id, [id], 'star')
+    db.saveReadingProgress(id, 0.42)
+    db.recordReadwiseSave('https://example.test/article')
+    db.cacheArticle({ url: 'https://example.test/article', title: 'Original', byline: '', excerpt: '', contentHtml: '<p>Cachedfulltext</p>', readingMinutes: 1, fetchedAt })
+    db.saveDiscussion({ entryId: id, revision: 1, source: { title: 'Original', author: '', url: 'https://example.test/article', kind: 'feed', paragraphs: [], warning: '' }, messages: [{ id: 'message', role: 'user', text: 'Keep this', status: 'complete' }] })
+    db.savePulseBatch([{ id: 'collection', headline: 'Collection', scope: 'Related', entryIds: [id, related, third] }], [id, related, third], fetchedAt)
+    db.createBriefing({ id: 'briefing', kind: 'morning', windowStart: fetchedAt, cutoff: fetchedAt, subject: 'Synthetic', html: '', text: '', status: 'generated', tokenHash: 'synthetic', selection: { news: [{ headline: 'Story', summary: '', entryIds: [id] }], worthNoticing: [], social: [] }, createdAt: fetchedAt, deliveredAt: null, acknowledgedAt: null }, [{ id, section: 'news' }])
+    ingest(rss())
+    expect(db.entryCount()).toBe(3)
+    db.saveLocalSubscription(backend.id, { id: endpoint.subscriptionId, title: 'Repaired', url: 'https://example.test/repaired' })
+    const updated = rss(item('one', '/moved', 'Updated', '2024-01-01T00:00:00Z', '<p>Changed body</p>'))
+    expect(resolvedId(ingest(updated, { requestUrl: 'https://example.test/repaired', responseUrl: 'https://redirect.test/final/feed', endpointGeneration: 'generation-2' }))).toBe(id)
+    reopen()
+    expect(resolvedId(ingest(updated, { requestUrl: 'https://example.test/repaired', responseUrl: 'https://redirect.test/final/feed', endpointGeneration: 'generation-2' }))).toBe(id)
+    expect(db.localEntry(id)).toMatchObject({ title: 'Updated', url: 'https://redirect.test/moved', read: true, starred: true, readingPosition: 0.42, readwiseSavedAt: expect.any(String) })
+    expect(db.entryState(id)?.revision).toBe(2)
+    expect(db.discussion(id)?.messages[0].text).toBe('Keep this')
+    expect(db.entryIdsForBriefing('briefing')).toEqual([id])
+    expect(db.getBriefing('briefing')?.selection.news[0].entryIds).toEqual([id])
+    expect(db.pulseCollections()[0].sources.map(source => source.id)).toContain(id)
+    expect(db.getArticleForEntry(id)?.contentHtml).toContain('Cachedfulltext')
+    expect(arrivals()).toEqual(initialArrivals)
+    expect(sql(c => c.prepare('SELECT first_seen_at FROM entries WHERE id = ?').get(id)?.first_seen_at)).toBe(firstSeen)
+  })
+  it('retains backdated entries and separates source dates, durable arrival and successful fetch time', () => {
+    const first = resolvedId(ingest())
+    const second = resolvedId(ingest(rss(item('two', '/older', 'Older', '2001-01-01T00:00:00Z')), { fetchedAt: '2026-11-02T00:00:00Z' }))
+    expect(db.localEntry(second)?.publishedAt).toBe('2001-01-01T00:00:00.000Z')
+    expect(arrivals().map(row => row.entry_id)).toEqual([first, second])
+    expect(db.syncEntryIds(all)).toEqual([second, first])
+    expect(successfulFeedFetch(db, endpoint)?.fetchedAt).toBe('2026-11-02T00:00:00.000Z')
+  })
+  it('keeps missing publication dates absent and fallback identity independent of fetch time', () => {
+    const xml = rss(item('', '/undated', 'Undated', ''))
+    const id = resolvedId(ingest(xml))
+    expect(resolvedId(ingest(xml, { fetchedAt: '2026-11-03T00:00:00Z' }))).toBe(id)
+    expect(db.localEntry(id)).toMatchObject({ publishedAt: '', timestamp: 0 })
+    expect(resolvedId(ingest(rss(item('new-guid', '/undated', 'Undated', ''))))).toBe(id)
+  })
+  it('never infers changed GUIDs from reused URLs, even with identical date and content', () => {
+    const first = resolvedId(ingest())
+    const second = resolvedId(ingest(rss(item('changed-guid'))))
+    expect(second).not.toBe(first)
+    expect(db.entryCount()).toBe(2)
+    const otherSubscription = db.saveLocalSubscription(backend.id, { title: 'Other', url })
+    expect(resolvedId(ingest(rss(item()), { subscriptionId: otherSubscription }))).not.toBe(first)
+  })
+  it('accepts explicit prior-ID evidence and retains both aliases across URL and content changes', () => {
+    const id = resolvedId(ingest())
+    const updated = rss(item('new-id', '/new-url', 'Updated'))
+    expect(resolvedId(ingest(updated, { verifiedAliasChanges: [{ externalId: 'new-id', previousExternalIds: ['one'], evidence: 'Synthetic publisher change confirmed by operator' }] }))).toBe(id)
+    expect(resolvedId(ingest(updated))).toBe(id)
+    expect(resolvedId(ingest())).toBe(id)
+    expect(() => ingest(updated, { verifiedAliasChanges: [{ externalId: 'new-id', previousExternalIds: ['one'], evidence: '' }] })).toThrow(/verified/)
+  })
+  it('records ambiguities without reconciling state and commits unrelated items with a successful checkpoint', () => {
+    const first = resolvedId(ingest())
+    const second = resolvedId(ingest(rss(item('two'))))
+    db.commitLocalEntryState(backend.id, [first], 'star')
+    const result = ingest(rss(item('') + item('three', '/unique')), { fetchedAt: '2026-11-04T00:00:00Z' })
+    expect(result).toMatchObject({ resolved: 1, ambiguous: 1 })
+    expect(result.results[0]).toMatchObject({ status: 'ambiguous', candidateIds: expect.arrayContaining([first, second]) })
+    expect(db.entryCount()).toBe(3)
+    expect(db.entryState(first)?.starred).toBe(true)
+    expect(db.identities.conflicts(backend.id)).toHaveLength(1)
+    expect(successfulFeedFetch(db, endpoint)?.fetchedAt).toBe('2026-11-04T00:00:00.000Z')
+  })
+  it('does not merge conflicting prior aliases', () => {
+    const first = resolvedId(ingest())
+    const second = resolvedId(ingest(rss(item('two', '/two'))))
+    const result = ingest(rss(item('two')), { verifiedAliasChanges: [{ externalId: 'two', previousExternalIds: ['one'], evidence: 'Synthetic conflicting claim' }] })
+    expect(result.ambiguous).toBe(1)
+    expect(db.localEntry(second)?.url).toBe('https://example.test/two')
+    expect(db.localEntry(first)?.url).toBe('https://example.test/article')
+  })
+  it('advances empty feeds, persists across restart, and scopes checkpoints by endpoint generation and subscription', () => {
+    ingest(rss())
+    reopen()
+    expect(successfulFeedFetch(db, endpoint)).toMatchObject({ fetchedAt, requestUrl: url, responseUrl: url })
+    expect(successfulFeedFetch(db, { ...endpoint, endpointGeneration: 'generation-2' })).toBeNull()
+    expect(successfulFeedFetch(db, { ...endpoint, subscriptionId: 'another' })).toBeNull()
+    expect(() => ingest(rss(), { subscriptionId: 'unknown' })).toThrow(/Subscription/)
+    expect(() => ingest(rss(), { backendId: 'other' })).toThrow(/active/)
+    expect(() => ingest(rss(), { endpointGeneration: '' })).toThrow(/generation/)
+  })
+  it('rolls back entries, aliases and checkpoint on an unidentified item, then recovers', () => {
+    ingest(rss())
+    const saved = successfulFeedFetch(db, endpoint)
+    expect(() => ingest(rss(item('new') + '<item><description>No identifying fields</description></item>'), { fetchedAt: '2026-11-05T00:00:00Z' })).toThrow(/source ID/)
+    expect(db.entryCount()).toBe(0)
+    expect(sql(c => c.prepare('SELECT COUNT(*) AS n FROM article_aliases').get()?.n)).toBe(0)
+    expect(successfulFeedFetch(db, endpoint)).toEqual(saved)
+    expect(ingest().resolved).toBe(1)
+  })
+  it('rolls back content updates, new aliases, arrivals and conflicts when checkpoint persistence fails', () => {
+    const id = resolvedId(ingest())
+    ingest(rss(item('second')))
+    const saved = successfulFeedFetch(db, endpoint)
+    const initialArrivals = arrivals()
+    sql(c => c.exec("CREATE TRIGGER reject_checkpoint BEFORE INSERT ON backend_checkpoints BEGIN SELECT RAISE(ABORT, 'synthetic checkpoint failure'); END"))
+    expect(() => ingest(rss(item('') + item('one', '/changed', 'Changed') + item('new', '/new')))).toThrow(/synthetic checkpoint/)
+    expect(db.entryCount()).toBe(2)
+    expect(db.identities.conflicts(backend.id)).toEqual([])
+    expect(db.localEntry(id)?.title).toBe('Original')
+    expect(sql(c => c.prepare('SELECT COUNT(*) AS n FROM article_aliases').get()?.n)).toBe(2)
+    expect(arrivals()).toEqual(initialArrivals)
+    expect(successfulFeedFetch(db, endpoint)).toEqual(saved)
+    sql(c => c.exec('DROP TRIGGER reject_checkpoint'))
+    expect(ingest(rss(item('new', '/new'))).resolved).toBe(1)
+  })
+  it('rejects malformed XML and contradictory duplicate IDs before changing stored content or fetch success', () => {
+    const id = resolvedId(ingest())
+    const saved = successfulFeedFetch(db, endpoint)
+    expect(() => ingest(rss(item('one', '/changed')) + '<broken>')).toThrow(/Malformed/)
+    expect(() => ingest(rss(item('one') + item('one', '/changed')))).toThrow(/duplicate/)
+    expect(db.localEntry(id)?.url).toBe('https://example.test/article')
+    expect(successfulFeedFetch(db, endpoint)).toEqual(saved)
+  })
+})
