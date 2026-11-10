@@ -1,6 +1,11 @@
+import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
 import type { PulsePayload } from '../shared/pulse'
 import type { ConnectionsSettings, ConnectionsUpdate } from '../shared/connections'
 import type { ActivityRecord, ArticleReport, BriefingDetail, BriefingSummary, CoverageFeedback, Entry, EntryPage, FullArticle, MuteFilter, NavigationPayload, StreamRef, XThreadPost } from './types'
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string, readonly currentRevision?: number) { super(message) }
+}
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -9,11 +14,13 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
   const payload = await response.json().catch(() => null)
-  if (!response.ok) throw new Error(payload?.error || `Request failed with ${response.status}`)
+  if (!response.ok) throw new ApiError(payload?.error || `Request failed with ${response.status}`, response.status, payload?.code, payload?.currentRevision)
   return payload as T
 }
 
 export const api = {
+  organization: (refresh = false) => request<OrganizationView>(`/api/organization${refresh ? '?refresh=1' : ''}`),
+  organize: (requestBody: OrganizationRequest) => request<OrganizationResponse>('/api/organization/commands', { method: 'POST', body: JSON.stringify(requestBody) }),
   connections: () => request<ConnectionsSettings>('/api/settings/connections'),
   updateConnections: (settings: ConnectionsUpdate) => request<ConnectionsSettings>('/api/settings/connections', { method: 'PATCH', body: JSON.stringify(settings) }),
   recentReading: () => request<Entry[]>('/api/reading'),

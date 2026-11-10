@@ -1,3 +1,4 @@
+import { OrganizationError, type OrganizationCommand } from './organization.js'
 import type { PaperDatabase, SyncStatus } from './db.js'
 import type { EntryStateOperation, ReaderBackend } from './backend.js'
 import type { NavigationPayload, StreamRef } from './types.js'
@@ -100,6 +101,39 @@ export class BackendSynchronizer {
       await this.backend.removeFeed(id)
       if (this.enabled) await this.pullNavigation()
       this.db.recordActivity({ kind: 'feed', origin: 'settings', summary: 'Unsubscribed from a feed', count: 1, details: { id } })
+    })
+  }
+
+  async applyOrganizationCommand(command: OrganizationCommand): Promise<{ refreshError?: string }> {
+    return this.exclusive(async () => {
+      if (command.type !== 'rename-feed' && command.type !== 'move-feed' && command.type !== 'unsubscribe') throw new OrganizationError('invalid', 'FreshRSS does not support this organization operation.')
+      const capability = command.type === 'rename-feed' ? 'renameFeed' : command.type === 'move-feed' ? 'moveFeed' : 'unsubscribe'
+      if (!this.backend.organizationCapabilities[capability]) throw new OrganizationError('invalid', 'This backend does not support this organization operation.')
+      this.backend.validateFeedId(command.feedId, command.type === 'unsubscribe' ? 'remove' : 'edit')
+      // Resolve metadata inside the write queue so a concurrent rename cannot
+      // be overwritten by a move prepared against an older local snapshot.
+      const navigation = await this.backend.navigation()
+      const folders = navigation.folders.filter(folder => folder.feeds.some(feed => feed.id === command.feedId))
+      const feed = [...navigation.uncategorized, ...folders.flatMap(folder => folder.feeds)].find(feed => feed.id === command.feedId)
+      if (!feed) throw new OrganizationError('not-found', 'This feed is no longer subscribed. Reload organization.')
+      if (command.type === 'unsubscribe') await this.backend.removeFeed(feed.id)
+      else if (command.type === 'rename-feed') await this.backend.editFeed(feed.id, command.title.trim(), folders[0]?.title || '', folders[0]?.title || '')
+      else {
+        const source = command.fromFolderId === null ? undefined : folders.find(folder => folder.id === command.fromFolderId)
+        if (command.fromFolderId === null ? folders.length > 0 : !source) throw new OrganizationError('conflict', 'This feed has moved. Reload organization before moving it again.')
+        const destination = command.toFolderId === null ? undefined : navigation.folders.find(folder => folder.id === command.toFolderId)
+        if (command.toFolderId !== null && !destination) throw new OrganizationError('not-found', 'The destination folder no longer exists. Reload organization.')
+        await this.backend.editFeed(feed.id, feed.title, destination?.title || '', source?.title || '')
+      }
+      try {
+        if (this.enabled) await this.pullNavigation()
+        this.db.recordActivity({ kind: 'feed', origin: 'sidebar', summary: `Organization: ${command.type}`, count: 1, details: { id: feed.id } })
+        return {}
+      } catch {
+        // The remote write was acknowledged. A cache or activity failure must
+        // not turn that known outcome into an invitation to replay the write.
+        return { refreshError: 'FreshRSS confirmed the change, but Paper could not refresh its local cache. Reload before making more changes.' }
+      }
     })
   }
 

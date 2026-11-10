@@ -130,6 +130,28 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         assert request(base + '/api/sync', {})[0] == 200
         assert not request(base + '/api/entries/item', {'id': entry['id']})[1]['entry']['read']
         assert request(base + '/api/feeds/repair', {'id': entry['feedId'], 'url': 'http://fixture:8080/repaired.xml', 'expectedUrl': 'http://fixture:8080/feed.xml'})[0] == 200
+        organization = request(base + '/api/organization')[1]
+        assert organization['backend'] == 'freshrss' and organization['revision'] is None
+        assert organization['capabilities']['renameFeed'] and not organization['capabilities']['orderFolders']
+        # Create an existing remote category through the legacy adapter, then
+        # exercise the new sidebar command queue against real FreshRSS.
+        assert request(base + '/api/feeds', {'id': entry['feedId'], 'title': 'Organization fixture', 'folder': 'Fixture folder', 'currentFolder': ''}, method='PATCH')[0] == 200
+        organization = request(base + '/api/organization?refresh=1')[1]
+        folder_id = next(folder['id'] for folder in organization['navigation']['folders'] if folder['title'] == 'Fixture folder')
+        status, outcome = request(base + '/api/organization/commands', {'expectedRevision': None, 'commands': [
+            {'type': 'rename-feed', 'feedId': entry['feedId'], 'title': 'Renamed fixture'},
+            {'type': 'move-feed', 'feedId': entry['feedId'], 'fromFolderId': folder_id, 'toFolderId': None},
+            {'type': 'create-folder', 'title': 'Unsupported fixture'},
+        ]})
+        assert status == 200
+        assert [item['status'] for item in outcome['results']] == ['applied', 'applied', 'failed']
+        assert outcome['results'][2]['code'] == 'unsupported'
+        # FreshRSS keeps a real default category named Uncategorized.
+        default_folder = next(folder for folder in outcome['snapshot']['navigation']['folders'] if folder['title'] == 'Uncategorized')
+        assert next(feed for feed in default_folder['feeds'] if feed['id'] == entry['feedId'])['title'] == 'Renamed fixture'
+        assert all(feed['id'] != entry['feedId'] for folder in outcome['snapshot']['navigation']['folders'] if folder['id'] == folder_id for feed in folder['feeds'])
+        preserved = request(base + '/api/entries/item', {'id': entry['id']})[1]['entry']
+        assert preserved['starred'] and preserved['readingPosition'] == 0.42
         hash_value = docker('run', '--rm', '--network', 'none', CADDY, 'caddy', 'hash-password', '--plaintext', 'synthetic-proxy-password')
         config = temporary / 'Caddyfile'
         config.write_text((ROOT / 'examples/Caddyfile').read_text())
@@ -162,7 +184,7 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         assert request(base + '/api/status')[1]['readwiseConfigured']
         assert request(base + '/api/settings/connections', {'readwise': {'token': None}}, method='PATCH')[0] == 200
         assert not request(base + '/api/status')[1]['readwiseConfigured']
-        print('Installation checks passed with FreshRSS 1.30.4: import/search, two-way state sync, helper authentication/repair, private connection settings, proxy 401/200, PHP syntax, and backup restoration.')
+        print('Installation checks passed with FreshRSS 1.30.4: import/search, two-way state sync, organization rename/move/capabilities, helper authentication/repair, private connection settings, proxy 401/200, PHP syntax, and backup restoration.')
     except Exception:
         for name in dict.fromkeys(containers):
             logs = docker('logs', '--tail', '12', name, check=False)

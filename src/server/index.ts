@@ -1,3 +1,4 @@
+import { organizationRouter } from './organization-routes.js'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import express, { type NextFunction, type Request, type Response } from 'express'
@@ -184,6 +185,8 @@ app.get('/api/events', (request, response) => {
     unsubscribeState()
   })
 })
+
+app.use('/api/organization', organizationRouter({ database, backend, synchronizer, navigation: () => entriesSource.navigation() }))
 
 app.get('/api/navigation', asyncRoute(async (_request, response) => {
   response.json(await entriesSource.navigation())
