@@ -1,14 +1,8 @@
 import type { PaperDatabase, PageOptions } from './db.js'
-import type { Entry, NavigationPayload, StreamRef } from './types.js'
+import type { EntryOptions, EntrySource } from './backend.js'
+import type { StreamRef } from './types.js'
 
-export interface EntrySource {
-  briefingEntries?(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; before: Date }): Promise<Entry[]>
-  navigation(): Promise<NavigationPayload>
-  entries(stream: StreamRef, options?: { unreadOnly?: boolean; limit?: number; after?: Date; before?: Date }): Promise<Entry[]>
-  entriesPage(stream: StreamRef, options?: { unreadOnly?: boolean; limit?: number; continuation?: string; query?: string }): Promise<{ items: Entry[]; continuation: string }>
-  entry(id: string): Promise<Entry | null>
-  entryIds(stream: StreamRef, unreadOnly?: boolean): Promise<string[]>
-}
+export type { EntrySource } from './backend.js'
 
 // Keep a stable source reference while the first background import completes.
 export function switchingEntrySource(useLocal: () => boolean, local: EntrySource, remote: EntrySource): EntrySource {
@@ -37,7 +31,7 @@ export class PaperRepository implements EntrySource {
     return this.db.localNavigation()
   }
 
-  async entries(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; after?: Date; before?: Date } = {}) {
+  async entries(stream: StreamRef, options: EntryOptions = {}) {
     return this.db.localEntries(stream, options)
   }
 

@@ -1,4 +1,5 @@
 import type { Config } from './config.js'
+import type { BackendPageOptions, EntryOptions, EntryPage, EntryStateOperation, ReaderBackend } from './backend.js'
 import { normalizeFeedContent, normalizeFeedThumbnail } from './feed-content.js'
 import type { Entry, EntryKind, Feed, Folder, NavigationPayload, StreamRef } from './types.js'
 import { SocialAvatarService } from './social-avatar.js'
@@ -44,12 +45,9 @@ interface FeedMetadata {
   folderOrder: string[]
 }
 
-export interface EntryPage {
-  items: Entry[]
-  continuation: string
-}
+export type { EntryPage } from './backend.js'
 
-export class FreshRssClient {
+export class FreshRssClient implements ReaderBackend {
   private authToken = ''
   private editToken = ''
   private readonly baseUrl: string
@@ -202,7 +200,7 @@ export class FreshRssClient {
     }
   }
 
-  async entries(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; after?: Date; before?: Date } = {}): Promise<Entry[]> {
+  async entries(stream: StreamRef, options: EntryOptions = {}): Promise<Entry[]> {
     const result: Entry[] = []
     const requested = Math.min(Math.max(options.limit || 200, 1), 1000)
     let continuation = ''
@@ -219,7 +217,7 @@ export class FreshRssClient {
     return result.slice(0, requested)
   }
 
-  async entriesPage(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; after?: Date; before?: Date; continuation?: string; query?: string } = {}): Promise<EntryPage> {
+  async entriesPage(stream: StreamRef, options: BackendPageOptions = {}): Promise<EntryPage> {
     const params = new URLSearchParams({
       output: 'json',
       n: String(Math.min(Math.max(options.limit || 100, 1), 1000)),
@@ -271,7 +269,7 @@ export class FreshRssClient {
     return result
   }
 
-  async editEntries(ids: string[], operation: 'read' | 'unread' | 'star' | 'unstar') {
+  async editEntries(ids: string[], operation: EntryStateOperation) {
     if (!ids.length) return
     const token = await this.getEditToken()
     for (let offset = 0; offset < ids.length; offset += 500) {
