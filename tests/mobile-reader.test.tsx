@@ -789,6 +789,7 @@ describe('organization keeps the reading session', () => {
     const rows = [...container.querySelectorAll('.story-row')]
     const historyLength = history.length
     const originalEntry = new URLSearchParams(location.search).get('entry')
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Edit feeds"]')!.click())
     const options = container.querySelector<HTMLButtonElement>('button[aria-label="Options for Instagram"]')!
     await act(async () => { options.focus(); options.click() })
     await act(async () => { [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === 'Rename folder')!.click() })

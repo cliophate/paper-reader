@@ -186,24 +186,28 @@ never replay already applied items as part of a failed bulk request.
 
 ## Sidebar controls
 
-The sidebar options buttons work with touch, mouse and keyboard. Right-click or
-Shift+F10 opens a row's menu; arrow keys, Home and End move through its actions.
-Escape closes a menu or form and returns focus to its opener. If an operation
-removes that row, focus returns to the Feeds options button. Tab stays inside
-open forms.
-
 The Feeds header has an add menu for Add feed and, when supported, New folder.
-Add feed opens the existing discovery flow in Settings. The adjacent options
-menu offers Select feeds, which reveals empty folders and read feeds while the
-unread filter is active. Selection replaces the header actions with a count
-and Done, and adds membership checkboxes, bulk move and confirmed unsubscribe.
+Add feed opens the existing discovery flow in Settings. The Edit feeds pencil
+enters edit mode, showing drag grips, row options buttons and membership
+checkboxes. Empty folders and read feeds also appear while editing with the
+unread filter active. The Feeds heading, unread counts and add menu stay visible.
+Changes save immediately. Done clears selection, cancels dragging and edge
+scrolling, closes menus and returns focus to the pencil.
+
+Right-click or Shift+F10 opens a row's menu in either mode without enabling edit
+mode. Arrow keys, Home and End move through its actions. Escape closes a menu or
+form and returns focus to its opener. If an operation removes that row, focus
+returns to Done while editing, or the pencil otherwise. Tab stays inside open
+forms. On touch screens, use the pencil to reveal row options and drag grips.
+
+Selecting feeds shows a count, bulk move and confirmed unsubscribe actions.
 Selecting a feed in two folders moves the selected memberships; bulk unsubscribe
 deduplicates that feed. A partial result retains failed selections and names the
 failed feeds. Form revisions are captured when editing starts, so a background
 refresh cannot silently authorize an older edit.
 
 Supported menus offer folder creation, rename, merge, removal and ordering, and
-feed rename, move and ordering. Drag from a six-dot grip to reorder with the
+feed rename, move and ordering. In edit mode, drag from a six-dot grip to reorder with the
 insertion line, or move a feed to a highlighted folder, including an empty one.
 Dragging removes only the source membership; other memberships remain. If a
 feed still belongs to another folder, an Uncategorized drop says it will remove

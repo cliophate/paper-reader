@@ -31,10 +31,10 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
   onAddFeed: () => void
 }) {
   const [expanded, setExpanded] = useState(new Set<string | null>())
-  const [organizing, setOrganizing] = useState(false)
+  const [editing, setEditing] = useState(false)
   const [selected, setSelected] = useState<Member[]>([])
   const [menu, setMenu] = useState<{ target: Target; left: number; top: number } | null>(null)
-  const [headerMenu, setHeaderMenu] = useState<{ kind: 'add' | 'options'; left: number; top: number } | null>(null)
+  const [headerMenu, setHeaderMenu] = useState<{ left: number; top: number } | null>(null)
   const [action, setAction] = useState<Action | null>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
   const [placement, setPlacement] = useState<Placement | null>(null)
@@ -51,8 +51,8 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
   const [feedback, setFeedback] = useState<{ error: boolean; text: string } | null>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const focusAfterClose = useRef(false)
-  const toolbar = useRef<HTMLButtonElement>(null)
-  const selectionDone = useRef<HTMLButtonElement>(null)
+  const editButton = useRef<HTMLButtonElement>(null)
+  const editDone = useRef<HTMLButtonElement>(null)
   const capabilities = snapshot?.capabilities
   const writable = online && !!snapshot && !busy && !needsReload
   const folders = navigation?.folders || []
@@ -66,8 +66,8 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
     if (menu || headerMenu || action || !focusAfterClose.current) return
     focusAfterClose.current = false
     if (returnFocus.current?.isConnected) returnFocus.current.focus()
-    else (selectionDone.current || toolbar.current)?.focus()
-  }, [menu, headerMenu, action, snapshot, organizing])
+    else (editDone.current || editButton.current)?.focus()
+  }, [menu, headerMenu, action, snapshot, editing])
   const closeHeaderMenu = () => { setHeaderMenu(null); restoreFocus() }
   const closeMenu = () => { setMenu(null); restoreFocus() }
   const closeAction = () => { setAction(null); restoreFocus() }
@@ -133,11 +133,11 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
     document.addEventListener('keydown', escape)
     return () => document.removeEventListener('keydown', escape)
   }, [drag])
-  useEffect(() => { if (!writable) cancelDrag() }, [writable])
+  useEffect(() => { if (!writable || !editing) cancelDrag() }, [writable, editing])
   const drop = (item: Drag) => {
     const next = placementRef.current
     cancelDrag()
-    if (next) void apply(next.commands, next.commands.map(() => targetTitle(item)))
+    if (editing && next) void apply(next.commands, next.commands.map(() => targetTitle(item)))
   }
   const orderPlacement = (item: Drag, index: number): Placement | null => {
     if (item.kind === 'folder') {
@@ -214,7 +214,7 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
   const rowProps = (row: string) => ({ 'data-organization-row': row, 'data-drop-edge': placement?.row === row && !(row.startsWith('["folder"') && placement.edge === 'after') ? placement.edge : undefined })
   const handle = (item: Drag) => <button type="button" className="organization-handle" data-organization-handle="" aria-label={`Move ${targetTitle(item)}`} aria-describedby={dragHelp} aria-pressed={drag !== null && (drag.kind === 'folder' && item.kind === 'folder' ? drag.folder.id === item.folder.id : drag.kind === 'feed' && item.kind === 'feed' && memberKey(drag.member) === memberKey(item.member))} disabled={!writable}
     onPointerDown={event => {
-      if (!writable || event.button !== 0) return
+      if (!editing || !writable || event.button !== 0) return
       event.preventDefault(); event.currentTarget.focus(); returnFocus.current = event.currentTarget; event.currentTarget.setPointerCapture(event.pointerId)
       editRevision.current = snapshot?.revision ?? null
       pointer.current = { id: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, item, moving: false }
@@ -232,6 +232,7 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
     onPointerCancel={cancelDrag}
     onLostPointerCapture={() => { if (pointer.current) cancelDrag() }}
     onKeyDown={event => {
+      if (!editing || !writable) return
       if (event.key === 'Escape') { event.preventDefault(); cancelDrag(); return }
       if (event.key === ' ' || event.key === 'Enter') {
         event.preventDefault()
@@ -251,16 +252,16 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
       if (event.key === 'Tab') cancelDrag()
     }}><svg viewBox="0 0 12 18" aria-hidden="true">{[4, 9, 14].flatMap(y => [3, 8].map(x => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.2" fill="currentColor" />))}</svg></button>
   const renderFeeds = (folderId: string | null) => <div className="feed-list">
-    {feedsIn(folderId).filter(feed => organizing || drag !== null || !unreadOnly || feed.unread > 0).map(feed => {
+    {feedsIn(folderId).filter(feed => editing || drag !== null || !unreadOnly || feed.unread > 0).map(feed => {
       const member = { feed, folderId }, target: Target = { kind: 'feed', member }
       return <div key={feed.id}>
         <div className="feed-row-wrapper" {...rowProps(feedRow(member))}>
-          {(capabilities?.moveFeed || capabilities?.orderFeeds) && handle(target)}
-          {organizing && <input type="checkbox" aria-label={`Select ${feed.title} in ${folders.find(folder => folder.id === folderId)?.title || 'Uncategorized'}`} checked={selectedNow.some(item => memberKey(item) === memberKey(member))} onChange={event => setSelected(current => event.target.checked ? [...current, member] : current.filter(item => memberKey(item) !== memberKey(member)))} />}
+          {editing && (capabilities?.moveFeed || capabilities?.orderFeeds) && handle(target)}
+          {editing && <input type="checkbox" aria-label={`Select ${feed.title} in ${folders.find(folder => folder.id === folderId)?.title || 'Uncategorized'}`} checked={selectedNow.some(item => memberKey(item) === memberKey(member))} onChange={event => setSelected(current => event.target.checked ? [...current, member] : current.filter(item => memberKey(item) !== memberKey(member)))} />}
           <button className={`feed-row ${active?.kind === 'feed' && active.id === feed.id ? 'active' : ''}`} onClick={() => onOpen({ kind: 'feed', id: feed.id, title: feed.title })} onContextMenu={event => { event.preventDefault(); showMenu(target, event.currentTarget, { x: event.clientX, y: event.clientY }) }} onKeyDown={event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); showMenu(target, event.currentTarget) } }}>
             <FeedMark title={feed.title} url={feed.siteUrl || feed.url} iconUrl={feed.iconUrl} /><span className="source-label">{feed.title}</span>{feed.unread > 0 && <span className="source-count">{feed.unread}</span>}
           </button>
-          <button className="row-options" aria-label={`Options for ${feed.title}`} aria-haspopup="menu" onClick={event => showMenu(target, event.currentTarget)}>⋯</button>
+          {editing && <button className="row-options" aria-label={`Options for ${feed.title}`} aria-haspopup="menu" onClick={event => showMenu(target, event.currentTarget)}>⋯</button>}
         </div>
       </div>
     })}
@@ -271,42 +272,45 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
     <span className="visually-hidden" role="status">{drag ? `${targetTitle(drag)} picked up. ${placement?.label || 'Choose a position.'}` : ''}</span>
     {drag && dragPoint && createPortal(<div className="organization-drag-preview" style={{ left: dragPoint.x + 12, top: dragPoint.y + 12 }} aria-hidden="true"><span>{targetTitle(drag)}</span>{placement && <small>{placement.label}</small>}</div>, document.body)}
     <div className="organization-header">
-      <h2>{organizing ? `${selectedNow.length} selected` : 'Feeds'}</h2>
-      {organizing ? <button ref={selectionDone} className="organization-done" disabled={busy} onClick={() => { setOrganizing(false); setSelected([]); returnFocus.current = null; restoreFocus() }}>Done</button> : <div className="organization-header-actions">
-        {(['add', 'options'] as const).map(kind => <button key={kind} ref={kind === 'options' ? toolbar : undefined} className="icon-button" aria-label={kind === 'add' ? 'Add feed or folder' : 'Feed options'} title={kind === 'add' ? 'Add feed or folder' : 'Feed options'} aria-haspopup="menu" aria-expanded={headerMenu?.kind === kind} disabled={kind === 'add' ? !writable : busy} onClick={event => {
+      <h2>Feeds</h2>
+      <div className="organization-header-actions">
+        <button className="icon-button" aria-label="Add feed or folder" title="Add feed or folder" aria-haspopup="menu" aria-expanded={!!headerMenu} disabled={!writable} onClick={event => {
           cancelDrag(); setMenu(null); returnFocus.current = event.currentTarget
           editRevision.current = snapshot?.revision ?? null
           const box = event.currentTarget.getBoundingClientRect()
-          setHeaderMenu({ kind, left: Math.max(8, Math.min(box.left, window.innerWidth - 268)), top: Math.max(8, Math.min(box.bottom, window.innerHeight - 420)) })
-        }}>{kind === 'add' ? <Icon name="plus" /> : '⋯'}</button>)}
-      </div>}
+          setHeaderMenu({ left: Math.max(8, Math.min(box.left, window.innerWidth - 268)), top: Math.max(8, Math.min(box.bottom, window.innerHeight - 420)) })
+        }}><Icon name="plus" /></button>
+        {editing ? <button ref={editDone} className="organization-done" disabled={busy} onClick={() => {
+          cancelDrag(); setMenu(null); setHeaderMenu(null); setEditing(false); setSelected([]); returnFocus.current = null; restoreFocus()
+        }}>Done</button> : <button ref={editButton} className="icon-button" aria-label="Edit feeds" title="Edit feeds" disabled={busy} onClick={() => {
+          setMenu(null); setHeaderMenu(null); setEditing(true); returnFocus.current = null; restoreFocus()
+        }}><Icon name="edit" /></button>}
+      </div>
     </div>
-    {organizing && <p className="organization-note">{capabilities?.conditionalWrites ? 'Select feeds to move them together. Use the grip to drag, or use the options menus.' : 'FreshRSS supports feed edits and unsubscribe. Folder management and ordering are unavailable. Bulk changes can partly succeed; concurrent remote edits cannot be revision-checked.'}</p>}
+    {editing && <p className="organization-note">{capabilities?.conditionalWrites ? 'Use grips to reorder and options to edit. Select feeds to move them together. Changes save immediately.' : 'FreshRSS supports feed edits and unsubscribe. Folder management and ordering are unavailable. Bulk changes can partly succeed; concurrent remote edits cannot be revision-checked.'}</p>}
     {!online && <p className="organization-note">Connect to organize feeds.</p>}
     {feedback && <p className="organization-feedback" role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p>}
     {(needsReload || !snapshot) && <button disabled={busy || !online} onClick={() => void reload()}>Reload organization</button>}
-    {organizing && selectedNow.length > 0 && <div className="organization-bulk"><button disabled={!writable || !capabilities?.moveFeed || selectedNow.length > 200} onClick={event => { returnFocus.current = event.currentTarget; begin({ type: 'move', members: selectedNow }) }}>Move selected</button>{capabilities?.unsubscribe && <button disabled={!writable || selectedNow.length > 200} onClick={event => { returnFocus.current = event.currentTarget; begin({ type: 'unsubscribe', members: [...new Map(selectedNow.map(member => [member.feed.id, member])).values()] }) }}>Unsubscribe selected</button>}</div>}
-    {folders.filter(folder => organizing || drag !== null || !unreadOnly || folder.unread > 0).map(folder => {
+    {editing && selectedNow.length > 0 && <div className="organization-bulk"><span>{selectedNow.length} selected</span><button disabled={!writable || !capabilities?.moveFeed || selectedNow.length > 200} onClick={event => { returnFocus.current = event.currentTarget; begin({ type: 'move', members: selectedNow }) }}>Move selected</button>{capabilities?.unsubscribe && <button disabled={!writable || selectedNow.length > 200} onClick={event => { returnFocus.current = event.currentTarget; begin({ type: 'unsubscribe', members: [...new Map(selectedNow.map(member => [member.feed.id, member])).values()] }) }}>Unsubscribe selected</button>}</div>}
+    {folders.filter(folder => editing || drag !== null || !unreadOnly || folder.unread > 0).map(folder => {
       const target: Target = { kind: 'folder', folder }
       return <div className="folder" key={folder.id} data-folder-drop-after={placement?.row === folderRow(folder.id) && placement.edge === 'after' ? true : undefined}>
         <div className="folder-row-wrapper" {...rowProps(folderRow(folder.id))}>
-          {capabilities?.orderFolders && handle(target)}
+          {editing && capabilities?.orderFolders && handle(target)}
           <button className="folder-expand" aria-label={`${expanded.has(folder.id) ? 'Collapse' : 'Expand'} ${folder.title}`} aria-expanded={expanded.has(folder.id)} onClick={() => toggle(folder.id)}><Icon name="chevron" className={expanded.has(folder.id) ? 'rotated' : ''} /></button>
           <button className={`folder-row ${active?.kind === 'category' && active.id === folder.id ? 'active' : ''}`} onClick={() => onOpen({ kind: 'category', id: folder.id, title: folder.title })} onContextMenu={event => { event.preventDefault(); showMenu(target, event.currentTarget, { x: event.clientX, y: event.clientY }) }} onKeyDown={event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); showMenu(target, event.currentTarget) } }}><span className="source-label">{folder.title}</span>{folder.unread > 0 && <span className="source-count">{folder.unread}</span>}</button>
-          <button className="row-options" aria-label={`Options for ${folder.title}`} aria-haspopup="menu" onClick={event => showMenu(target, event.currentTarget)}>⋯</button>
+          {editing && <button className="row-options" aria-label={`Options for ${folder.title}`} aria-haspopup="menu" onClick={event => showMenu(target, event.currentTarget)}>⋯</button>}
         </div>
         {expanded.has(folder.id) && renderFeeds(folder.id)}
       </div>
     })}
-    {((organizing && !namedUncategorized) || (navigation?.uncategorized || []).some(feed => !unreadOnly || feed.unread > 0) || (drag?.kind === 'feed' && !namedUncategorized)) && <div className="folder">
+    {((editing && !namedUncategorized) || (navigation?.uncategorized || []).some(feed => !unreadOnly || feed.unread > 0) || (drag?.kind === 'feed' && !namedUncategorized)) && <div className="folder">
       <button className="folder-row" {...rowProps(folderRow(null))} aria-expanded={expanded.has(null)} onClick={() => toggle(null)}><Icon name="chevron" className={expanded.has(null) ? 'rotated' : ''} /><span className="source-label">Uncategorized</span></button>
       {expanded.has(null) && renderFeeds(null)}
     </div>}
-    {headerMenu && createPortal(<OrganizationMenu menu={{ ...headerMenu, title: headerMenu.kind === 'add' ? 'Add' : 'Feeds' }} onClose={closeHeaderMenu}>
-      {headerMenu.kind === 'add' ? <>
-        <button role="menuitem" disabled={!writable} onClick={() => { setHeaderMenu(null); returnFocus.current?.focus(); onAddFeed() }}>Add feed</button>
-        {capabilities?.createEmptyFolder && <button role="menuitem" disabled={!writable} onClick={() => begin({ type: 'create' })}>New folder</button>}
-      </> : <button role="menuitem" disabled={busy} onClick={() => { setOrganizing(true); setSelected([]); setHeaderMenu(null); returnFocus.current = null; focusAfterClose.current = true }}>Select feeds</button>}
+    {headerMenu && createPortal(<OrganizationMenu menu={{ ...headerMenu, title: 'Add' }} onClose={closeHeaderMenu}>
+      <button role="menuitem" disabled={!writable} onClick={() => { setHeaderMenu(null); returnFocus.current?.focus(); onAddFeed() }}>Add feed</button>
+      {capabilities?.createEmptyFolder && <button role="menuitem" disabled={!writable} onClick={() => begin({ type: 'create' })}>New folder</button>}
     </OrganizationMenu>, document.body)}
     {menu && createPortal(<OrganizationMenu menu={menu} onClose={closeMenu}>
       <button role="menuitem" onClick={() => { const target = menu.target; closeMenu(); onOpen(target.kind === 'feed' ? { kind: 'feed', id: target.member.feed.id, title: target.member.feed.title } : { kind: 'category', id: target.folder.id, title: target.folder.title }) }}>Open {menu.target.kind}</button>

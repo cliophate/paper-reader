@@ -31,7 +31,7 @@ async function render(options: { online?: boolean; unreadOnly?: boolean } = {}) 
 const button = (name: string, parent: ParentNode = document) => [...parent.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === name || item.querySelector('.source-label')?.textContent === name || item.getAttribute('aria-label') === name)!
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')!
 async function click(name: string, parent: ParentNode = document) { const item = button(name, parent); expect(item, name).toBeTruthy(); await act(async () => { item.focus(); item.click() }) }
-async function selectFeeds() { await click('Feed options'); await click('Select feeds') }
+async function editFeeds() { await click('Edit feeds') }
 async function key(element: Element, key: string, shiftKey = false) { await act(async () => { element.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true })) }) }
 async function enter(value: string) { await act(async () => { const input = dialog().querySelector('input')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })) }) }
 async function select(value: string) { await act(async () => { const input = dialog().querySelector('select')!; input.value = value; input.dispatchEvent(new Event('change', { bubbles: true })) }) }
@@ -51,8 +51,11 @@ async function dragTo(handle: Element, row: Element) {
 }
 
 describe('sidebar organization interactions', () => {
-  it('keeps adding and bulk selection in contextual header menus with focus restoration', async () => {
+  it('keeps the Feeds heading and add menu visible in edit mode, with contextual selection and focus restoration', async () => {
+    snapshot.navigation.folders[0].unread = 3
+    snapshot.navigation.folders[0].feeds[0].unread = 3
     await render()
+    expect(button('Essays').querySelector('.source-count')?.textContent).toBe('3')
     expect(container.querySelector('.organization-header h2')?.textContent).toBe('Feeds')
     expect(button('Organize feeds')).toBeUndefined()
     expect(button('New folder')).toBeUndefined()
@@ -65,17 +68,51 @@ describe('sidebar organization interactions', () => {
     await click('Add feed or folder'); await click('Add feed')
     expect(addFeed).toHaveBeenCalledOnce()
     expect(document.querySelector('[role="menu"]')).toBeNull()
-    await selectFeeds()
-    expect(container.querySelector('.organization-header h2')?.textContent).toBe('0 selected')
+    await editFeeds()
+    expect(button('Essays').querySelector('.source-count')?.textContent).toBe('3')
+    expect(button('Options for Essays')).toBeTruthy()
+    expect(button('Move Essays')).toBeTruthy()
+    expect(container.querySelector('.organization-header h2')?.textContent).toBe('Feeds')
     expect(document.activeElement?.textContent).toBe('Done')
-    expect(button('Add feed or folder')).toBeUndefined()
+    expect(button('Add feed or folder').disabled).toBe(false)
+    expect(container.textContent).not.toContain('0 selected')
     await click('Expand Essays')
     await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click())
-    expect(container.querySelector('.organization-header h2')?.textContent).toBe('1 selected')
+    expect(container.querySelector('.organization-header h2')?.textContent).toBe('Feeds')
+    expect(container.querySelector('.organization-bulk')?.textContent).toContain('1 selected')
     expect(button('Move selected')).toBeTruthy()
     await click('Done')
-    expect(container.querySelector('input[type="checkbox"]')).toBeNull()
-    expect(document.activeElement?.getAttribute('aria-label')).toBe('Feed options')
+    expect(container.querySelector('input[type="checkbox"], .organization-handle, .row-options')).toBeNull()
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Edit feeds')
+  })
+
+  it('Done closes stale menus and clears selection before a new edit session', async () => {
+    await render(); await editFeeds(); await click('Expand Essays')
+    await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click())
+    await click('Add feed or folder')
+    expect(button('New folder')).toBeTruthy()
+    await click('Done')
+    expect(document.querySelector('[role="menu"]')).toBeNull()
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Edit feeds')
+    await editFeeds()
+    expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false)
+    expect(container.querySelector('.organization-bulk')).toBeNull()
+    await click('Options for Essays'); await click('Done')
+    expect(document.querySelector('[role="menu"]')).toBeNull()
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Edit feeds')
+    expect(api.organize).not.toHaveBeenCalled()
+  })
+
+  it('Done cancels keyboard placement without saving or leaving a stale grip', async () => {
+    await render(); await editFeeds()
+    const grip = button('Move Empty')
+    await key(grip, ' '); await key(grip, 'ArrowUp')
+    expect(container.querySelector('[data-drop-edge]')).not.toBeNull()
+    await click('Done')
+    expect(container.querySelector('[data-drop-edge], .organization-handle')).toBeNull()
+    await key(grip, 'Enter')
+    expect(api.organize).not.toHaveBeenCalled()
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Edit feeds')
   })
 
   it('offers Add feed without New folder for FreshRSS and disables adding offline', async () => {
@@ -90,7 +127,13 @@ describe('sidebar organization interactions', () => {
 
   it('supports keyboard context menus, arrow navigation, Escape and focus restoration', async () => {
     await render(); await click('Expand Essays')
+    expect(container.querySelector('.organization-handle, .row-options, input[type="checkbox"]')).toBeNull()
     const row = button('First'); row.focus()
+    await act(async () => row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })))
+    expect(button('Rename feed')).toBeTruthy()
+    expect(button('Done')).toBeUndefined()
+    await key(document.activeElement!, 'Escape')
+    expect(document.activeElement).toBe(row)
     await key(row, 'F10', true)
     expect(document.activeElement?.textContent).toBe('Open feed')
     await key(document.activeElement!, 'ArrowDown')
@@ -100,10 +143,13 @@ describe('sidebar organization interactions', () => {
     await key(document.activeElement!, 'Escape')
     expect(document.querySelector('[role="menu"]')).toBeNull()
     expect(document.activeElement).toBe(row)
+    expect(button('Edit feeds')).toBeTruthy()
+    expect(container.querySelector('.organization-handle, .row-options')).toBeNull()
+    expect(api.organize).not.toHaveBeenCalled()
   })
 
   it('renames in place, keeps selection, and returns focus to the same row options', async () => {
-    await render(); await click('Expand Essays'); await click('Options for First'); await click('Rename feed')
+    await render(); await editFeeds(); await click('Expand Essays'); await click('Options for First'); await click('Rename feed')
     expect(document.activeElement).toBe(dialog().querySelector('input'))
     await enter('Renamed')
     snapshot = structuredClone(snapshot); snapshot.navigation.folders[0].feeds[0].title = 'Renamed'; snapshot.revision++
@@ -115,7 +161,7 @@ describe('sidebar organization interactions', () => {
   })
 
   it('uses the revision when editing began even if navigation updates while the form is open', async () => {
-    await render(); await click('Options for Essays'); await click('Rename folder')
+    await render(); await editFeeds(); await click('Options for Essays'); await click('Rename folder')
     await act(async () => update({ ...snapshot, revision: 7 }))
     await enter('New name'); await submit()
     expect(api.organize).toHaveBeenCalledWith({ expectedRevision: 4, commands: [{ type: 'rename-folder', folderId: 'a', title: 'New name' }] })
@@ -124,7 +170,7 @@ describe('sidebar organization interactions', () => {
   it('shows empty folders while organizing unread feeds and creates a folder without navigation', async () => {
     await render({ unreadOnly: true })
     expect(button('Options for Empty')).toBeUndefined()
-    await selectFeeds(); await click('Expand Empty')
+    await editFeeds(); await click('Expand Empty')
     expect(container.textContent).toContain('No feeds')
     await click('Done'); await click('Add feed or folder'); await click('New folder'); await enter('Quiet'); await submit()
     expect(api.organize).toHaveBeenCalledWith({ expectedRevision: 4, commands: [{ type: 'create-folder', title: 'Quiet' }] })
@@ -132,7 +178,7 @@ describe('sidebar organization interactions', () => {
   })
 
   it('explains removal and merge semantics and requires explicit confirmation', async () => {
-    await render(); await click('Options for Essays'); await click('Remove folder')
+    await render(); await editFeeds(); await click('Options for Essays'); await click('Remove folder')
     expect(dialog().textContent).toContain('Feeds with no other folders move to Uncategorized')
     expect(dialog().textContent).toContain('Article history, stars and reading positions stay saved')
     expect(api.organize).not.toHaveBeenCalled()
@@ -144,7 +190,7 @@ describe('sidebar organization interactions', () => {
 
   it('has mobile menu buttons, a trapped dialog and a confirmed unsubscribe with fallback focus', async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
-    await render(); await click('Expand Essays'); await click('Options for First'); await click('Unsubscribe')
+    await render(); await editFeeds(); await click('Expand Essays'); await click('Options for First'); await click('Unsubscribe')
     expect(api.organize).not.toHaveBeenCalled()
     await key(button('Cancel', dialog()), 'Tab', true)
     expect(document.activeElement?.textContent).toBe('Confirm unsubscribe')
@@ -153,11 +199,11 @@ describe('sidebar organization interactions', () => {
     snapshot = structuredClone(snapshot); snapshot.navigation.folders.forEach(folder => { folder.feeds = folder.feeds.filter(feed => feed.id !== 'First') })
     await click('Confirm unsubscribe')
     expect(api.organize).toHaveBeenCalledWith({ expectedRevision: 4, commands: [{ type: 'unsubscribe', feedId: 'First' }] })
-    expect(document.activeElement?.getAttribute('aria-label')).toBe('Feed options')
+    expect(document.activeElement?.textContent).toBe('Done')
   })
 
   it('preserves source membership in moves and explains moving a multi-folder feed to Uncategorized', async () => {
-    await render(); await click('Expand Essays'); await click('Options for First'); await click('Move feed')
+    await render(); await editFeeds(); await click('Expand Essays'); await click('Options for First'); await click('Move feed')
     expect(dialog().textContent).toContain('Other folders keep this feed')
     expect(dialog().textContent).toContain('only when no memberships remain')
     await submit()
@@ -167,7 +213,7 @@ describe('sidebar organization interactions', () => {
   })
 
   it('keeps only failed bulk selections and identifies the failed feeds without replaying successes', async () => {
-    await render(); await selectFeeds(); await click('Expand Essays')
+    await render(); await editFeeds(); await click('Expand Essays')
     for (const input of container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) await act(async () => input.click())
     await click('Move selected'); await select('b')
     vi.mocked(api.organize).mockResolvedValueOnce({ snapshot, results: [{ index: 0, status: 'applied', changed: true }, { index: 1, status: 'failed', code: 'not-found', message: 'The source changed.' }] })
@@ -180,7 +226,7 @@ describe('sidebar organization interactions', () => {
   })
 
   it('deduplicates a multi-folder feed in bulk unsubscribe and confirms the names', async () => {
-    await render(); await selectFeeds(); await click('Expand Essays'); await click('Expand Other')
+    await render(); await editFeeds(); await click('Expand Essays'); await click('Expand Other')
     for (const input of container.querySelectorAll<HTMLInputElement>('input[aria-label^="Select First"]')) await act(async () => input.click())
     await click('Unsubscribe selected')
     expect(dialog().textContent).toContain('Unsubscribe from 1 feed?')
@@ -190,7 +236,7 @@ describe('sidebar organization interactions', () => {
   })
 
   it('blocks stale writes until reload and never retries automatically', async () => {
-    await render(); await click('Options for Essays'); await click('Rename folder'); await enter('New')
+    await render(); await editFeeds(); await click('Options for Essays'); await click('Rename folder'); await enter('New')
     vi.mocked(api.organize).mockRejectedValueOnce(new ApiError('Conflict', 409, 'conflict', 5))
     await submit()
     expect(dialog().textContent).toContain('No changes from this request were applied')
@@ -205,7 +251,7 @@ describe('sidebar organization interactions', () => {
   })
 
   it('retains acknowledged outcomes on refresh failure and requires reload before further writes', async () => {
-    await render(); await click('Options for Essays'); await click('Rename folder'); await enter('Changed')
+    await render(); await editFeeds(); await click('Options for Essays'); await click('Rename folder'); await enter('Changed')
     vi.mocked(api.organize).mockResolvedValueOnce({ snapshot: null, results: [{ index: 0, status: 'applied', changed: true }], refreshError: 'Navigation could not reload.' })
     await submit()
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('1 of 1 changes confirmed. Navigation could not reload.')
@@ -215,7 +261,7 @@ describe('sidebar organization interactions', () => {
 
   it('limits FreshRSS menus and drag targets to supported operations and disables offline writes', async () => {
     snapshot = { ...snapshot, backend: 'freshrss', revision: null, capabilities: FRESHRSS_ORGANIZATION_CAPABILITIES }
-    await render({ online: false }); await selectFeeds(); await click('Options for Essays')
+    await render({ online: false }); await editFeeds(); await click('Options for Essays')
     expect(button('New folder')).toBeUndefined(); expect(button('Rename folder')).toBeUndefined(); expect(button('Move down')).toBeUndefined()
     await key(document.activeElement!, 'Escape'); await click('Expand Essays'); await click('Options for First')
     expect(button('Rename feed').disabled).toBe(true); expect(button('Move feed').disabled).toBe(true)
@@ -227,7 +273,7 @@ describe('sidebar organization interactions', () => {
     snapshot = { ...snapshot, backend: 'freshrss', revision: null, capabilities: FRESHRSS_ORGANIZATION_CAPABILITIES }
     snapshot.navigation.uncategorized = []
     snapshot.navigation.folders[0].title = 'Uncategorized'
-    await render(); await selectFeeds()
+    await render(); await editFeeds()
     expect([...container.querySelectorAll('.folder-row .source-label')].filter(item => item.textContent === 'Uncategorized')).toHaveLength(1)
     await click('Expand Uncategorized'); await click('Options for First'); await click('Move feed')
     expect(dialog().textContent).toContain('FreshRSS returns feeds without a chosen folder to its default category')
@@ -235,7 +281,7 @@ describe('sidebar organization interactions', () => {
   })
 
   it('drags only from a grip, shows an insertion line, and saves feed order', async () => {
-    await render(); await click('Expand Essays')
+    await render(); await editFeeds(); await click('Expand Essays')
     const grip = button('Move Second')
     await dragTo(grip, button('First'))
     expect(container.querySelector('[data-drop-edge="before"]')?.textContent).toContain('First')
@@ -251,7 +297,7 @@ describe('sidebar organization interactions', () => {
   })
 
   it('supports keyboard grip ordering, Escape cancellation, and the captured revision', async () => {
-    await render()
+    await render(); await editFeeds()
     const grip = button('Move Empty')
     grip.focus()
     await key(grip, ' '); await key(grip, 'ArrowUp')
@@ -266,7 +312,7 @@ describe('sidebar organization interactions', () => {
   })
 
   it('moves only the dragged membership, including to Uncategorized, and cancels pointer gestures', async () => {
-    await render(); await click('Expand Essays')
+    await render(); await editFeeds(); await click('Expand Essays')
     const grip = button('Move First')
     await dragTo(grip, button('Empty'))
     expect(container.querySelector('[data-drop-edge="inside"]')?.textContent).toContain('Empty')
@@ -280,7 +326,7 @@ describe('sidebar organization interactions', () => {
 
   it.each([false, true])('atomically moves and orders at the destination, existing membership=%s', async alreadyMember => {
     snapshot.navigation.folders[2].feeds = [...(alreadyMember ? [feed('First')] : []), feed('Third'), feed('Fourth')]
-    await render(); await click('Expand Essays'); await click('Expand Other')
+    await render(); await editFeeds(); await click('Expand Essays'); await click('Expand Other')
     const grip = button('Move First')
     await dragTo(grip, button('Fourth'))
     expect(container.querySelector('[data-drop-edge="before"]')?.textContent).toContain('Fourth')
@@ -293,7 +339,7 @@ describe('sidebar organization interactions', () => {
   })
 
   it('removes only the source membership when a multiply-filed feed is dropped onto an Uncategorized row', async () => {
-    await render(); await click('Expand Essays'); await click('Uncategorized')
+    await render(); await editFeeds(); await click('Expand Essays'); await click('Uncategorized')
     const grip = button('Move First')
     await dragTo(grip, button('Unfiled'))
     expect(container.querySelector('[data-drop-edge="inside"]')?.textContent).toContain('Unfiled')
@@ -306,7 +352,7 @@ describe('sidebar organization interactions', () => {
   })
 
   it('puts an after-folder line below its expanded children', async () => {
-    await render(); await click('Expand Other')
+    await render(); await editFeeds(); await click('Expand Other')
     const grip = button('Move Essays')
     await dragTo(grip, button('Other'))
     await pointer(grip, 'pointermove', 20, 20)
@@ -318,14 +364,14 @@ describe('sidebar organization interactions', () => {
     expect(vi.mocked(api.organize).mock.calls[0][0].commands).toEqual([{ type: 'move-folder', folderId: 'a', beforeId: null }])
   })
 
-  it.each(['drop', 'Escape', 'lostcapture', 'unmount'])('scrolls with a stationary pointer and stops on %s', async ending => {
+  it.each(['drop', 'Escape', 'lostcapture', 'Done', 'unmount'])('scrolls with a stationary pointer and stops on %s', async ending => {
     const frames = new Map<number, FrameRequestCallback>()
     let serial = 0
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++serial, callback); return serial })
     vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id))
     container.classList.add('source-nav')
     vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 100 } as DOMRect)
-    await render(); await click('Expand Essays')
+    await render(); await editFeeds(); await click('Expand Essays')
     const grip = button('Move Second')
     await dragTo(grip, button('First'))
     await pointer(grip, 'pointermove', 20, 99)
@@ -339,13 +385,20 @@ describe('sidebar organization interactions', () => {
       expect(vi.mocked(api.organize).mock.calls[0][0].commands).toEqual([{ type: 'move-feed', feedId: 'Second', fromFolderId: 'a', toFolderId: 'b' }])
     } else if (ending === 'Escape') await key(grip, 'Escape')
     else if (ending === 'lostcapture') await pointer(grip, 'lostpointercapture')
+    else if (ending === 'Done') {
+      await click('Done')
+      expect(container.querySelector('[data-drop-edge]')).toBeNull()
+      expect(container.querySelector('[data-organization-handle]')).toBeNull()
+      expect(document.activeElement?.getAttribute('aria-label')).toBe('Edit feeds')
+      await pointer(grip, 'pointerup')
+    }
     else await act(async () => root.unmount())
     expect(frames.size).toBe(0)
     if (ending !== 'drop') expect(api.organize).not.toHaveBeenCalled()
   })
 
   it('keeps menu ordering and gates FreshRSS drag operations', async () => {
-    await render(); await click('Expand Essays'); await click('Options for Second'); await click('Move up')
+    await render(); await editFeeds(); await click('Expand Essays'); await click('Options for Second'); await click('Move up')
     expect(vi.mocked(api.organize).mock.calls[0][0].commands).toEqual([{ type: 'order-feeds', folderId: 'a', feedIds: ['Second', 'First'] }])
     await act(async () => update({ ...snapshot, backend: 'freshrss', revision: null, capabilities: FRESHRSS_ORGANIZATION_CAPABILITIES }))
     expect(button('Move Essays')).toBeUndefined()
