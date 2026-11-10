@@ -6,6 +6,7 @@ import { normalizeFeedContent, normalizeFeedThumbnail } from './feed-content.js'
 import { isEditorialLinkedFeed } from './entry-kind.js'
 import { IdentityStore, migrateIdentity, type BackendIdentity, type SourceItemIdentity, type IdentityResolution } from './identity.js'
 import { transaction } from './transaction.js'
+import { FeedFetchStore, migrateFeedFetchState } from './feed-fetch-state.js'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
@@ -157,6 +158,7 @@ export class PaperDatabase {
   private readonly databasePath: string
   readonly identities: IdentityStore
   readonly organization: LocalOrganizationService
+  readonly feedFetch: FeedFetchStore
   private activeBackendId = ''
 
   constructor(databasePath: string) {
@@ -167,9 +169,11 @@ export class PaperDatabase {
       this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
       this.backupBeforeMigration(7, 'identity')
       this.backupBeforeMigration(8, 'organization')
+      this.backupBeforeMigration(9, 'feed-fetch')
       this.migrate()
       this.identities = new IdentityStore(this.db)
       this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
+      this.feedFetch = new FeedFetchStore(this.db, id => this.assertLocalBackend(id))
       this.organization = new LocalOrganizationService(this.db, id => this.assertLocalBackend(id), () => this.localNavigation())
     } catch (error) {
       this.db.close()
@@ -188,7 +192,7 @@ export class PaperDatabase {
 
   private backupBeforeMigration(target: number, name: string) {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
-    if (version > 8) throw new Error('This database was created by a newer Paper version')
+    if (version > 9) throw new Error('This database was created by a newer Paper version')
     if (!version || version >= target) return
     const backupPath = `${this.databasePath}.before-${name}-v${target}`
     if (fs.existsSync(backupPath)) {
@@ -253,6 +257,7 @@ export class PaperDatabase {
       if (!previous || previous.title !== feed.title || previous.url !== feed.url || previous.site_url !== (feed.siteUrl || '') || previous.icon_url !== (feed.iconUrl || '')) {
         this.organization.subscriptionChanged(backendId)
       }
+      this.feedFetch.saveEndpoint(backendId, id, feed.url)
       return id
     })
   }
@@ -637,6 +642,7 @@ export class PaperDatabase {
       this.db.exec('PRAGMA user_version = 7;')
     })
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 8) migrateOrganization(this.db)
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 9) migrateFeedFetchState(this.db)
   }
 
   replaceNavigation(navigation: NavigationPayload) {

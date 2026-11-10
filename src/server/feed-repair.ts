@@ -1,5 +1,5 @@
 import { JSDOM } from 'jsdom'
-import { assertPublicUrl, readLimited } from './reader.js'
+import { boundedFetch } from './feed-http.js'
 
 export interface FeedPreview { url: string; title: string; items: Array<{ title: string; date: string }> }
 
@@ -16,20 +16,7 @@ export function parseFeedPreview(xml: string, url: string): FeedPreview {
 }
 
 export async function previewFeed(input: string, trustedOrigins: string[] = []): Promise<FeedPreview> {
-  let url: URL
-  try { url = new URL(input) } catch { throw new Error('Enter a complete feed URL.') }
-  for (let i = 0; i < 6; i++) {
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Use an HTTP or HTTPS feed URL without embedded login details.')
-    // Private feed proxies require an explicit administrator allowlist.
-    if (!trustedOrigins.includes(url.origin)) await assertPublicUrl(url)
-    const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(15000), headers: { Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml' } })
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get('location')
-      if (!location) throw new Error('The feed returned an invalid redirect.')
-      url = new URL(location, url); continue
-    }
-    if (!response.ok) throw new Error(`The feed returned HTTP ${response.status}.`)
-    return parseFeedPreview(await readLimited(response), url.href)
-  }
-  throw new Error('The feed redirected too many times.')
+  const response = await boundedFetch(input, { trustedOrigins, timeoutMs: 15000 })
+  if (response.status !== 200) throw new Error(`The feed returned HTTP ${response.status}.`)
+  return parseFeedPreview(response.text, response.url)
 }

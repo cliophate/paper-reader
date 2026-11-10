@@ -144,9 +144,11 @@ by the current FreshRSS adapter.
 
 ## Upgrade and recovery
 
-The current schema is v8. [Folder and subscription organization](organization.md)
-documents its additive migration and `.before-organization-v8` backup. It keeps
-the v7 identity rules and original pre-v7 backup described below.
+The current schema is v9. [Standalone feed scheduling](feed-scheduling.md)
+documents its migration and `.before-feed-fetch-v9` backup.
+[Folder and subscription organization](organization.md) documents schema v8
+and its `.before-organization-v8` backup. Both migrations keep the v7 identity
+rules and original pre-v7 backup described below.
 
 Schema version 7 is additive. Before upgrading a version 1 through 6 database,
 Paper uses SQLite `VACUUM INTO` to create a consistent backup including committed

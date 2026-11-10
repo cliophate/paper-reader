@@ -9,6 +9,10 @@ and the successful-fetch contract for the future HTTP collector.
 [Folder and subscription organization](organization.md) documents schema v8,
 revision-checked commands, collision rules and FreshRSS capability limits.
 
+[Standalone feed scheduling](feed-scheduling.md) documents schema v9, durable
+leases and conditional requests. [Bounded HTTP transport](feed-http.md) defines
+the shared collector, discovery and repair fetch contract.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh
