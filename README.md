@@ -8,6 +8,7 @@ Entirely AI-coded. If this steals kittens, don't blame me.
 
 Paper is an early single-user alpha with no built-in login. Keep it local or
 use an [authenticated HTTPS proxy](docs/access.md) for remote access.
+See the [changelog](CHANGELOG.md) for alpha.3 changes and upgrade notes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/desktop-dark.png">
@@ -23,20 +24,21 @@ use an [authenticated HTTPS proxy](docs/access.md) for remote access.
 
 ## Quick start
 
-You need Docker Compose 2.24.4 or newer. Standalone mode needs one Paper
-container and a persistent data directory. No FreshRSS or optional integration
-credentials are needed.
-
-Standalone setup is currently available in source builds. Use a reviewed release
-that includes it before relying on a published image; `0.1.0-alpha.2` predates it.
+You need Docker Compose 2.24.4 or newer. The alpha.3 images support Linux amd64.
+Standalone mode needs one Paper container and a persistent data directory. No
+FreshRSS or optional integration credentials are needed.
 
 ```sh
-git clone https://github.com/cliophate/paper-reader.git
+git clone --branch v0.1.0-alpha.3 --depth 1 https://github.com/cliophate/paper-reader.git
 cd paper-reader
 sh scripts/setup.sh
-docker compose build paper
+sh scripts/pull-image.sh
 docker compose up -d --no-build paper
 ```
+
+The helper pulls the pinned runtime image from GHCR. If the registry is
+unavailable, it downloads the release image archive, verifies its SHA-256
+checksum, and loads it into Docker.
 
 Setup creates private configuration with `PAPER_BACKEND=standalone`. Open
 [localhost:8080](http://localhost:8080), choose **Add feeds**, and add an RSS or
@@ -96,7 +98,9 @@ external services.
 
 ## Build from source
 
-After setup and configuration:
+Clone the repository at the tag or commit you want to build, then run
+`sh scripts/setup.sh` if you do not already have private configuration. From
+that checkout:
 
 ```sh
 docker compose build paper

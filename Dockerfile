@@ -14,7 +14,7 @@ ARG SOURCE_REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/cliophate/paper-reader" \
       org.opencontainers.image.revision=$SOURCE_REVISION \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="0.1.0-alpha.2"
+      org.opencontainers.image.version="0.1.0-alpha.3"
 
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8080 STATE_DIR=/data
 WORKDIR /app

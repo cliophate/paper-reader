@@ -1,9 +1,8 @@
 # Article identity and state ownership
 
-This implements the persistence foundation in [#15](https://github.com/cliophate/paper-reader/issues/15).
-FreshRSS remains the only selectable backend. The standalone import and state
-APIs are internal building blocks for #16 and #18. Setup and account migration
-remain in #21.
+The persistence foundation from [#15](https://github.com/cliophate/paper-reader/issues/15)
+now supports standalone and FreshRSS modes. See [backend migration](backend-migration.md)
+for standalone setup, snapshot cutover and rollback.
 
 ## Identity rules
 
@@ -17,8 +16,8 @@ same URL.
 SHA-256 digest of the configured base URL and username. URL credentials and
 fragments are removed; the API password is never included. Rotating a password
 does not change identity. A changed endpoint or username requires explicit
-migration, even if the operator knows it points to the same account. A future
-standalone setup must generate its instance UUID once and persist it.
+migration, even if the operator knows it points to the same account. Standalone
+setup generates its instance UUID once and persists it.
 
 `subscription_aliases` scopes upstream subscription IDs to a backend instance.
 `article_aliases` scopes external item IDs to the backend instance and immutable
@@ -108,7 +107,7 @@ reset existing read/star flags.
 
 ## Pending remote writes, before offline support
 
-Offline FreshRSS writes and backend switching remain disabled. Their later
+Offline FreshRSS writes and live backend switching remain disabled. Their later
 implementation must add a durable outbox before accepting those writes:
 
 - Each operation needs a UUID, backend and subscription IDs, immutable article

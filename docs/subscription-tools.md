@@ -1,8 +1,8 @@
 # Feed discovery and OPML
 
-Settings → Feeds → Discover and transfer includes website discovery and OPML import/export. FreshRSS
-remains the only selectable backend. The internal standalone import store does
-not select or bind a backend.
+Settings > Feeds > Discover and transfer includes website discovery and OPML
+import/export in standalone and FreshRSS modes. New installations select
+standalone explicitly; omitted backend selection retains FreshRSS behavior.
 
 ## Discovery
 
@@ -18,7 +18,8 @@ uses the final response URL and the first HTML base element. The streaming HTML
 parser bounds nesting at 64 levels and elements at 100,000. It neither builds a
 DOM, runs scripts nor downloads page resources. At most 100 candidates are returned.
 Advertised candidates are suggestions, not a claim that their feeds are healthy.
-FreshRSS fetches a selected subscription through its existing add operation.
+Standalone schedules fetches for the selected subscription. FreshRSS fetches a
+selected subscription through its existing add operation.
 
 ## Import policy
 
@@ -63,8 +64,8 @@ FreshRSS supports one mapped folder per item through Paper. Reused subscriptions
 can keep their folders or move to an existing folder or Uncategorized. A new
 subscription can create a named folder. Multiple source memberships require an
 explicit single-folder choice. No local-only folders, memberships or ordering
-are created for FreshRSS. The internal standalone store supports multiple
-memberships through the existing organization commands.
+are created for FreshRSS. Standalone supports multiple memberships through the
+existing organization commands.
 
 ## Conflicts and failures
 
@@ -87,7 +88,7 @@ FreshRSS writes use the existing synchronizer. Reuse moves resolve metadata in
 its organization command queue. Standalone creation calls `saveLocalSubscription`
 so generation and scheduling hooks remain owned by the subscription lifecycle.
 Folder operations use revision-checked organization commands. Neither backend
-promises an atomic OPML batch. Internal standalone item creation and folder
+promises an atomic OPML batch. Standalone item creation and folder
 mapping can partly apply and are reported accordingly.
 
 ## Export

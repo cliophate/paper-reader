@@ -1,6 +1,6 @@
 {
   "name": "paper",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -48,7 +48,7 @@
     "vitest": "^5.1.0"
   },
   "license": "MIT",
-  "description": "A self-hosted FreshRSS reader. Entirely AI-coded. If this steals kittens, don't blame me.",
+  "description": "A self-hosted feed reader with standalone and FreshRSS modes. Entirely AI-coded. If this steals kittens, don't blame me.",
   "repository": {
     "type": "git",
     "url": "https://github.com/cliophate/paper-reader.git"
