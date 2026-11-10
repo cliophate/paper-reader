@@ -45,7 +45,9 @@ and undo. See [article identity and state](docs/article-identity.md).
 Feed refreshes update the full-text index through stable indexed row IDs instead
 of scanning the article corpus for every changed item. Common-term search uses
 indexed metadata and row-ID lookups while preserving complete result snapshots,
-ranking and pagination.
+ranking and pagination. Slow local searches run in a separate worker so reading
+and state updates can continue. Search admits one active request and eight waiting
+requests; excess requests receive a retryable busy response.
 
 ### Upgrade and offline migration
 

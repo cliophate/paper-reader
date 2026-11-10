@@ -23,6 +23,7 @@ import { freshRssImportStore } from './subscription-import-freshrss.js'
 import { discoveryTransport } from './discovery-transport.js'
 import { ReaderService } from './reader.js'
 import { ReadwiseClient } from './readwise.js'
+import { SearchService, SearchUnavailableError } from './search-service.js'
 import { entryMatchesSearch } from './search.js'
 import { BackendSynchronizer } from './sync.js'
 import { escapeHtml } from './text.js'
@@ -48,6 +49,7 @@ const connectionListeners = new Set<() => void>()
 const discussionEnabled = () => config.codex.enabled && config.ai.discussionEnabled
 logMemory('database ready')
 const repository = new PaperRepository(database)
+const search = new SearchService(database)
 const standalone = backend instanceof StandaloneBackend ? backend : null
 const synchronizer = standalone ? new StandaloneRuntime(database, standalone, config.sync.enabled, config.trustedFeedOrigins)
   : new BackendSynchronizer(database, backend, config.sync.enabled, config.sync.minutes)
@@ -382,15 +384,26 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
       if (!continuation.startsWith(prefix)) return response.status(409).json({ error: 'Article order changed. Refresh this list to continue.' })
       continuation = continuation.slice(prefix.length)
     }
-    const page = await repository.entriesPage(stream, {
-      unreadOnly,
-      limit: ENTRY_PAGE_SIZE,
-      continuation,
-      query,
-      after: String(request.query.after || ''),
-      before: String(request.query.before || ''),
-    })
-    return response.json({ ...headlines.page(page), order, continuation: page.continuation ? `${order}|${page.continuation}` : '' })
+    const controller = new AbortController()
+    const disconnected = () => { if (!response.writableEnded) controller.abort() }
+    if (query) {
+      response.once('close', disconnected)
+      if (response.destroyed) controller.abort()
+    }
+    try {
+      const options = {
+        unreadOnly,
+        limit: ENTRY_PAGE_SIZE,
+        continuation,
+        query,
+        after: String(request.query.after || ''),
+        before: String(request.query.before || ''),
+      }
+      const page = query ? await search.search(stream, options, controller.signal) : await repository.entriesPage(stream, options)
+      if (response.destroyed) return
+      if (database.streamOrder(stream) !== order) return response.status(409).json({ error: 'Article order changed. Refresh this list to continue.' })
+      return response.json({ ...headlines.page(page), order, continuation: page.continuation ? `${order}|${page.continuation}` : '' })
+    } finally { response.removeListener('close', disconnected) }
   }
   if (!query) {
     const page = await backend.entriesPage(stream, { unreadOnly, limit: ENTRY_PAGE_SIZE, continuation })
@@ -636,6 +649,8 @@ app.use(express.static(clientPath, { index: false, maxAge: '1h' }))
 app.get('*splat', (_request, response) => response.sendFile('index.html', { root: clientPath }))
 
 app.use((error: Error, request: Request, response: Response, _next: NextFunction) => {
+  if (response.destroyed) return
+  if (error instanceof SearchUnavailableError) return response.status(503).json({ error: error.message })
   if (error instanceof StateConflictError) return response.status(409).json({ code: 'state-conflict', error: error.message, states: error.states })
   if (error instanceof UndoExpiredError) return response.status(410).json({ error: error.message })
   if (error instanceof BackendValidationError) return response.status(400).json({ error: error.message })
@@ -670,11 +685,12 @@ async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
   clearInterval(memoryTimer)
-  // On timeout the process exits holding the lock. The OS releases it only
-  // after every remaining writer has died.
-  const deadline = setTimeout(() => process.exit(1), 30_000)
-  deadline.unref()
+  // Native SQLite can delay both worker termination and process.exit(). At the
+  // deadline, OS teardown kills every thread and releases its locks without
+  // cleanup. SQLite crash recovery applies on the next open.
+  const deadline = setTimeout(() => process.kill(process.pid, 'SIGKILL'), 30_000)
   const stopped = new Promise<void>(resolve => server.close(() => resolve()))
+  const searchStopped = search.close()
   for (const response of eventResponses) response.end()
   headlines.setEnabled(false)
   pulse.setEnabled(false)
@@ -683,10 +699,18 @@ async function shutdown() {
   await stopped
   await drainRequests()
   await Promise.all([headlines.drain(), pulse.drain(), topics.drain(), discussions.drain()])
+  await searchStopped
   storage.close()
   clearTimeout(deadline)
 }
-for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void shutdown().catch(() => process.exit(1)) })
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => {
+  void shutdown().catch(() => {
+    // Keep the referenced deadline and storage lock alive. process.exit() here
+    // could block the main thread while joining a busy native worker.
+    console.error('Paper could not finish shutdown; waiting for forced termination.')
+    process.exitCode = 1
+  })
+})
 
 function logMemory(stage: string) {
   const { rss, heapUsed, heapTotal } = process.memoryUsage()

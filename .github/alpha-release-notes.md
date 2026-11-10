@@ -20,8 +20,9 @@ for changes since alpha.2.
   supplied, so stale edits cannot silently undo newer work.
 
 Feed refreshes and common-term searches now use indexed full-text row lookups
-and metadata queries to avoid blocking the reader on large article collections.
-Search keeps its complete result snapshots and relevance ordering.
+and metadata queries on large article collections. Slow local searches run in a
+separate worker while reading and state updates continue. Search keeps its complete
+result snapshots and relevance ordering, with a bounded request queue.
 
 Full-text reading, filters, keyboard shortcuts and offline article copies remain
 available. AI, Readwise Reader and Kirby are optional. AI uses the separate AI

@@ -56,8 +56,9 @@ The smoke test uses a local protocol fixture and temporary SQLite storage. It
 checks imports, state changes, connection settings, offline assets, and restore
 behavior without using your `.env`, reading data, or provider accounts.
 The collection regression starts the built server with 200,000 synthetic articles
-and 1,266 feeds, probes health during collection and common-term search, and
-checks retained state and checkpoints. It uses about 6 GiB of temporary storage
+and 1,266 feeds, probes health during collection and slow searches, and
+checks concurrent state writes, cancellation, queue saturation, shutdown locks,
+retained state and checkpoints. It uses about 6 GiB of temporary storage
 while seeding its multi-KiB article bodies.
 
 ## Docker integration test
