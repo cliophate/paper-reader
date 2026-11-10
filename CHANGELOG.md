@@ -40,9 +40,16 @@ ambiguous matches never merge histories silently. Standalone state updates commi
 with their activity records, and revision checks reject stale conditional edits
 and undo. See [article identity and state](docs/article-identity.md).
 
+### Collection and search responsiveness
+
+Feed refreshes update the full-text index through stable indexed row IDs instead
+of scanning the article corpus for every changed item. Common-term search uses
+indexed metadata and row-ID lookups while preserving complete result snapshots,
+ranking and pagination.
+
 ### Upgrade and offline migration
 
-Alpha.3 uses database schema 10. Stop Paper and every briefing command before
+Alpha.3 uses database schema 11. Stop Paper and every briefing command before
 upgrading, and back up the entire data directory and private configuration.
 Startup creates a consistent pre-upgrade database backup, but that does not
 replace backups of settings, secrets, AI logins or FreshRSS. Downgrading requires

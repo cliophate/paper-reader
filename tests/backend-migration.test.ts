@@ -255,6 +255,27 @@ describe('offline backend migration', () => {
 })
 
 describe('rollback with later standalone activity', () => {
+  it('preserves mapped search rows through migration snapshots, activation and rollback', () => {
+    const rows = () => sql(db => db.prepare('SELECT * FROM entry_search_rows ORDER BY id').all())
+    const original = rows()
+    const preview = session(migration => migration.preview(source.id))
+    session(migration => migration.apply(preview.planDigest))
+    expect(rows()).toEqual(original)
+    sql(db => db.prepare('UPDATE entries SET full_content_text=? WHERE id=?').run('Postcutoverneedle', entryId))
+    let db = new PaperDatabase(file)
+    expect(db.localEntriesPage({ kind: 'all', id: 'all', title: 'All' }, { query: 'Postcutoverneedle' }).items.map(e => e.id)).toEqual([entryId])
+    db.close()
+    const rollback = session(migration => migration.rollbackPreview())
+    session(migration => migration.rollback(rollback.digest, true))
+    expect(rows()).toEqual(original)
+    db = new PaperDatabase(file)
+    expect(db.localEntriesPage({ kind: 'all', id: 'all', title: 'All' }, { query: 'Postcutoverneedle' }).items).toHaveLength(0)
+    expect(db.localEntriesPage({ kind: 'all', id: 'all', title: 'All' }, { query: 'Retain' }).items.map(e => e.id)).toContain(entryId)
+    db.close()
+    sql(connection => connection.prepare('UPDATE entries SET content_text=? WHERE id=?').run('Afterrollbackneedle', entryId))
+    expect(sql(connection => connection.prepare("SELECT count(*) n FROM entries_fts WHERE entries_fts MATCH 'Afterrollbackneedle'").get()?.n)).toBe(1)
+  })
+
   it('recovers a killed rollback process after database replacement while retaining both settings copies', async () => {
     const original = sql(databaseDigest), settings = settingsDigest(directory)
     const preview = session(migration => migration.preview(source.id))
@@ -338,6 +359,6 @@ describe('schema 10 upgrade ordering', () => {
     const saved = fs.readFileSync(file + '.before-standalone-setup-v10')
     session(() => {})
     expect(fs.readFileSync(file + '.before-standalone-setup-v10')).toEqual(saved)
-    expect(sql(db => db.prepare('PRAGMA user_version').get()?.user_version)).toBe(10)
+    expect(sql(db => db.prepare('PRAGMA user_version').get()?.user_version)).toBe(11)
   })
 })

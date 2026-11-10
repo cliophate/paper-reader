@@ -143,8 +143,10 @@ by the current FreshRSS adapter.
 
 ## Upgrade and recovery
 
-The current schema is v10. [Backend migration core](backend-migration.md)
-documents its journal, provenance, undo context and pre-upgrade backup.
+The current schema is v11. [Search indexing](search-index.md) documents its
+durable row mapping, full-text rebuild and pre-upgrade backup.
+[Backend migration core](backend-migration.md) documents the v10 journal,
+provenance, undo context and pre-upgrade backup.
 [Standalone feed scheduling](feed-scheduling.md)
 documents its migration and `.before-feed-fetch-v9` backup.
 [Folder and subscription organization](organization.md) documents schema v8

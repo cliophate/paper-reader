@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { PaperDatabase } from './db.js'
+import { DATABASE_VERSION } from './search-schema.js'
 import { acquireStateLock, type StateLock } from './state-lock.js'
 import { transaction } from './transaction.js'
 import { referenceReport } from './migration-references.js'
@@ -110,7 +111,7 @@ export class BackendMigration {
     const db = openDatabase(this.database)
     try {
       verifyDatabase(db)
-      if (db.prepare('PRAGMA user_version').get()?.user_version !== 10) fail('Upgrade Paper before making a migration preview.')
+      if (db.prepare('PRAGMA user_version').get()?.user_version !== DATABASE_VERSION) fail('Upgrade Paper before making a migration preview.')
       if (active(db) !== expectedSource || db.prepare('SELECT kind FROM reader_backends WHERE id = ?').get(expectedSource)?.kind !== 'freshrss') fail('The configured FreshRSS account does not own this database.')
       for (const table of ['subscription_identities', 'article_identities']) if (db.prepare(`SELECT 1 FROM ${quote(table)} WHERE backend_id != ? LIMIT 1`).get(expectedSource)) fail('Migration cannot combine data owned by different accounts.')
       if (db.prepare('SELECT 1 FROM feed_fetch_state LIMIT 1').get() || db.prepare('SELECT 1 FROM feed_http_slots LIMIT 1').get()) fail('A FreshRSS migration cannot adopt existing standalone scheduler state.')

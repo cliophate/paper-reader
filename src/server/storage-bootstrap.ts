@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { PaperDatabase } from './db.js'
+import { DATABASE_VERSION } from './search-schema.js'
 import { acquireStateLock, StateLockError, type StateLock } from './state-lock.js'
 import { digest, openDatabase } from './migration-storage.js'
 
@@ -35,8 +36,8 @@ function needsInitialization(lock: StateLock): boolean {
       }
     }
     const version = Number(db.prepare('PRAGMA user_version').get()?.user_version || 0)
-    if (version > 10) throw new Error('This database was created by a newer Paper version')
-    return version < 10 || db.prepare("SELECT value FROM sync_state WHERE key = 'fulltext_search_v1'").get()?.value !== 'true'
+    if (version > DATABASE_VERSION) throw new Error('This database was created by a newer Paper version')
+    return version < DATABASE_VERSION || db.prepare("SELECT value FROM sync_state WHERE key = 'fulltext_search_v1'").get()?.value !== 'true'
   } finally { db.close() }
 }
 

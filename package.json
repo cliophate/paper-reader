@@ -16,7 +16,7 @@
     "briefing": "tsx src/server/briefing-cli.ts",
     "init": "node scripts/init-config.mjs",
     "licenses": "node scripts/collect-licenses.mjs",
-    "test:smoke": "node scripts/smoke-test.mjs && node scripts/standalone-smoke-test.mjs"
+    "test:smoke": "node scripts/smoke-test.mjs && node scripts/standalone-smoke-test.mjs && node scripts/collection-responsiveness-test.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.6",

@@ -62,7 +62,7 @@ verified the restored application.
 
 ### Upgrade to alpha.3
 
-Alpha.3 uses database schema 10. Keep the existing backend and FreshRSS account
+Alpha.3 uses database schema 11. Keep the existing backend and FreshRSS account
 configuration for the upgrade. An omitted `PAPER_BACKEND` still selects FreshRSS;
 new setup selects standalone. Do not rerun setup over an existing `.env` or change
 the backend to move data. Review the [changelog](../CHANGELOG.md) first.
@@ -86,7 +86,8 @@ when starting either pulled image. Source installations can build the selected
 tag instead, as described in the [README](../README.md#build-from-source).
 
 Before upgrading an existing database, Paper creates and validates
-`paper.sqlite.before-standalone-setup-v10` in the data directory. Earlier schema
+`paper.sqlite.before-search-rows-v11` in the data directory. This upgrade rebuilds
+the derived full-text index from saved article and full-text content. Earlier schema
 steps can create additional backups. Keep these files, the original full backup,
 private configuration and saved secrets. A schema backup is not a complete
 installation backup. Verify startup, articles, reading positions and saved state

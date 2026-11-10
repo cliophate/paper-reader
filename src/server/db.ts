@@ -9,6 +9,7 @@ import { IdentityStore, migrateIdentity, type BackendIdentity, type SourceItemId
 import { transaction } from './transaction.js'
 import { FeedFetchStore, migrateFeedFetchState } from './feed-fetch-state.js'
 import { migrateStandaloneSetup } from './migration-schema.js'
+import { DATABASE_VERSION, migrateSearchRows } from './search-schema.js'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
@@ -175,10 +176,11 @@ export class PaperDatabase {
       this.backupBeforeMigration(8, 'organization')
       this.backupBeforeMigration(9, 'feed-fetch')
       this.backupBeforeMigration(10, 'standalone-setup')
+      this.backupBeforeMigration(DATABASE_VERSION, 'search-rows')
       const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
       // Current-schema participants must not drop/recreate triggers on every
       // open. Coordinated bootstrap performs upgrades under exclusive access.
-      if (version < 10 || this.getSyncValue('fulltext_search_v1') !== 'true') this.migrate()
+      if (version < DATABASE_VERSION || this.getSyncValue('fulltext_search_v1') !== 'true') this.migrate()
       this.identities = new IdentityStore(this.db)
       this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
       this.feedFetch = new FeedFetchStore(this.db, id => this.assertLocalBackend(id))
@@ -200,7 +202,7 @@ export class PaperDatabase {
 
   private backupBeforeMigration(target: number, name: string) {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
-    if (version > 10) throw new Error('This database was created by a newer Paper version')
+    if (version > DATABASE_VERSION) throw new Error('This database was created by a newer Paper version')
     if (!version || version >= target) return
     const backupPath = `${this.databasePath}.before-${name}-v${target}`
     if (fs.existsSync(backupPath)) {
@@ -287,13 +289,15 @@ export class PaperDatabase {
     return transaction(this.db, () => {
       this.assertLocalBackend(backendId)
       this.identities.assertSubscription(backendId, subscriptionId)
+      const entries: Entry[] = []
       const results = items.map(item => {
         const result = this.identities.resolve(backendId, subscriptionId, item.identity)
         if (result.status === 'resolved') {
-          this.upsertEntries([{ ...item.entry, id: result.id, feedId: subscriptionId, read: false, starred: false, sourceOrder: '' }])
+          entries.push({ ...item.entry, id: result.id, feedId: subscriptionId, read: false, starred: false, sourceOrder: '' })
         }
         return result
       })
+      this.upsertEntries(entries)
       if (options.checkpoint) this.identities.setCheckpoint(backendId, options.checkpoint.key, options.checkpoint.value)
       return results
     })
@@ -682,6 +686,7 @@ export class PaperDatabase {
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 8) migrateOrganization(this.db)
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 9) migrateFeedFetchState(this.db)
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 10) migrateStandaloneSetup(this.db)
+    migrateSearchRows(this.db)
   }
 
   replaceNavigation(navigation: NavigationPayload) {
@@ -1136,7 +1141,11 @@ export class PaperDatabase {
       }
     }
     const search = ftsQuery(options.query || '')
-    const join = search ? 'JOIN entries_fts ON entries_fts.entry_id = entries.id' : ''
+    // Ranking and eligibility need only scope metadata. Avoid reading each
+    // article body or the FTS content row merely to recover its entry ID.
+    const join = search ? `INDEXED BY entries_search_scope_idx
+      JOIN entry_search_rows search ON search.entry_id = entries.id
+      JOIN entries_fts ON entries_fts.rowid = search.id` : ''
     if (search) { clauses.push('entries_fts MATCH ?'); parameters.push(search) }
     return { clauses, parameters, search, join }
   }
@@ -1188,7 +1197,11 @@ export class PaperDatabase {
       while (offset < ids.length && items.length < limit) {
         const id = ids[offset++]
         if (!eligible.has(id)) continue
-        const row = this.db.prepare(`SELECT entries.*, snippet(entries_fts, 4, '', '', '…', 32) AS search_excerpt FROM entries ${join} WHERE entries.id = ? AND entries_fts MATCH ?`).get(id, search)
+        // MATCH alone walks every hit for a common term. Constrain the FTS row
+        // through the indexed mapping before generating this article's snippet.
+        const row = this.db.prepare(`SELECT entries.*, snippet(entries_fts, 4, '', '', '…', 32) AS search_excerpt
+          FROM entries JOIN entries_fts ON entries_fts.rowid = (SELECT id FROM entry_search_rows WHERE entry_id = ?)
+          WHERE entries.id = ? AND entries_fts MATCH ?`).get(id, id, search)
         if (row) items.push({ ...this.decorateEntry(entryFromRow(row as Record<string, string | number>)), searchExcerpt: String(row.search_excerpt) })
       }
       return { items, continuation: ids.slice(offset).some(id => eligible.has(id)) ? encode({ snapshot, offset }) : '' }

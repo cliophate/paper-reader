@@ -19,6 +19,10 @@ for changes since alpha.2.
   saved references. Standalone state changes and undo check revisions when
   supplied, so stale edits cannot silently undo newer work.
 
+Feed refreshes and common-term searches now use indexed full-text row lookups
+and metadata queries to avoid blocking the reader on large article collections.
+Search keeps its complete result snapshots and relevance ordering.
+
 Full-text reading, filters, keyboard shortcuts and offline article copies remain
 available. AI, Readwise Reader and Kirby are optional. AI uses the separate AI
 image and a CLI login; Kirby drafts need a compatible publishing plugin.
@@ -32,7 +36,7 @@ archive if GHCR is unavailable. Source-build instructions remain in the README.
 
 Paper is an early single-user alpha with no built-in login. Keep its port on
 loopback or use an [authenticated HTTPS proxy](https://github.com/cliophate/paper-reader/blob/v0.1.0-alpha.3/docs/access.md).
-Alpha.3 uses database schema 10. Before upgrading, stop Paper and every briefing
+Alpha.3 uses database schema 11. Before upgrading, stop Paper and every briefing
 command and back up the entire data directory and private configuration. Protect saved tokens, generated secrets
 and migration backups. Back up AI login files and FreshRSS separately when used.
 An older image requires its matching pre-upgrade database backup; changing the
