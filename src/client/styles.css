@@ -247,7 +247,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .story-row.kind-threads p { display: none; }
 .filled { fill: currentColor; }
 
-.reader-pane { grid-area: reader; position: relative; background: var(--panel-strong); }
+.reader-pane { container: reader / inline-size; grid-area: reader; position: relative; background: var(--panel-strong); }
 .briefing-library { grid-column: 2 / -1; grid-row: 2; display: grid; grid-template-columns: 330px minmax(0, 1fr); overflow: hidden; }
 .briefing-list { min-width: 0; overflow: auto; border-right: 1px solid var(--line); background: var(--panel); }
 .briefing-list > header { height: 54px; display: flex; align-items: center; gap: 8px; padding: 0 18px; border-bottom: 1px solid var(--line); }
@@ -1016,7 +1016,6 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .filter-preview small { color: var(--muted); }
 @media (max-width: 1040px) {
   .reader-back-button span { display: none; }
-  .reader-toolbar { overflow-x: auto; }
   .reader-actions { flex-shrink: 0; }
   .row-options { min-width: 40px; min-height: 40px; }
   .article-options { flex-shrink: 0; }
@@ -1034,9 +1033,13 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .article-options-menu button { text-align: left; padding: 8px; }
 .article-options summary { list-style-position: inside; display: flex; align-items: center; }
 .reader-actions button, .reader-actions a { white-space: nowrap; }
-.reader-toolbar { gap: 8px; overflow-x: auto; }
+.reader-toolbar { gap: 8px; }
 .reader-actions, .type-button { flex-shrink: 0; }
 .reader-actions button:disabled { cursor: default; }
+@container reader (max-width: 920px) {
+  .reader-actions span { display: none; }
+  .reader-actions button, .reader-actions a { border: 0; background: transparent; padding: 0 7px; }
+}
 .offline-banner, .article-error { flex-shrink: 0; padding: 8px 16px; font-size: 12px; border-bottom: 1px solid var(--line); background: var(--soft); }
 .article-error { color: var(--danger); }
 .article-error button { color: inherit; background: transparent; border: 0; text-decoration: underline; cursor: pointer; }
