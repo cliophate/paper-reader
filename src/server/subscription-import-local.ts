@@ -33,11 +33,13 @@ export function localImportStore(db: PaperDatabase, backendId: string): Subscrip
     backendId, kind: 'standalone',
     async snapshot() { return { ...snapshot(), capabilities: db.organizationCapabilities } },
     async create(row, names, expected) {
-      check(expected)
-      // This entry point also owns endpoint generation and scheduler lifecycle.
-      const id = db.saveLocalSubscription(backendId, { title: row.title, url: row.url })
-      folders(id, names, snapshot().revision)
-      return id
+      return db.transaction(() => {
+        check(expected)
+        // This entry point also owns endpoint generation and scheduler lifecycle.
+        const id = db.saveLocalSubscription(backendId, { title: row.title, url: row.url })
+        folders(id, names, snapshot().revision)
+        return id
+      })
     },
     async setFolders(id, names, expected) { folders(id, names, expected) },
   }

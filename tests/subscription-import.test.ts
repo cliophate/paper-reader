@@ -36,6 +36,25 @@ function remote() {
 }
 
 describe('subscription import application', () => {
+  it.each(['folder', 'membership'])('rolls back subscription creation when %s assignment fails', async failure => {
+    const { db, store } = local()
+    db.saveLocalSubscription(store.backendId, { title: 'Existing', url: 'https://existing.test/rss' })
+    const before = await store.snapshot()
+    const save = vi.spyOn(db, 'saveLocalSubscription')
+    const apply = db.organization.apply.bind(db.organization)
+    vi.spyOn(db.organization, 'apply').mockImplementation((backendId, revision, commands) => {
+      if (commands.some(command => failure === 'folder'
+        ? command.type === 'create-folder' && command.title === 'Second'
+        : command.type === 'add-membership')) throw new Error('Synthetic folder failure')
+      return apply(backendId, revision, commands)
+    })
+    await expect(store.create({ title: 'New', url: 'https://new.test/rss' }, ['First', 'Second'], before.revision)).rejects.toThrow('Synthetic folder failure')
+    const id = save.mock.results[0].value as string
+    expect(await store.snapshot()).toEqual(before)
+    expect(db.feedFetch.get(store.backendId, id)).toBeNull()
+    expect(() => db.identities.assertSubscription(store.backendId, id)).toThrow()
+  })
+
   it('initializes schedules and preserves them with subscription identity through an OPML round trip', async () => {
     const { db, store, importer } = local()
     const first = await importer.preview(xml)
