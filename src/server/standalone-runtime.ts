@@ -41,7 +41,7 @@ export class StandaloneRuntime {
     if (this.running) return this.running
     this.running = Promise.resolve().then(() => this.scheduler.runDue({ signal: this.controller.signal })).then(result => {
       if (this.controller.signal.aborted) return
-      this.db.setSyncValue('last_sync_error', '')
+      if (this.db.getSyncValue('last_sync_error')) this.db.setSyncValue('last_sync_error', '')
       if (!result.attempted) return
       const completedAt = new Date().toISOString()
       this.db.setSyncValue('last_sync_completed_at', completedAt)
