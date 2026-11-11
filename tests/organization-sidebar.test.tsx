@@ -62,6 +62,24 @@ describe('sidebar organization interactions', () => {
     expect(button('Unfiled')).toBeTruthy()
     expect(button('First').textContent).toContain('Update failed')
     expect(button('Unfiled').textContent).toContain('Update failed')
+    await editFeeds()
+    expect(button('First').textContent).toContain('Update failed')
+  })
+
+  it('gives feed titles room in edit mode and restores icons and counts when done', async () => {
+    snapshot.navigation.folders[0].feeds[0].unread = 3
+    await render(); await click('Expand Essays')
+    expect(button('First').querySelector('.feed-mark')).not.toBeNull()
+    expect(button('First').querySelector('.source-count')?.textContent).toBe('3')
+    await editFeeds()
+    expect(button('First').querySelector('.feed-mark, .source-count')).toBeNull()
+    expect(button('First').querySelector('.source-label')?.textContent).toBe('First')
+    expect(button('Move First')).toBeTruthy()
+    expect(button('Options for First')).toBeTruthy()
+    expect(container.querySelector('input[type="checkbox"]')).not.toBeNull()
+    await click('Done')
+    expect(button('First').querySelector('.feed-mark')).not.toBeNull()
+    expect(button('First').querySelector('.source-count')?.textContent).toBe('3')
   })
 
   it('keeps the Feeds heading and add menu visible in edit mode, with contextual selection and focus restoration', async () => {
