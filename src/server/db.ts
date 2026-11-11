@@ -176,7 +176,7 @@ export class PaperDatabase {
   constructor(databasePath: string, options: { readOnly?: boolean } = {}) {
     this.databasePath = databasePath
     if (!options.readOnly) fs.mkdirSync(path.dirname(databasePath), { recursive: true })
-    this.db = new DatabaseSync(databasePath, { readOnly: options.readOnly })
+    this.db = new DatabaseSync(databasePath, { readOnly: options.readOnly, timeout: 5000 })
     try {
       if (options.readOnly) {
         if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) !== DATABASE_VERSION

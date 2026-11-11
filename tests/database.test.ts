@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db.js'
 import * as feedContent from '../src/server/feed-content.js'
@@ -22,6 +24,29 @@ afterEach(() => {
 })
 
 describe('Paper read model', () => {
+  it('waits for another process to commit before binding the standalone backend', async () => {
+    const child = spawn(process.execPath, ['--import', 'tsx', 'tests/fixtures/database-write-worker.ts', path.join(directory, 'paper.sqlite')], {
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'], env: { PATH: process.env.PATH, NODE_NO_WARNINGS: '1' },
+    })
+    const exited = once(child, 'exit')
+    let stderr = ''
+    child.stderr!.on('data', chunk => { stderr += chunk })
+    try {
+      expect((await once(child, 'message'))[0]).toBe('locked')
+      const started = performance.now()
+      child.send('commit')
+      const backend = database.bindStandalone()
+      expect(performance.now() - started).toBeGreaterThanOrEqual(150)
+      expect(backend.kind).toBe('standalone')
+      expect(database.getSyncValue('active_backend_id')).toBe(backend.id)
+      expect(database.getSyncValue('concurrent_writer')).toBe('committed')
+      expect(await exited, stderr).toEqual([0, null])
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      await exited
+    }
+  })
+
   it('returns collection metadata without parsing member article bodies', () => {
     const entries = [1, 2, 3].map(n => entry({ id: String(n), url: `https://example.test/${n}`, title: `Article &amp; ${n}` }))
     database.upsertEntries(entries)
