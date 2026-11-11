@@ -3,7 +3,7 @@
 [#16](https://github.com/cliophate/paper-reader/issues/16) adds internal feed
 parsing and ingestion for the standalone backend in
 [#1](https://github.com/cliophate/paper-reader/issues/1). These modules do not fetch URLs, schedule work, reconcile
-reading state or change subscription organization.
+reading state. Successful ingestion can replace an auto-filled subscription title.
 
 ## Supported feeds
 
@@ -40,8 +40,10 @@ network policy used by `feed-repair.ts`.
 
 `ingestFeed` takes an existing backend ID, opaque subscription ID and endpoint
 generation. The caller creates or repairs the subscription through
-`saveLocalSubscription`. Redirects affect URL resolution only. Feed metadata
-never renames, recreates or moves a subscription during ingestion.
+`saveLocalSubscription`. Redirects affect URL resolution only. When a subscription title still equals its configured URL, a nonempty parsed
+feed title replaces it. Ingestion preserves any other subscription title. This
+rename and its organization revision commit with entries and the checkpoint.
+Feed metadata never recreates or moves a subscription.
 
 Each item goes through `PaperDatabase.importSourceEntries` and the existing
 [article identity rules](article-identity.md). GUIDs and Atom IDs remain opaque.

@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { PaperDatabase } from '../src/server/db.js'
 import { ingestFeed, successfulFeedFetch, type FeedEndpoint } from '../src/server/feed-ingestion.js'
+import { StandaloneBackend } from '../src/server/standalone-backend.js'
 import { escapeHtml } from '../src/server/text.js'
 
 let directory: string
@@ -44,6 +45,47 @@ beforeEach(() => {
 afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
 
 describe('repeatable feed ingestion', () => {
+  it('replaces an added feed URL title once and advances the organization revision', async () => {
+    const standalone = new StandaloneBackend(db)
+    await standalone.addFeed(url + '/untitled', '', 'Synthetic folder')
+    const before = db.organization.snapshot(backend.id)
+    const folder = before.navigation.folders[0]
+    const subscription = folder.feeds[0]
+    const schedule = db.feedFetch.get(backend.id, subscription.id)
+    const ingestAdded = (xml = rss()) => ingest(xml, { subscriptionId: subscription.id, requestUrl: subscription.url })
+    ingestAdded(rss().replace('<title>Fixture</title>', '<title> </title>'))
+    expect(db.organization.snapshot(backend.id)).toEqual(before)
+    ingestAdded()
+    const after = db.organization.snapshot(backend.id)
+    expect(after.revision).toBe(before.revision + 1)
+    expect(after.navigation.folders[0].feeds[0]).toEqual({ ...subscription, title: 'Fixture' })
+    expect(db.feedFetch.get(backend.id, subscription.id)).toEqual(schedule)
+    expect(() => db.organization.apply(backend.id, before.revision, [{ type: 'rename-feed', feedId: subscription.id, title: 'Stale edit' }])).toThrow(/Organization changed/)
+    ingestAdded(rss().replace('<title>Fixture</title>', '<title>Publisher renamed</title>'))
+    expect(db.organization.snapshot(backend.id)).toEqual(after)
+    db.organization.apply(backend.id, after.revision, [{ type: 'rename-feed', feedId: subscription.id, title: 'My title' }])
+    ingestAdded()
+    expect(db.organization.snapshot(backend.id).navigation.folders[0].feeds[0].title).toBe('My title')
+  })
+  it('keeps a chosen subscription title during ingestion', () => {
+    db.saveLocalSubscription(backend.id, { id: endpoint.subscriptionId, title: 'Chosen title', url })
+    const before = db.organization.snapshot(backend.id)
+    ingest()
+    const after = db.organization.snapshot(backend.id)
+    expect(after.revision).toBe(before.revision)
+    expect(after.navigation.uncategorized[0].title).toBe('Chosen title')
+  })
+  it('rolls back an inferred title and its revision when ingestion checkpoint persistence fails', () => {
+    db.saveLocalSubscription(backend.id, { id: endpoint.subscriptionId, title: url, url })
+    const before = db.organization.snapshot(backend.id)
+    sql(c => c.exec("CREATE TRIGGER reject_title_checkpoint BEFORE INSERT ON backend_checkpoints BEGIN SELECT RAISE(ABORT, 'synthetic title failure'); END"))
+    expect(() => ingest()).toThrow(/synthetic title/)
+    expect(db.organization.snapshot(backend.id)).toEqual(before)
+    expect(db.entryCount()).toBe(0)
+    sql(c => c.exec('DROP TRIGGER reject_title_checkpoint'))
+    ingest()
+    expect(db.organization.snapshot(backend.id).navigation.uncategorized[0].title).toBe('Fixture')
+  })
   it('preserves state and references through updates, redirects, disappearance, repair and restart', () => {
     const id = resolvedId(ingest())
     const related = resolvedId(ingest(rss(item('related', '/related'))))

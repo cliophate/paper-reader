@@ -301,7 +301,7 @@ export class PaperDatabase {
   importSourceEntries(backendId: string, subscriptionId: string, items: Array<{
     identity: SourceItemIdentity
     entry: Omit<Entry, 'id' | 'feedId' | 'read' | 'starred' | 'sourceOrder'>
-  }>, options: { checkpoint?: { key: string; value: string } } = {}): IdentityResolution[] {
+  }>, options: { checkpoint?: { key: string; value: string }; feedTitle?: string } = {}): IdentityResolution[] {
     return transaction(this.db, () => {
       this.assertLocalBackend(backendId)
       this.identities.assertSubscription(backendId, subscriptionId)
@@ -320,6 +320,7 @@ export class PaperDatabase {
         return result
       })
       this.upsertEntries(entries)
+      if (options.feedTitle) this.organization.adoptFeedTitle(backendId, subscriptionId, options.feedTitle)
       if (options.checkpoint) this.identities.setCheckpoint(backendId, options.checkpoint.key, options.checkpoint.value)
       return results
     })

@@ -74,7 +74,7 @@ export function ingestFeed(db: PaperDatabase, input: FeedEndpoint & {
   // successful batch delivery, including explicitly recorded ambiguities.
   const checkpoint = { fetchedAt: new Date(fetchedTime).toISOString(), requestUrl, responseUrl }
   const results = db.importSourceEntries(input.backendId, input.subscriptionId, items, {
-    checkpoint: { key, value: JSON.stringify(checkpoint) },
+    checkpoint: { key, value: JSON.stringify(checkpoint) }, feedTitle: parsed.title,
   })
   return { feed: parsed, results, resolved: results.filter(result => result.status === 'resolved').length, ambiguous: results.filter(result => result.status === 'ambiguous').length }
 }
