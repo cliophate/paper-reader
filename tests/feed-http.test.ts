@@ -126,6 +126,16 @@ describe('bounded feed HTTP transport', () => {
     await expect(boundedFetch(origin + '/brokenzip', { trustedOrigins: [origin] })).rejects.toMatchObject({ code: 'network' })
     expect((await boundedFetch(origin + '/utf16', { trustedOrigins: [origin] })).text).toContain(xml)
     expect((await boundedFetch(origin, { trustedOrigins: [origin] })).text).toContain('é')
+    expect((await boundedFetch(origin + '/utf16', { trustedOrigins: [origin], fatalDecoding: false })).text).toContain(xml)
+    expect((await boundedFetch(origin, { trustedOrigins: [origin], fatalDecoding: false })).text).toContain('é')
+    await expect(boundedFetch(origin + '/unsupported', { trustedOrigins: [origin], fatalDecoding: false })).rejects.toMatchObject({ code: 'encoding' })
+  })
+
+  it('allows replacement decoding only when requested and counts replacement bytes toward the decoded limit', async () => {
+    const origin = await server((_req, res) => res.end(Buffer.from([0xff])))
+    await expect(boundedFetch(origin, { trustedOrigins: [origin] })).rejects.toMatchObject({ code: 'encoding' })
+    await expect(boundedFetch(origin, { trustedOrigins: [origin], fatalDecoding: false })).resolves.toMatchObject({ text: '\ufffd' })
+    await expect(boundedFetch(origin, { trustedOrigins: [origin], fatalDecoding: false, maxDecodedBytes: 2 })).rejects.toMatchObject({ code: 'limit' })
   })
 
   it('uses one deadline for slow headers/body and releases slots on interruption', async () => {

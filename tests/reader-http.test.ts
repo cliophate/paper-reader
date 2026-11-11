@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import type { IncomingMessage, RequestOptions } from 'node:http'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { fetchHtml } from '../src/server/reader.js'
+import { extractReadableArticle, fetchHtml } from '../src/server/reader.js'
 
 const transport = vi.hoisted(() => ({ lookup: vi.fn(), request: vi.fn() }))
 vi.mock('node:dns/promises', () => ({ lookup: transport.lookup }))
@@ -15,6 +15,28 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Unpinned request')))
 })
 afterEach(() => vi.unstubAllGlobals())
+
+it('extracts an article containing an invalid UTF-8 byte with a replacement character', async () => {
+  transport.lookup.mockResolvedValue([{ address: '8.8.8.8', family: 4 }])
+  const body = Buffer.concat([
+    Buffer.from('<html><head><title>Synthetic article</title></head><body><article><h1>Synthetic article</h1><p>Damaged '),
+    Buffer.from([0xff]),
+    Buffer.from(' byte.</p>' + '<p>This synthetic paragraph provides enough reporting for readable article extraction.</p>'.repeat(8) + '</article></body></html>'),
+  ])
+  transport.request.mockImplementation((_url: URL, _options: RequestOptions, respond: (response: IncomingMessage) => void) =>
+    Object.assign(new EventEmitter(), { end() {
+      const response = Object.assign(new PassThrough(), { statusCode: 200, headers: { 'content-type': 'text/html; charset=utf-8' } })
+      respond(response as IncomingMessage)
+      response.end(body)
+    } }))
+
+  const { html, finalUrl } = await fetchHtml(new URL('http://publisher.test/story'))
+  const article = extractReadableArticle(html, finalUrl.href)
+  expect(article.title).toBe('Synthetic article')
+  expect(article.contentHtml).toContain('Damaged \ufffd byte.')
+  expect(article.contentHtml).toContain('This synthetic paragraph')
+  expect(fetch).not.toHaveBeenCalled()
+})
 
 it.each([
   [401, 'undecodable'], [403, 'undecodable'], [406, 'undecodable'], [429, 'undecodable'],

@@ -134,6 +134,7 @@ export async function fetchHtml(startUrl: URL, fallbackEnabled = false): Promise
       userAgent: 'Mozilla/5.0 (compatible; PaperReader/1.0; +https://github.com/cliophate/paper-reader)',
       acceptLanguage: 'en-US,en;q=0.8',
       skipBodyStatuses: [401, 403, 406, 429],
+      fatalDecoding: false,
       timeoutMs: 20_000,
       maxResponseBytes: MAX_HTML_BYTES,
       maxDecompressedBytes: MAX_HTML_BYTES,
