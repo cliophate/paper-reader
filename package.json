@@ -12,7 +12,6 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "migrate": "tsx src/server/migration-cli.ts",
     "briefing": "tsx src/server/briefing-cli.ts",
     "init": "node scripts/init-config.mjs",
     "licenses": "node scripts/collect-licenses.mjs",

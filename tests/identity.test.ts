@@ -298,7 +298,7 @@ describe('FreshRSS identity binding', () => {
 
   it('does not silently adopt existing FreshRSS content as standalone', () => {
     db.upsertEntries([{ ...content, id: 'legacy', feedId: 'feed/legacy', read: false, starred: false }])
-    expect(() => db.bindBackend(backend)).toThrow(/explicit migration/)
+    expect(() => db.bindBackend(backend)).toThrow(/requires FreshRSS mode/)
     expect(() => db.identities.backend(backend.id)).toThrow(/Unknown/)
   })
 })

@@ -14,10 +14,8 @@ in Settings. It contains enable switches and any Readwise or Kirby tokens saved
 there, without encryption at rest. Keep its permissions at 0600 and include it
 in private backups. A database-only backup does not include these settings.
 `secrets.json` contains generated signing and internal secrets. Losing it can
-invalidate saved briefing links. The `migrations` directory and `migration.json`
-retain reviewed plans, original backups and any post-activation rollback backups.
-Keep all of these private and together. The permanent `paper-lock.sqlite` is a
-coordination file, never an application database to replace during migration.
+invalidate saved briefing links. Keep these files private and together. The
+permanent `paper-lock.sqlite` is a coordination file, not an application database.
 
 AI login files live separately under ai-auth when using compose.ai.yaml. Protect
 that directory separately or authenticate the CLIs again after a restore.
@@ -93,28 +91,8 @@ private configuration and saved secrets. A schema backup is not a complete
 installation backup. Verify startup, articles, reading positions and saved state
 before treating the upgrade as complete.
 
-Moving to standalone is a separate advanced, experimental offline operation.
-A fresh standalone installation is the normal alpha setup path. The migration uses
-the last completed local FreshRSS snapshot, so finish import and state reconciliation
-before stopping Paper. Later remote edits are not included. Publisher identity
-mappings require explicit reviewed evidence; similar URLs or dates cannot merge
-histories. Unknown publisher IDs can cause the first collection to import
-historical copies as new unread articles. Original read states stay intact, but
-duplicates can produce a large unread backlog. Preview cannot predict all such
-copies, and there is no general public cleanup tool. Inspect the first collection
-before accepting the cutover. If unread counts grow unexpectedly, stop Paper and
-every writer, preserve the changed data, and review rollback instead of deleting
-rows or marking the backlog read without evidence.
-
-Rollback saves later standalone work in a verified backup before restoring the
-source snapshot. It does not sync or merge that work into FreshRSS.
-See the [migration guide](backend-migration.md) for exact preview, apply, recovery
-and rollback commands.
-
 Offline browser copies are separate device storage. They can disappear when the
 browser clears storage and are not a backup of the server database.
 
-Backend cutover and rollback use the [offline migration commands](backend-migration.md).
 Changing `PAPER_BACKEND` alone cannot switch ownership. After restoring, use the
-backend and account configuration that owns that backup. Never delete a pending
-migration manifest to force startup; complete its recovery first.
+backend and account configuration that owns that backup.

@@ -84,21 +84,13 @@ def start_paper(state):
                '-e', 'CODEX_ENABLED=false', '-e', 'OPENCODE_ENABLED=false', IMAGE)
 
 
-def start_standalone(state, preserve_environment_secrets=False):
+def start_standalone(state):
     state.mkdir(exist_ok=True)
     state.chmod(0o700)
-    secrets = ['-e', 'PAPER_INTERNAL_SECRET=synthetic-internal-secret-for-release-test',
-               '-e', 'PAPER_SIGNING_SECRET=synthetic-signing-secret-for-release-test'] if preserve_environment_secrets else []
     return run('paper', '--user', f'{os.getuid()}:{os.getgid()}', '-p', '127.0.0.1::8080', '-v', f'{state}:/data',
                '-e', 'PAPER_BACKEND=standalone', '-e', 'HOST=0.0.0.0', '-e', 'PUBLIC_URL=http://localhost',
                '-e', 'PAPER_TRUSTED_FEED_ORIGINS=http://fixture:8080', '-e', 'CODEX_ENABLED=false', '-e', 'OPENCODE_ENABLED=false',
-               *secrets, IMAGE)
-
-
-def migrate(state, *arguments):
-    return json.loads(docker('run', '--rm', '--network', 'none', '--user', f'{os.getuid()}:{os.getgid()}', '-v', f'{state}:/data',
-                            '-e', 'FRESHRSS_BASE_URL=http://freshrss', '-e', 'FRESHRSS_USERNAME=fixture',
-                            IMAGE, 'node', 'dist-server/migration-cli.js', *arguments))
+               IMAGE)
 
 
 with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
@@ -201,56 +193,6 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         assert request(base + '/api/status')[1]['readwiseConfigured']
         assert request(base + '/api/settings/connections', {'readwise': {'token': None}}, method='PATCH')[0] == 200
         assert not request(base + '/api/status')[1]['readwiseConfigured']
-        # Offline snapshot cutover of the real disposable FreshRSS cache.
-        assert request(base + '/api/sync', {})[0] == 200
-        migration_navigation = request(base + '/api/organization')[1]['navigation']
-        mapping = {
-            'mappings': [{'subscriptionId': entry['feedId'], 'entryId': entry['id'],
-                          'externalId': 'synthetic-release-' + entry['url'].rsplit('/', 1)[1],
-                          'evidence': 'Synthetic fixture GUID and source URL reviewed against tests/feed-fixture.mjs.'}],
-            'folderTitles': {folder['id']: 'Archived ' + folder['title'] for folder in migration_navigation['folders']
-                             if folder['title'].lower() == 'uncategorized'},
-        }
-        (restored / 'choices.json').write_text(json.dumps(mapping))
-        try:
-            migrate(restored, 'preview', '--choices', '/data/choices.json')
-            raise AssertionError('Migration must exclude a running server')
-        except RuntimeError as error:
-            assert 'in use' in str(error)
-        docker('stop', paper)
-        frozen = migrate(restored, 'preview', '--choices', '/data/choices.json')
-        assert frozen['plan']['counts']['entries'] == 92
-        assert migrate(restored, 'apply', '--digest', frozen['planDigest'])['phase'] == 'active'
-        assert migrate(restored, 'resume', '--digest', frozen['planDigest'])['phase'] == 'active'
-        docker('rm', '-f', paper)
-        paper = start_standalone(restored, preserve_environment_secrets=True)
-        base = address(paper, 8080)
-        until(lambda: request(base + '/health')[0] == 200)
-        assert request(base + '/api/status')[1]['backend'] == 'standalone'
-        migrated = request(base + '/api/entries/item', {'id': entry['id']})[1]['entry']
-        assert migrated['starred'] and not migrated['read'] and migrated['readingPosition'] == 0.42
-        assert request(base + '/api/entries/state', {'ids': [entry['id']], 'operation': 'read',
-                                                  'expectedRevisions': {entry['id']: migrated['stateRevision']}})[0] == 200
-        assert request(base + '/api/reading', {'id': entry['id'], 'position': 0.75})[0] == 200
-        docker('restart', paper)
-        base = address(paper, 8080)
-        until(lambda: request(base + '/health')[0] == 200)
-        later = request(base + '/api/entries/item', {'id': entry['id']})[1]['entry']
-        assert later['id'] == entry['id'] and later['read'] and later['readingPosition'] == 0.75
-        docker('stop', paper)
-        rollback = migrate(restored, 'rollback-preview')
-        assert 'entries' in rollback['plan']['changedTables'] and 'reading_progress' in rollback['plan']['changedTables']
-        result = migrate(restored, 'rollback-apply', '--digest', rollback['digest'], '--acknowledge-loss')
-        assert result['phase'] == 'rolled-back'
-        backup_root = restored / 'migrations' / frozen['plan']['id']
-        assert any(item.name.startswith('post-') for item in backup_root.iterdir())
-        docker('rm', '-f', paper)
-        paper = start_paper(restored)
-        base = address(paper, 8080)
-        until(lambda: request(base + '/health')[0] == 200)
-        reverted = request(base + '/api/entries/item', {'id': entry['id']})[1]['entry']
-        assert reverted['starred'] and not reverted['read'] and reverted['readingPosition'] == 0.42
-        assert request(base + '/api/status')[1]['backend'] == 'freshrss'
         docker('stop', paper); docker('rm', '-f', paper)
 
         # A fresh single-container installation has no FreshRSS or integration credentials.
@@ -280,7 +222,7 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         reread = request(base + '/api/entries/item', {'id': item['id']})[1]['entry']
         assert reread['starred'] and reread['readingPosition'] == 0.6
         assert (standalone_data / 'secrets.json').stat().st_mode & 0o777 == 0o600
-        print('Standalone installation and migration checks passed: no-credential setup, import/fetch/read, restart, disabled integrations, offline FreshRSS cutover with reviewed GUID mapping, preserved IDs/star/progress, migration exclusion, post-activation changes and backed-up rollback.')
+        print('Standalone installation checks passed: no-credential setup, import/fetch/read, restart and disabled integrations.')
         print('Installation checks passed with FreshRSS 1.30.4: import/search, two-way state sync, organization rename/move/capabilities, helper authentication/repair, private connection settings, proxy 401/200, PHP syntax, and backup restoration.')
     except Exception:
         for name in dict.fromkeys(containers):

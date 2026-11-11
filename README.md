@@ -24,9 +24,7 @@ See the [changelog](CHANGELOG.md) for alpha.3 changes and upgrade notes.
 
 ## Quick start
 
-Start with a fresh standalone installation for this alpha. Moving an existing
-FreshRSS snapshot is an [advanced, experimental operation](docs/backend-migration.md)
-that can create historical duplicates and a large unread backlog.
+Start with a fresh standalone installation for this alpha.
 
 You need Docker Compose 2.24.4 or newer. The alpha.3 images support Linux amd64.
 Standalone mode needs one Paper container and a persistent data directory. No
@@ -77,13 +75,8 @@ FreshRSS must be reachable from Paper's container. `localhost` inside the
 container refers to Paper itself. Use a shared Docker network or reachable URL.
 
 The database binds to one backend instance. Changing the backend or FreshRSS
-account in configuration does not transfer its data. Follow the
-[experimental offline migration guide](docs/backend-migration.md) before considering
-a FreshRSS snapshot cutover. Unknown publisher IDs can cause the first collection
-to import historical copies as new unread articles even though the original rows
-keep their read states. There is no general duplicate cleanup tool or reverse sync
-to FreshRSS. Keep backups and review the preview and identity evidence before
-applying. Settings > Backend & data shows the current mode and migration commands.
+account in configuration does not transfer its data. Use a separate data directory
+for a different backend or account. Settings > Backend & data shows the current mode.
 
 To use a different local port, change `PAPER_PORT` and `PUBLIC_URL` in `.env`.
 For access from other devices, follow the [remote access guide](docs/access.md).
@@ -106,7 +99,7 @@ See the [integration guide](docs/integrations.md) for full setup instructions.
 
 Back up `./data` and your private `.env`. The data directory holds reading
 positions, discussions, filters, saved briefings, and any connection tokens
-entered in Settings, generated signing secrets and migration backups. Standalone
+entered in Settings and generated signing secrets. Standalone
 subscriptions and article state also live there. In FreshRSS mode, back up
 FreshRSS separately.
 

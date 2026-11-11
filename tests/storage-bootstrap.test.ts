@@ -1,13 +1,13 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { PaperDatabase } from '../src/server/db.js'
 import { openCoordinatedStorage } from '../src/server/storage-bootstrap.js'
 import { acquireStateLock } from '../src/server/state-lock.js'
-import { openDatabase } from '../src/server/migration-storage.js'
 
 let directory: string
 const children: ChildProcess[] = []
@@ -28,7 +28,7 @@ async function participant() {
   return { child, ...message }
 }
 function schemaVersion() {
-  const db = openDatabase(path.join(directory, 'paper.sqlite'), true)
+  const db = new DatabaseSync(path.join(directory, 'paper.sqlite'), { readOnly: true })
   try { return db.prepare('PRAGMA schema_version').get()?.schema_version } finally { db.close() }
 }
 
@@ -52,16 +52,20 @@ describe('coordinated storage bootstrap', () => {
   it('upgrades an old schema once under exclusive ownership and retains its pre-upgrade backup', async () => {
     const filename = path.join(directory, 'paper.sqlite')
     new PaperDatabase(filename).close()
-    const old = openDatabase(filename)
-    old.exec(`DROP TABLE migration_decisions; DROP TABLE migration_subscriptions; DROP TABLE migration_provenance; DROP TABLE migration_runs;
-      ALTER TABLE undo_actions DROP COLUMN backend_id; ALTER TABLE undo_actions DROP COLUMN expected_revisions_json; PRAGMA user_version = 9`)
+    const old = new DatabaseSync(filename)
+    old.exec(`ALTER TABLE undo_actions DROP COLUMN backend_id; ALTER TABLE undo_actions DROP COLUMN expected_revisions_json; PRAGMA user_version = 9`)
     old.close()
     const starts = await Promise.all([participant(), participant()])
     expect(starts.every(start => start.ready)).toBe(true)
     expect(starts.reduce((count, start) => count + start.upgrades, 0)).toBe(1)
-    const saved = openDatabase(filename + '.before-standalone-setup-v10', true)
+    const saved = new DatabaseSync(filename + '.before-standalone-setup-v10', { readOnly: true })
     expect(saved.prepare('PRAGMA user_version').get()?.user_version).toBe(9)
     saved.close()
+    const upgraded = new DatabaseSync(filename, { readOnly: true })
+    expect(upgraded.prepare('PRAGMA table_info(undo_actions)').all().map(row => row.name))
+      .toEqual(expect.arrayContaining(['backend_id', 'expected_revisions_json']))
+    expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE name GLOB 'migration_*'").all()).toEqual([])
+    upgraded.close()
   })
 
   it('closes initialization failures before any application file exists', async () => {
@@ -73,14 +77,26 @@ describe('coordinated storage bootstrap', () => {
     acquireStateLock(directory, 'exclusive').release()
   })
 
-  it('does not open application storage while migration owns the lock or recovery is pending', async () => {
-    const migration = acquireStateLock(directory, 'exclusive')
-    await expect(openCoordinatedStorage(directory, { timeoutMs: 0 })).rejects.toThrow(/in use/)
-    expect(fs.existsSync(path.join(directory, 'paper.sqlite'))).toBe(false)
-    migration.release()
-    fs.writeFileSync(path.join(directory, 'migration.json'), JSON.stringify({ version: 1, id: '00000000-0000-0000-0000-000000000000', phase: 'activating' }))
-    await expect(openCoordinatedStorage(directory)).rejects.toThrow(/recovery/)
-    expect(fs.existsSync(path.join(directory, 'paper.sqlite'))).toBe(false)
+  it('does not open application storage while an exclusive lock is held', async () => {
+    const lock = acquireStateLock(directory, 'exclusive')
+    try {
+      await expect(openCoordinatedStorage(directory, { timeoutMs: 0 })).rejects.toThrow(/in use/)
+      expect(fs.existsSync(path.join(directory, 'paper.sqlite'))).toBe(false)
+    } finally { lock.release() }
+  })
+
+  it.each(['active', 'activating'])('ignores leftover %s migration files during initialization and restart', async phase => {
+    const id = '00000000-0000-0000-0000-000000000000'
+    fs.writeFileSync(path.join(directory, 'migration.json'), JSON.stringify({ version: 1, id, phase }))
+    const plans = path.join(directory, 'migrations', id)
+    fs.mkdirSync(plans, { recursive: true })
+    fs.writeFileSync(path.join(plans, 'plan.json'), 'obsolete plan')
+    const first = await openCoordinatedStorage(directory)
+    const identity = first.database.bindStandalone()
+    first.close()
+    const restarted = await openCoordinatedStorage(directory, { onUpgrade() { throw new Error('Unexpected upgrade') } })
+    expect(restarted.database.bindStandalone()).toEqual(identity)
+    restarted.close()
     acquireStateLock(directory, 'exclusive').release()
   })
 })

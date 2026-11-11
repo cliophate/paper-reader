@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import fs from 'node:fs/promises'
 import http from 'node:http'
@@ -72,8 +72,6 @@ try {
   await request('/api/entries/state', { ids: [entry.id], operation: 'star' })
   await request('/api/reading', { id: entry.id, position: 0.42 })
   for (const route of ['/api/readwise', '/api/notes', '/api/discussion/message']) assert.equal((await request(route, {})).status, 503)
-  const locked = spawnSync(process.execPath, [path.resolve('dist-server/migration-cli.js'), 'status'], { encoding: 'utf8', env })
-  assert.notEqual(locked.status, 0); assert.match(locked.stderr, /in use/)
   const organization = (await request('/api/organization')).data
   assert.equal(organization.backend, 'standalone'); assert(organization.capabilities.multipleMemberships)
   const renamed = await request('/api/organization/commands', { expectedRevision: organization.revision, commands: [{ type: 'rename-folder', folderId: organization.navigation.folders[0].id, title: 'Renamed folder' }] })
@@ -89,7 +87,7 @@ try {
   assert.equal((await request('/api/feeds', { url: feedOrigin + '/slow.xml', title: 'Slow synthetic feed' })).status, 201)
   await until(() => slowStarted)
   await stop(); await until(() => slowClosed)
-  console.log('Standalone built-server smoke passed: hidden-parent root HTML and dotfile protection, no-credential setup, discovery/import/fetch/read, CAS/undo, optional integrations off, organization, restart identity/progress/stars, retained unsubscribe history, migration exclusion and scheduler abort/drain.')
+  console.log('Standalone built-server smoke passed: hidden-parent root HTML and dotfile protection, no-credential setup, discovery/import/fetch/read, CAS/undo, optional integrations off, organization, restart identity/progress/stars, retained unsubscribe history, scheduler abort/drain.')
 } catch (error) { console.error(logs.slice(-4000)); throw error }
 finally {
   await stop(); fixture.closeAllConnections(); await new Promise(resolve => fixture.close(resolve))

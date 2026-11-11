@@ -2,13 +2,13 @@ import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import http from 'node:http'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { acquireStateLock } from '../src/server/state-lock.js'
-import { openDatabase } from '../src/server/migration-storage.js'
 
 let directory: string
 const children: ChildProcess[] = []
@@ -49,7 +49,7 @@ async function ready(port: number) {
   throw new Error('Synthetic server did not start')
 }
 
-it('starts the actual server and briefing CLI together, then admits a current CLI while excluding migration', async () => {
+it('starts the actual server and briefing CLI together, then admits a current CLI while excluding exclusive access', async () => {
   const number = await port()
   const server = start('index', number)
   const firstBriefing = start('briefing-cli', number, { CODEX_ENABLED: 'true', CODEX_BIN: path.join(directory, 'synthetic-model') })
@@ -58,7 +58,7 @@ it('starts the actual server and briefing CLI together, then admits a current CL
   expect(firstResult.code, firstResult.output).toBe(0)
   const status = await (await fetch(`http://127.0.0.1:${number}/api/status`)).json()
   expect(status).toMatchObject({ backend: 'standalone', localReadsActive: true, briefingConfigured: false, readwiseConfigured: false, kirbyConfigured: false })
-  const db = openDatabase(path.join(directory, 'paper.sqlite'), true)
+  const db = new DatabaseSync(path.join(directory, 'paper.sqlite'), { readOnly: true })
   const schema = db.prepare('PRAGMA schema_version').get()?.schema_version
   expect(() => acquireStateLock(directory, 'exclusive')).toThrow(/in use/)
   const nextBriefing = await start('briefing-cli', number, { CODEX_ENABLED: 'true', CODEX_BIN: path.join(directory, 'synthetic-model') }).exited
@@ -76,7 +76,7 @@ it('starts the actual server and briefing CLI together, then admits a current CL
   acquireStateLock(directory, 'exclusive').release()
 }, 20000)
 
-it('excludes both real entrypoints while offline migration owns the directory, then releases failed startup resources', async () => {
+it('excludes both real entrypoints while an exclusive lock owns the directory, then releases failed startup resources', async () => {
   const number = await port(), lock = acquireStateLock(directory, 'exclusive')
   try {
     const results = await Promise.all([start('index', number).exited, start('briefing-cli', number).exited])

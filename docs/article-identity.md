@@ -1,8 +1,7 @@
 # Article identity and state ownership
 
 The persistence foundation from [#15](https://github.com/cliophate/paper-reader/issues/15)
-now supports standalone and FreshRSS modes. See [backend migration](backend-migration.md)
-for standalone setup, snapshot cutover and rollback.
+now supports standalone and FreshRSS modes.
 
 ## Identity rules
 
@@ -15,8 +14,8 @@ same URL.
 `reader_backends` records backend instances. FreshRSS instance identity is a
 SHA-256 digest of the configured base URL and username. URL credentials and
 fragments are removed; the API password is never included. Rotating a password
-does not change identity. A changed endpoint or username requires explicit
-migration, even if the operator knows it points to the same account. Standalone
+does not change identity. A changed endpoint or username requires a separate
+data directory, even if it points to the same account. Standalone
 setup generates its instance UUID once and persists it.
 
 `subscription_aliases` scopes upstream subscription IDs to a backend instance.
@@ -139,10 +138,6 @@ implementation must add a durable outbox before accepting those writes:
 - Persist snapshot cursors by backend and generation. Stage incomplete snapshots;
   publish state and the completion checkpoint atomically only when complete.
   Failed or partial snapshots cannot mean an empty unread or starred set.
-- Before switching backend, stop imports and writers, back up, resolve pending
-  writes explicitly, validate alias coverage and every retained reference, and
-  atomically commit a resumable migration journal plus the new active binding.
-  Do not reinterpret old IDs or copy cursors between accounts.
 
 These are requirements for that later implementation, not guarantees provided
 by the current FreshRSS adapter.
@@ -151,8 +146,8 @@ by the current FreshRSS adapter.
 
 The current schema is v11. [Search indexing](search-index.md) documents its
 durable row mapping, full-text rebuild and pre-upgrade backup.
-[Backend migration core](backend-migration.md) documents the v10 journal,
-provenance, undo context and pre-upgrade backup.
+Schema v10 adds backend and revision context to undo actions. Its pre-upgrade
+backup is `.before-standalone-setup-v10`.
 [Standalone feed scheduling](feed-scheduling.md)
 documents its migration and `.before-feed-fetch-v9` backup.
 [Folder and subscription organization](organization.md) documents schema v8
@@ -182,5 +177,5 @@ To roll back, stop Paper, preserve the current data directory, and restore the
 pre-upgrade backup as the configured database with no stale `-wal` or `-shm`
 files beside it. Start the previous release against that restored copy. Changes
 made after the backup will not be present. Do not run old and new releases
-against the same database or edit the binding marker to bypass migration.
+against the same database or edit the binding marker to change ownership.
 Keep backups private because they contain reading history and saved settings.
