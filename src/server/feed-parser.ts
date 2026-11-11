@@ -26,6 +26,7 @@ export interface ParsedFeed {
   title: string
   siteUrl: string
   entries: ParsedFeedEntry[]
+  conflictingExternalIds: string[]
 }
 interface Node {
   name: string
@@ -194,5 +195,5 @@ export function parseFeed(xml: string, responseUrl: string): ParsedFeed {
   for (const entry of unique) {
     if (entry.externalId && conflicts.has(entry.externalId)) delete entry.externalId
   }
-  return { format, title, siteUrl, entries: unique }
+  return { format, title, siteUrl, entries: unique, conflictingExternalIds: [...conflicts] }
 }

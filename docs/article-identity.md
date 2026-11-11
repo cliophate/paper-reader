@@ -26,8 +26,10 @@ owner. Content imports also check ownership before changing an existing row.
 The original FreshRSS article ID is its first alias.
 
 Collectors pass the RSS GUID or Atom ID as `externalId`. If a feed response
-reuses one ID for different items, the parser removes it from every item sharing
-that ID. Those items use fallback fingerprints. Matching proceeds in this order:
+reuses one ID for different items, ingestion permanently records that conflict
+for the backend and subscription in a checkpoint committed with the articles.
+Items carrying that ID use fallback fingerprints in every later response, even
+after restart or endpoint repair. Matching proceeds in this order:
 
 1. Resolve that alias and any explicitly verified `previousExternalIds` within
    this subscription. If they identify different articles, record a conflict

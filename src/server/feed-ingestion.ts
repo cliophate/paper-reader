@@ -47,6 +47,15 @@ export function ingestFeed(db: PaperDatabase, input: FeedEndpoint & {
   const fetchedTime = Date.parse(input.fetchedAt)
   if (!requestUrl || !responseUrl || !Number.isFinite(fetchedTime)) throw new Error('Invalid feed fetch metadata')
   const parsed = parseFeed(input.xml, responseUrl)
+  // Conflicts belong to the subscription and survive endpoint repairs.
+  const conflictsKey = `feed-conflicting-ids:v1:${JSON.stringify(input.subscriptionId)}`
+  const savedConflicts = db.identities.checkpoint(input.backendId, conflictsKey)
+  const conflicts = new Set<string>(savedConflicts ? JSON.parse(savedConflicts) as string[] : [])
+  const previousConflictCount = conflicts.size
+  for (const id of parsed.conflictingExternalIds) conflicts.add(id)
+  for (const entry of parsed.entries) {
+    if (entry.externalId && conflicts.has(entry.externalId)) delete entry.externalId
+  }
   const changes = new Map<string, string[]>()
   for (const change of input.verifiedAliasChanges || []) {
     const id = change.externalId.trim()
@@ -74,7 +83,10 @@ export function ingestFeed(db: PaperDatabase, input: FeedEndpoint & {
   // successful batch delivery, including explicitly recorded ambiguities.
   const checkpoint = { fetchedAt: new Date(fetchedTime).toISOString(), requestUrl, responseUrl }
   const results = db.importSourceEntries(input.backendId, input.subscriptionId, items, {
-    checkpoint: { key, value: JSON.stringify(checkpoint) }, feedTitle: parsed.title,
+    checkpoint: [
+      { key, value: JSON.stringify(checkpoint) },
+      ...(conflicts.size > previousConflictCount ? [{ key: conflictsKey, value: JSON.stringify([...conflicts]) }] : []),
+    ], feedTitle: parsed.title,
   })
   return { feed: parsed, results, resolved: results.filter(result => result.status === 'resolved').length, ambiguous: results.filter(result => result.status === 'ambiguous').length }
 }

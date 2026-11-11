@@ -56,8 +56,9 @@ fingerprint. The identity store retains insertion order independently. Every res
 publication date or the previous successful fetch time.
 
 Identical deliveries of one explicit source ID collapse within a response.
-If one source ID has conflicting items, the parser removes that ID from all
-items sharing it. Those items use the existing fallback fingerprint rules.
+If one source ID has conflicting items, ingestion remembers the conflict for
+that backend and subscription, including after restart or endpoint repair.
+Items carrying that ID use fallback fingerprints in this and all later responses.
 Distinct IDs stay distinct even when URLs, dates and content match. A reused
 URL alone cannot establish a GUID change. If a trusted caller has verified a
 publisher ID change, it may supply `verifiedAliasChanges` with prior IDs and a
@@ -92,7 +93,8 @@ scope, but this checkpoint does not claim to implement ETags, Last-Modified,
 retry state, stale-response fencing or 304 handling.
 
 The optional fourth `importSourceEntries` argument supplies a checkpoint
-key/value. The database commits it after entry resolution and content updates
+key/value or a list of checkpoints, including newly discovered conflicting IDs.
+The database commits them after entry resolution and content updates
 inside the same transaction. Empty parsed feeds advance the checkpoint and
 still run backend/subscription ownership checks. An item error rolls back the
 whole batch. A checkpoint write failure also rolls back entries, aliases,

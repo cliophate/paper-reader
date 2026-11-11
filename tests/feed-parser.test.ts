@@ -64,7 +64,8 @@ describe('feed parsing', () => {
     const other = one.replace('<guid>x', '<guid>y')
     expect(parseFeed(rss(one + one), base).entries).toHaveLength(1)
     for (const items of [one + two + one + other, two + one + two + other]) {
-      const entries = parseFeed(rss(items), base).entries
+      const { entries, conflictingExternalIds } = parseFeed(rss(items), base)
+      expect(conflictingExternalIds).toEqual(['x'])
       expect(entries).toHaveLength(3)
       expect(entries.slice(0, 2).map(entry => entry.externalId)).toEqual([undefined, undefined])
       expect(entries[2].externalId).toBe('y')
