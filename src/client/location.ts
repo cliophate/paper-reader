@@ -17,15 +17,6 @@ export interface ReaderLocation {
   before?: string
 }
 
-export const defaultReaderLocation: ReaderLocation = {
-  view: 'reader',
-  stream: { kind: 'all', id: 'all', title: 'All articles' },
-  selectedId: '',
-  unreadOnly: true,
-  query: '',
-  mobilePane: 'sources',
-}
-
 export function readReaderLocation(search = window.location.search): ReaderLocation {
   const params = new URLSearchParams(search)
   const kind = validKind(params.get('kind'))
