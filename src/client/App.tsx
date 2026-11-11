@@ -1731,8 +1731,7 @@ const StoryRow = forwardRef<HTMLElement, { entry: Entry; active: boolean; onOpen
   const showThumbnail = Boolean(entry.thumbnailUrl && thumbnailReady)
   return <article
     ref={ref}
-    tabIndex={0} role="button" aria-label={entry.displayTitle || entry.title}
-    onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onOpen() } }}
+    onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') event.stopPropagation() }}
     className={`story-row kind-${entry.kind} ${showThumbnail ? '' : 'no-thumbnail'} ${active ? 'active' : ''} ${entry.read ? 'read' : ''}`}
     onPointerDown={event => {
       if (event.pointerType === 'mouse') return
@@ -1767,6 +1766,7 @@ const StoryRow = forwardRef<HTMLElement, { entry: Entry; active: boolean; onOpen
       onOpen()
     }}
   >
+    <button className="story-open" aria-label={entry.displayTitle || entry.title} title={entry.displayTitle ? `Original: ${entry.title}` : undefined} />
     {showThumbnail && <img className="story-thumb" src={entry.thumbnailUrl} alt="" onError={() => setThumbnailReady(false)} />}
     <button className="row-options" aria-label={`Options for ${entry.title}`} onClick={event => { event.stopPropagation(); const box = event.currentTarget.getBoundingClientRect(); onContext(box.left, box.bottom) }}>⋯</button>
     <div className="story-copy">
@@ -1856,7 +1856,7 @@ const ArticleView = forwardRef<HTMLElement, {
         <a href={entry.url} target="_blank" rel="noopener noreferrer" aria-label="Open original" title="Open original"><Icon name="external" /><span>Original</span></a>
         <button onClick={onCopyUrl} aria-label="Copy article URL" title="Copy article URL"><Icon name="copy" /><span>Copy URL</span></button>
         <button onClick={onReport} aria-label="Report a problem" title="Report a problem"><Icon name="report" /><span>Report</span></button>
-        <button disabled={!discussionConfigured || !online} onClick={onDiscuss} aria-label="Discuss article" title={discussionConfigured ? 'Discuss article' : 'Discussion is not configured'}><Icon name="reader" /><span>Discuss</span></button>
+        {discussionConfigured && <button disabled={!online} onClick={onDiscuss} aria-label="Discuss article" title="Discuss article"><Icon name="discussion" /><span>Discuss</span></button>}
       </div>
       <button className="type-button" onClick={onAppearance} aria-label="Appearance">Aa</button>
     </div>

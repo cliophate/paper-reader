@@ -91,6 +91,86 @@ describe('mobile reader switching', () => {
     expect(container.querySelector('.filter-row')?.textContent).toContain(unreadOnly ? '8 of 8 loaded' : '9 loaded')
   })
 
+  it('hides the discussion action when discussion is not configured', async () => {
+    await mount()
+    expect(container.querySelector('button[aria-label="Discuss article"]')).toBeNull()
+  })
+
+  it('shows a distinct discussion icon when configured and disables the action offline', async () => {
+    vi.mocked(api.status).mockResolvedValue({ ...(await api.status()), discussionConfigured: true })
+    initialPage.items[0] = { ...post('a'), kind: 'article' }
+    await mount()
+    const discuss = container.querySelector<HTMLButtonElement>('button[aria-label="Discuss article"]')!
+    expect(discuss.disabled).toBe(false)
+    expect(discuss.title).toBe('Discuss article')
+    expect(discuss.querySelector('svg')?.innerHTML).not.toBe(container.querySelector('button[aria-label="Fetch full article"] svg')?.innerHTML)
+    const connection = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    await act(async () => { window.dispatchEvent(new Event('offline')) })
+    expect(discuss.disabled).toBe(true)
+    connection.mockReturnValue(true)
+    await act(async () => { window.dispatchEvent(new Event('online')) })
+    expect(discuss.disabled).toBe(false)
+    connection.mockRestore()
+  })
+
+  it('exposes separate story open and options buttons without nested interactive controls', async () => {
+    await mount()
+    const interactive = 'button, a[href], input, select, textarea, [role="button"], [tabindex]'
+    for (const row of container.querySelectorAll('.story-row')) {
+      expect(row.matches(interactive)).toBe(false)
+      for (const control of row.querySelectorAll(interactive)) expect(control.querySelector(interactive)).toBeNull()
+      expect(row.querySelector('.story-open')?.getAttribute('aria-label')).toBe(row.querySelector('h2')?.textContent)
+    }
+    const row = container.querySelectorAll('.story-row')[1]
+    const open = row.querySelector<HTMLButtonElement>('.story-open')!
+    open.focus()
+    expect(document.activeElement).toBe(open)
+    await act(async () => { open.click() })
+    expect(location.search).toContain('entry=b')
+    const options = row.querySelector<HTMLButtonElement>('.row-options')!
+    options.focus()
+    await act(async () => { options.click() })
+    expect(container.querySelector('[role="menu"]')).not.toBeNull()
+    expect(location.search).toContain('entry=b')
+  })
+
+  it.each(['.story-open', '.row-options'])('leaves native Enter and Space activation on %s to the button', async selector => {
+    await mount()
+    const control = container.querySelectorAll('.story-row')[1].querySelector(selector)!
+    for (const key of ['Enter', ' ']) {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+      await act(async () => { control.dispatchEvent(event) })
+      expect(event.defaultPrevented).toBe(false)
+      expect(location.search).toContain('entry=a')
+    }
+  })
+
+  it('opens the touch context menu and suppresses the following story click', async () => {
+    await mount()
+    const open = container.querySelectorAll('.story-row')[1].querySelector<HTMLButtonElement>('.story-open')!
+    const press = new MouseEvent('pointerdown', { bubbles: true, clientX: 30, clientY: 40 })
+    Object.defineProperty(press, 'pointerType', { value: 'touch' })
+    await act(async () => { open.dispatchEvent(press); await vi.advanceTimersByTimeAsync(450) })
+    expect(container.querySelector('[role="menu"]')).not.toBeNull()
+    await act(async () => { open.dispatchEvent(new Event('pointerup', { bubbles: true })); open.click() })
+    expect(location.search).toContain('entry=a')
+    await act(async () => { open.click() })
+    expect(location.search).toContain('entry=b')
+  })
+
+  it.each(['pointermove', 'pointercancel'])('cancels a touch context menu on %s', async type => {
+    await mount()
+    const open = container.querySelector<HTMLButtonElement>('.story-open')!
+    const press = new MouseEvent('pointerdown', { bubbles: true, clientX: 0, clientY: 0 })
+    Object.defineProperty(press, 'pointerType', { value: 'touch' })
+    await act(async () => {
+      open.dispatchEvent(press)
+      open.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: 20, clientY: 0 }))
+      await vi.advanceTimersByTimeAsync(450)
+    })
+    expect(container.querySelector('[role="menu"]')).toBeNull()
+  })
+
   it.each(['', 'not-a-date', '0', '1970-01-01T00:00:00.000Z', undefined])('opens an article with unavailable publication date %s without crashing', async publishedAt => {
     initialPage.items[0] = { ...post('a'), kind: 'article', publishedAt: publishedAt as string, timestamp: 0 }
     await mount()
