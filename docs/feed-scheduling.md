@@ -62,13 +62,18 @@ response commits nothing. SQLite serializes this check and commit with claims,
 subscription saves and unsubscribe, including across database connections.
 
 For a 200 response, ingestion content, identity aliases, ambiguity records,
-successful-feed checkpoint, HTTP validators, schedule and lease release commit
+successful-feed checkpoint, feed health, HTTP validators, schedule and lease release commit
 together. An error rolls them all back. A crash before commit leaves a lease
 that can expire and retry. A crash after commit leaves the new schedule, so it
 cannot repeat the same claimed job. Repeated publisher deliveries still pass
 through the existing durable identity rules.
 
-A valid 304 updates only the HTTP success time, validators and schedule. It does
+Committed failures mark the feed broken and save its last error time. Successful
+200 and valid 304 responses clear the broken flag and save the last successful
+check time. Feed health commits in the same transaction as fetch state. Broken
+feeds remain visible in the sidebar with the unread-only filter.
+
+A valid 304 updates the HTTP success time, feed health, validators and schedule. It does
 not parse or import content, alter article state, or advance the ingestion
 checkpoint that records the last committed body. HTTP `lastSuccessAt` therefore
 means a successful 200 or conditional 304, while `successfulFeedFetch` means the

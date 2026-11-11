@@ -252,14 +252,14 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
       if (event.key === 'Tab') cancelDrag()
     }}><svg viewBox="0 0 12 18" aria-hidden="true">{[4, 9, 14].flatMap(y => [3, 8].map(x => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.2" fill="currentColor" />))}</svg></button>
   const renderFeeds = (folderId: string | null) => <div className="feed-list">
-    {feedsIn(folderId).filter(feed => editing || drag !== null || !unreadOnly || feed.unread > 0).map(feed => {
+    {feedsIn(folderId).filter(feed => editing || drag !== null || !unreadOnly || feed.unread > 0 || feed.broken).map(feed => {
       const member = { feed, folderId }, target: Target = { kind: 'feed', member }
       return <div key={feed.id}>
         <div className="feed-row-wrapper" {...rowProps(feedRow(member))}>
           {editing && (capabilities?.moveFeed || capabilities?.orderFeeds) && handle(target)}
           {editing && <input type="checkbox" aria-label={`Select ${feed.title} in ${folders.find(folder => folder.id === folderId)?.title || 'Uncategorized'}`} checked={selectedNow.some(item => memberKey(item) === memberKey(member))} onChange={event => setSelected(current => event.target.checked ? [...current, member] : current.filter(item => memberKey(item) !== memberKey(member)))} />}
           <button className={`feed-row ${active?.kind === 'feed' && active.id === feed.id ? 'active' : ''}`} onClick={() => onOpen({ kind: 'feed', id: feed.id, title: feed.title })} onContextMenu={event => { event.preventDefault(); showMenu(target, event.currentTarget, { x: event.clientX, y: event.clientY }) }} onKeyDown={event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); showMenu(target, event.currentTarget) } }}>
-            <FeedMark title={feed.title} url={feed.siteUrl || feed.url} iconUrl={feed.iconUrl} /><span className="source-label">{feed.title}</span>{feed.unread > 0 && <span className="source-count">{feed.unread}</span>}
+            <FeedMark title={feed.title} url={feed.siteUrl || feed.url} iconUrl={feed.iconUrl} /><span className="source-label">{feed.title}</span>{feed.broken && <span className="feed-error">Update failed</span>}{feed.unread > 0 && <span className="source-count">{feed.unread}</span>}
           </button>
           {editing && <button className="row-options" aria-label={`Options for ${feed.title}`} aria-haspopup="menu" onClick={event => showMenu(target, event.currentTarget)}>⋯</button>}
         </div>
@@ -292,7 +292,7 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
     {feedback && <p className="organization-feedback" role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p>}
     {(needsReload || !snapshot) && <button disabled={busy || !online} onClick={() => void reload()}>Reload organization</button>}
     {editing && selectedNow.length > 0 && <div className="organization-bulk"><span>{selectedNow.length} selected</span><button disabled={!writable || !capabilities?.moveFeed || selectedNow.length > 200} onClick={event => { returnFocus.current = event.currentTarget; begin({ type: 'move', members: selectedNow }) }}>Move selected</button>{capabilities?.unsubscribe && <button disabled={!writable || selectedNow.length > 200} onClick={event => { returnFocus.current = event.currentTarget; begin({ type: 'unsubscribe', members: [...new Map(selectedNow.map(member => [member.feed.id, member])).values()] }) }}>Unsubscribe selected</button>}</div>}
-    {folders.filter(folder => editing || drag !== null || !unreadOnly || folder.unread > 0).map(folder => {
+    {folders.filter(folder => editing || drag !== null || !unreadOnly || folder.unread > 0 || folder.feeds.some(feed => feed.broken)).map(folder => {
       const target: Target = { kind: 'folder', folder }
       return <div className="folder" key={folder.id} data-folder-drop-after={placement?.row === folderRow(folder.id) && placement.edge === 'after' ? true : undefined}>
         <div className="folder-row-wrapper" {...rowProps(folderRow(folder.id))}>
@@ -304,7 +304,7 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
         {expanded.has(folder.id) && renderFeeds(folder.id)}
       </div>
     })}
-    {((editing && !namedUncategorized) || (navigation?.uncategorized || []).some(feed => !unreadOnly || feed.unread > 0) || (drag?.kind === 'feed' && !namedUncategorized)) && <div className="folder">
+    {((editing && !namedUncategorized) || (navigation?.uncategorized || []).some(feed => !unreadOnly || feed.unread > 0 || feed.broken) || (drag?.kind === 'feed' && !namedUncategorized)) && <div className="folder">
       <button className="folder-row" {...rowProps(folderRow(null))} aria-expanded={expanded.has(null)} onClick={() => toggle(null)}><Icon name="chevron" className={expanded.has(null) ? 'rotated' : ''} /><span className="source-label">Uncategorized</span></button>
       {expanded.has(null) && renderFeeds(null)}
     </div>}

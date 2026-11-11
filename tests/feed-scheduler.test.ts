@@ -43,6 +43,38 @@ afterEach(async () => {
 })
 
 describe('standalone collector', () => {
+  it('publishes committed failures and successful checks in feed health, including 304 recovery', async () => {
+    let status = 503
+    const origin = await server((_req, res) => { res.writeHead(status, { ETag: '"health"' }); res.end(status === 200 ? rss() : '') })
+    const id = save(origin)
+    const health = () => db.localNavigation().uncategorized.find(feed => feed.id === id)!
+    const before = Date.now()
+    await scheduler(origin).runDue()
+    expect(health()).toMatchObject({ broken: true, lastCheckedAt: null })
+    expect(Date.parse(health().lastErrorAt!)).toBeGreaterThanOrEqual(before)
+    const failedAt = health().lastErrorAt
+    status = 200; due(id); await scheduler(origin).runDue()
+    expect(health()).toMatchObject({ broken: false, lastErrorAt: failedAt, lastCheckedAt: new Date(state(id).lastSuccessAt).toISOString() })
+    status = 503; due(id); await scheduler(origin).runDue()
+    expect(health().broken).toBe(true)
+    status = 304; due(id); await scheduler(origin).runDue()
+    expect(health()).toMatchObject({ broken: false, lastCheckedAt: new Date(state(id).lastSuccessAt).toISOString() })
+  })
+
+  it('rolls back health and fetch completion together and ignores stale failures', () => {
+    const id = save('https://example.test/feed')
+    const lease = db.feedFetch.claim(backend.id, 100, 100)!
+    const failure = { nextFetchAt: 1000, failures: 1, lastStatus: 503, lastError: 'http-503' }
+    const before = db.localNavigation()
+    sql(c => c.exec("CREATE TRIGGER reject_health BEFORE UPDATE OF broken ON feeds BEGIN SELECT RAISE(ABORT, 'synthetic health failure'); END"))
+    expect(() => db.feedFetch.complete(lease, 101, failure, () => {})).toThrow(/synthetic health/)
+    expect(state(id)).toEqual(lease)
+    expect(db.localNavigation()).toEqual(before)
+    sql(c => c.exec('DROP TRIGGER reject_health'))
+    expect(db.feedFetch.complete(lease, 200, failure, () => {})).toEqual({ committed: false })
+    expect(db.localNavigation()).toEqual(before)
+  })
+
   it('persists conditional state, leaves articles/checkpoint untouched on 304, and imports backdated arrivals', async () => {
     let delivery = 0
     const conditions: Array<string | undefined> = []
