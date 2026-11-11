@@ -186,22 +186,40 @@ never replay already applied items as part of a failed bulk request.
 
 ## Sidebar controls
 
-The sidebar options buttons work with touch, mouse and keyboard. Right-click or
-Shift+F10 opens a row's menu; arrow keys, Home and End move through its actions.
-Escape closes a menu or form and returns focus to its opener. If an operation
-removes that row, focus returns to Organize feeds. Tab stays inside open forms.
+The Feeds header has an add menu for Add feed and, when supported, New folder.
+Add feed opens the existing discovery flow in Settings. The Edit feeds pencil
+enters edit mode, showing drag grips, row options buttons and membership
+checkboxes. Empty folders and read feeds also appear while editing with the
+unread filter active. The Feeds heading, unread counts and add menu stay visible.
+Changes save immediately. Done clears selection, cancels dragging and edge
+scrolling, closes menus and returns focus to the pencil.
 
-Organize feeds reveals empty folders and read feeds while the unread filter is
-active. It adds membership checkboxes, bulk move and confirmed unsubscribe.
+Right-click or Shift+F10 opens a row's menu in either mode without enabling edit
+mode. Arrow keys, Home and End move through its actions. Escape closes a menu or
+form and returns focus to its opener. If an operation removes that row, focus
+returns to Done while editing, or the pencil otherwise. Tab stays inside open
+forms. On touch screens, use the pencil to reveal row options and drag grips.
+
+Selecting feeds shows a count, bulk move and confirmed unsubscribe actions.
 Selecting a feed in two folders moves the selected memberships; bulk unsubscribe
 deduplicates that feed. A partial result retains failed selections and names the
 failed feeds. Form revisions are captured when editing starts, so a background
 refresh cannot silently authorize an older edit.
 
 Supported menus offer folder creation, rename, merge, removal and ordering, and
-feed rename, move and ordering. Dragging shows explicit insertion and destination
-targets, including empty folders. Move up and Move down provide keyboard and
-touch alternatives. Ordering uses the backend's commands and navigation order;
+feed rename, move and ordering. In edit mode, drag from a six-dot grip to reorder with the
+insertion line, or move a feed to a highlighted folder, including an empty one.
+Dragging removes only the source membership; other memberships remain. If a
+feed still belongs to another folder, an Uncategorized drop says it will remove
+the source membership and does not insert the feed among Uncategorized feeds.
+Row clicks and scrolling outside the grip keep their usual behavior. On a focused
+grip, Space or Enter picks up the row, Up and Down choose its position, and
+Space or Enter drops it. Escape cancels. Move up, Move down and Move feed in
+the options menu remain keyboard and touch alternatives. Drag revisions are
+captured when the gesture starts. Standalone moves between destination feeds
+save the move and destination order together. FreshRSS offers membership moves
+without ordering. Holding a dragged row at the sidebar edge scrolls the list.
+Ordering uses the backend's commands and navigation order;
 the client no longer places particular folder names at the end of the sidebar.
 
 FreshRSS shows only its supported feed operations. A move without a chosen

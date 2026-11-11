@@ -99,6 +99,38 @@ describe('Paper read model', () => {
     expect(result.uncategorized.map(feed => feed.id)).toEqual(['feed/two'])
   })
 
+  it('keeps search filters and complete paginated membership with mapped metadata lookups', () => {
+    database.replaceNavigation(navigation)
+    database.upsertEntries([
+      entry({ id: 'unread', title: 'The synthetic story', contentHtml: '<p>Commonneedle</p>', timestamp: 40 }),
+      entry({ id: 'read', title: 'The synthetic story', contentHtml: '<p>Commonneedle</p>', read: true, timestamp: 30 }),
+      entry({ id: 'other', feedId: 'feed/two', title: 'The synthetic story', contentHtml: '<p>Commonneedle</p>', timestamp: 20 }),
+      entry({ id: 'star', title: 'The muted synthetic story', contentHtml: '<p>Commonneedle</p>', starred: true, timestamp: 10 }),
+    ])
+    database.createMuteFilter('muted synthetic', 'title')
+    const cases = [
+      { kind: 'all' as const, id: 'all', unreadOnly: false, expected: ['unread', 'read', 'other'] },
+      { kind: 'all' as const, id: 'all', unreadOnly: true, expected: ['unread', 'other'] },
+      { kind: 'feed' as const, id: 'feed/one', unreadOnly: false, expected: ['unread', 'read'] },
+      { kind: 'category' as const, id: 'user/-/label/Writers', unreadOnly: false, expected: ['unread', 'read'] },
+      { kind: 'starred' as const, id: 'starred', unreadOnly: false, expected: ['star'] },
+    ]
+    for (const { kind, id, unreadOnly, expected } of cases) {
+      const ids: string[] = []
+      let continuation = ''
+      do {
+        const page = database.localEntriesPage({ kind, id, title: 'Synthetic' }, {
+          query: 'Commonneedle', unreadOnly, limit: 1, continuation,
+          after: new Date(0).toISOString(), before: new Date(50).toISOString(),
+        })
+        expect(page.items).toHaveLength(1)
+        expect(page.items[0].searchExcerpt).toContain('Commonneedle')
+        ids.push(page.items[0].id); continuation = page.continuation
+      } while (continuation && ids.length < 10)
+      expect(ids.sort()).toEqual(expected.sort())
+    }
+  })
+
   it('searches the complete text and paginates without a fixed archive limit', () => {
     database.replaceNavigation(navigation)
     database.upsertEntries([

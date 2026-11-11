@@ -60,6 +60,57 @@ migrations. Use the matching pre-upgrade data backup if a migration is not
 backward compatible. Retain both the original database and backup until you have
 verified the restored application.
 
+### Upgrade to alpha.3
+
+Alpha.3 uses database schema 11. Keep the existing backend and FreshRSS account
+configuration for the upgrade. An omitted `PAPER_BACKEND` still selects FreshRSS;
+new setup selects standalone. Do not rerun setup over an existing `.env` or change
+the backend to move data. Review the [changelog](../CHANGELOG.md) first.
+
+After stopping every briefing command and backing up as described above, update
+the public checkout and pull the runtime image:
+
+```sh
+docker compose stop paper
+git fetch origin tag v0.1.0-alpha.3
+git switch --detach v0.1.0-alpha.3
+sh scripts/pull-image.sh
+docker compose up -d --no-build paper
+```
+
+Preserve any local Compose overrides when updating the checkout. For the AI
+variant, use `docker compose -f compose.yaml -f compose.ai.yaml` for stop, pull and
+up. Replace the helper command with that Compose command followed by `pull paper`.
+The helper's release archive contains only the runtime image. Keep `--no-build`
+when starting either pulled image. Source installations can build the selected
+tag instead, as described in the [README](../README.md#build-from-source).
+
+Before upgrading an existing database, Paper creates and validates
+`paper.sqlite.before-search-rows-v11` in the data directory. This upgrade rebuilds
+the derived full-text index from saved article and full-text content. Earlier schema
+steps can create additional backups. Keep these files, the original full backup,
+private configuration and saved secrets. A schema backup is not a complete
+installation backup. Verify startup, articles, reading positions and saved state
+before treating the upgrade as complete.
+
+Moving to standalone is a separate advanced, experimental offline operation.
+A fresh standalone installation is the normal alpha setup path. The migration uses
+the last completed local FreshRSS snapshot, so finish import and state reconciliation
+before stopping Paper. Later remote edits are not included. Publisher identity
+mappings require explicit reviewed evidence; similar URLs or dates cannot merge
+histories. Unknown publisher IDs can cause the first collection to import
+historical copies as new unread articles. Original read states stay intact, but
+duplicates can produce a large unread backlog. Preview cannot predict all such
+copies, and there is no general public cleanup tool. Inspect the first collection
+before accepting the cutover. If unread counts grow unexpectedly, stop Paper and
+every writer, preserve the changed data, and review rollback instead of deleting
+rows or marking the backlog read without evidence.
+
+Rollback saves later standalone work in a verified backup before restoring the
+source snapshot. It does not sync or merge that work into FreshRSS.
+See the [migration guide](backend-migration.md) for exact preview, apply, recovery
+and rollback commands.
+
 Offline browser copies are separate device storage. They can disappear when the
 browser clears storage and are not a backup of the server database.
 

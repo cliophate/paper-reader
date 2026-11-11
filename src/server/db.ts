@@ -9,6 +9,7 @@ import { IdentityStore, migrateIdentity, type BackendIdentity, type SourceItemId
 import { transaction } from './transaction.js'
 import { FeedFetchStore, migrateFeedFetchState } from './feed-fetch-state.js'
 import { migrateStandaloneSetup } from './migration-schema.js'
+import { DATABASE_VERSION, migrateSearchRows } from './search-schema.js'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
@@ -70,6 +71,13 @@ export interface PageOptions {
   includeMuted?: boolean
   after?: string
   before?: string
+}
+
+export interface SearchSnapshot {
+  id: string
+  scope: string
+  idsJson: string
+  createdAt: number
 }
 
 export interface LocalEntryPage {
@@ -165,20 +173,26 @@ export class PaperDatabase {
   readonly feedFetch: FeedFetchStore
   private activeBackendId = ''
 
-  constructor(databasePath: string) {
+  constructor(databasePath: string, options: { readOnly?: boolean } = {}) {
     this.databasePath = databasePath
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true })
-    this.db = new DatabaseSync(databasePath)
+    if (!options.readOnly) fs.mkdirSync(path.dirname(databasePath), { recursive: true })
+    this.db = new DatabaseSync(databasePath, { readOnly: options.readOnly })
     try {
-      this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
-      this.backupBeforeMigration(7, 'identity')
-      this.backupBeforeMigration(8, 'organization')
-      this.backupBeforeMigration(9, 'feed-fetch')
-      this.backupBeforeMigration(10, 'standalone-setup')
-      const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
-      // Current-schema participants must not drop/recreate triggers on every
-      // open. Coordinated bootstrap performs upgrades under exclusive access.
-      if (version < 10 || this.getSyncValue('fulltext_search_v1') !== 'true') this.migrate()
+      if (options.readOnly) {
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) !== DATABASE_VERSION
+          || this.getSyncValue('fulltext_search_v1') !== 'true') throw new Error('Search requires the current initialized database schema')
+      } else {
+        this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;')
+        this.backupBeforeMigration(7, 'identity')
+        this.backupBeforeMigration(8, 'organization')
+        this.backupBeforeMigration(9, 'feed-fetch')
+        this.backupBeforeMigration(10, 'standalone-setup')
+        this.backupBeforeMigration(DATABASE_VERSION, 'search-rows')
+        const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
+        // Current-schema participants must not drop/recreate triggers on every
+        // open. Coordinated bootstrap performs upgrades under exclusive access.
+        if (version < DATABASE_VERSION || this.getSyncValue('fulltext_search_v1') !== 'true') this.migrate()
+      }
       this.identities = new IdentityStore(this.db)
       this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
       this.feedFetch = new FeedFetchStore(this.db, id => this.assertLocalBackend(id))
@@ -188,6 +202,8 @@ export class PaperDatabase {
       throw error
     }
   }
+
+  get searchDatabasePath() { return this.databasePath }
 
   close() {
     this.db.close()
@@ -200,7 +216,7 @@ export class PaperDatabase {
 
   private backupBeforeMigration(target: number, name: string) {
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
-    if (version > 10) throw new Error('This database was created by a newer Paper version')
+    if (version > DATABASE_VERSION) throw new Error('This database was created by a newer Paper version')
     if (!version || version >= target) return
     const backupPath = `${this.databasePath}.before-${name}-v${target}`
     if (fs.existsSync(backupPath)) {
@@ -287,13 +303,15 @@ export class PaperDatabase {
     return transaction(this.db, () => {
       this.assertLocalBackend(backendId)
       this.identities.assertSubscription(backendId, subscriptionId)
+      const entries: Entry[] = []
       const results = items.map(item => {
         const result = this.identities.resolve(backendId, subscriptionId, item.identity)
         if (result.status === 'resolved') {
-          this.upsertEntries([{ ...item.entry, id: result.id, feedId: subscriptionId, read: false, starred: false, sourceOrder: '' }])
+          entries.push({ ...item.entry, id: result.id, feedId: subscriptionId, read: false, starred: false, sourceOrder: '' })
         }
         return result
       })
+      this.upsertEntries(entries)
       if (options.checkpoint) this.identities.setCheckpoint(backendId, options.checkpoint.key, options.checkpoint.value)
       return results
     })
@@ -682,6 +700,7 @@ export class PaperDatabase {
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 8) migrateOrganization(this.db)
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 9) migrateFeedFetchState(this.db)
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 10) migrateStandaloneSetup(this.db)
+    migrateSearchRows(this.db)
   }
 
   replaceNavigation(navigation: NavigationPayload) {
@@ -1136,7 +1155,11 @@ export class PaperDatabase {
       }
     }
     const search = ftsQuery(options.query || '')
-    const join = search ? 'JOIN entries_fts ON entries_fts.entry_id = entries.id' : ''
+    // Ranking and eligibility need only scope metadata. Avoid reading each
+    // article body or the FTS content row merely to recover its entry ID.
+    const join = search ? `INDEXED BY entries_search_scope_idx
+      JOIN entry_search_rows search ON search.entry_id = entries.id
+      JOIN entries_fts ON entries_fts.rowid = search.id` : ''
     if (search) { clauses.push('entries_fts MATCH ?'); parameters.push(search) }
     return { clauses, parameters, search, join }
   }
@@ -1155,9 +1178,7 @@ export class PaperDatabase {
       .all(...parameters, Math.min(Math.max(limit, 1), 250)).map(row => String(row.id))
   }
 
-  localEntriesPage(stream: StreamRef, options: PageOptions = {}): LocalEntryPage {
-    const limit = Math.min(Math.max(options.limit || 80, 1), 250)
-    const { clauses, parameters, search, join } = this.pageScope(stream, options)
+  private pageCursor(stream: StreamRef, options: PageOptions) {
     const ascending = this.streamOrder(stream) === 'oldest'
     const direction = ascending ? 'ASC' : 'DESC'
     const scope = crypto.createHash('sha256').update(JSON.stringify([stream.kind, stream.id, Boolean(options.unreadOnly), options.query || '', options.after || '', options.before || '', Boolean(options.includeMuted), direction])).digest('hex')
@@ -1167,31 +1188,65 @@ export class PaperDatabase {
       if (cursor.scope !== scope) throw new Error('This list changed. Refresh to continue.')
     }
     const encode = (value: object) => Buffer.from(JSON.stringify({ scope, ...value })).toString('base64url')
-    const where = () => clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
-    if (search) {
-      // Freeze relevance ordering. Corpus changes can alter BM25 scores between requests.
-      this.db.prepare('DELETE FROM search_pages WHERE created_at < ?').run(Date.now() - 3600000)
-      let snapshot = cursor.snapshot
-      let ids: string[]
-      if (snapshot) {
-        const row = this.db.prepare('SELECT ids_json FROM search_pages WHERE id = ? AND scope = ?').get(snapshot, scope)
-        if (!row) throw new Error('Search expired. Search again to continue.')
-        ids = JSON.parse(String(row.ids_json))
-      } else {
-        ids = this.db.prepare(`SELECT entries.id FROM entries ${join} ${where()} ORDER BY bm25(entries_fts), entries.timestamp ${direction}, entries.crawled_at ${direction}, entries.id ${direction}`).all(...parameters).map(row => String(row.id))
-        snapshot = crypto.randomUUID()
-        this.db.prepare('INSERT INTO search_pages VALUES (?, ?, ?, ?)').run(snapshot, scope, JSON.stringify(ids), Date.now())
-      }
+    return { ascending, direction, scope, cursor, encode }
+  }
+
+  saveSearchSnapshot(snapshot?: SearchSnapshot) {
+    this.db.prepare('DELETE FROM search_pages WHERE created_at < ?').run(Date.now() - 3600000)
+    if (snapshot) this.db.prepare('INSERT INTO search_pages VALUES (?, ?, ?, ?)')
+      .run(snapshot.id, snapshot.scope, snapshot.idsJson, snapshot.createdAt)
+  }
+
+  // The caller persists the yielded snapshot before resuming. No read transaction
+  // spans this yield. HTTP search runs this same iterator in its read-only worker.
+  *searchEntriesPage(stream: StreamRef, options: PageOptions): Generator<SearchSnapshot | undefined, LocalEntryPage, void> {
+    const limit = Math.min(Math.max(options.limit || 80, 1), 250)
+    const { clauses, parameters, search, join } = this.pageScope(stream, options)
+    const { direction, scope, cursor, encode } = this.pageCursor(stream, options)
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+    let snapshot = cursor.snapshot
+    let ids: string[]
+    if (snapshot) {
+      const row = this.db.prepare('SELECT ids_json FROM search_pages WHERE id = ? AND scope = ? AND created_at >= ?').get(snapshot, scope, Date.now() - 3600000)
+      if (!row) throw new Error('Search expired. Search again to continue.')
+      ids = JSON.parse(String(row.ids_json))
+      yield undefined
+    } else {
+      // Freeze all matches in BM25 order, including matches beyond this page.
+      ids = this.db.prepare(`SELECT entries.id FROM entries ${join} ${where} ORDER BY bm25(entries_fts), entries.timestamp ${direction}, entries.crawled_at ${direction}, entries.id ${direction}`).all(...parameters).map(row => String(row.id))
+      snapshot = crypto.randomUUID()
+      yield { id: snapshot, scope, idsJson: JSON.stringify(ids), createdAt: Date.now() }
+    }
+    // Refresh state after ranking and persistence. Eligibility, revisions and
+    // decoration for this page come from one consistent read snapshot.
+    this.db.exec('BEGIN')
+    try {
+      if (this.pageCursor(stream, options).scope !== scope) throw new Error('This list changed. Refresh to continue.')
       const eligible = new Set(this.matchingEntryIds(stream, options))
       let offset = Math.max(0, cursor.offset || 0)
       const items: Entry[] = []
       while (offset < ids.length && items.length < limit) {
         const id = ids[offset++]
         if (!eligible.has(id)) continue
-        const row = this.db.prepare(`SELECT entries.*, snippet(entries_fts, 4, '', '', '…', 32) AS search_excerpt FROM entries ${join} WHERE entries.id = ? AND entries_fts MATCH ?`).get(id, search)
+        const row = this.db.prepare(`SELECT entries.*, snippet(entries_fts, 4, '', '', '…', 32) AS search_excerpt
+          FROM entries JOIN entries_fts ON entries_fts.rowid = (SELECT id FROM entry_search_rows WHERE entry_id = ?)
+          WHERE entries.id = ? AND entries_fts MATCH ?`).get(id, id, search)
         if (row) items.push({ ...this.decorateEntry(entryFromRow(row as Record<string, string | number>)), searchExcerpt: String(row.search_excerpt) })
       }
       return { items, continuation: ids.slice(offset).some(id => eligible.has(id)) ? encode({ snapshot, offset }) : '' }
+    } finally { this.db.exec('ROLLBACK') }
+  }
+
+  localEntriesPage(stream: StreamRef, options: PageOptions = {}): LocalEntryPage {
+    const limit = Math.min(Math.max(options.limit || 80, 1), 250)
+    const { clauses, parameters, search } = this.pageScope(stream, options)
+    const { ascending, direction, cursor, encode } = this.pageCursor(stream, options)
+    const where = () => clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+    if (search) {
+      const page = this.searchEntriesPage(stream, options)
+      let step = page.next()
+      while (!step.done) { this.saveSearchSnapshot(step.value); step = page.next() }
+      return step.value
     }
     if (cursor.boundary) {
       if (!Array.isArray(cursor.boundary) || cursor.boundary.length !== 3 || !Number.isFinite(cursor.boundary[0]) || !Number.isFinite(cursor.boundary[1]) || typeof cursor.boundary[2] !== 'string') throw new Error('Invalid article cursor')

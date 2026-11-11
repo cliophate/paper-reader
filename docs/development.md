@@ -17,6 +17,8 @@ the shared collector, discovery and repair fetch contract.
 
 [Backend migration](backend-migration.md) documents schema v10, offline
 staging, process coordination, runtime activation and rollback.
+[Search indexing](search-index.md) documents schema v11 and the collection and
+search responsiveness regression.
 
 Use Node 24 or newer. From the repository root:
 
@@ -53,6 +55,24 @@ npm audit --audit-level=moderate
 The smoke test uses a local protocol fixture and temporary SQLite storage. It
 checks imports, state changes, connection settings, offline assets, and restore
 behavior without using your `.env`, reading data, or provider accounts.
+The collection regression starts the built server with 200,000 synthetic articles
+and 1,266 feeds, probes health during collection and slow searches, and
+checks concurrent state writes, cancellation, queue saturation, shutdown locks,
+retained state and checkpoints. It uses about 6 GiB of temporary storage
+while seeding its multi-KiB article bodies.
+
+After building, run the article-cleanup collection regression separately:
+
+```sh
+node scripts/article-cleanup-responsiveness-test.mjs
+```
+
+It collects a synthetic malformed article through the built standalone server
+and checks health under the same two-second deadline. The normal test suite also
+runs repeated and deeply nested cleanup fixtures in killable subprocesses. For
+diagnostic timings across fixture sizes, run
+`node scripts/article-cleanup-benchmark.mjs`. These fixtures cover known cleanup
+stalls, not a processing-time guarantee for arbitrary HTML.
 
 ## Docker integration test
 

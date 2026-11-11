@@ -80,6 +80,14 @@ async function edge(target = 'video', cancel = false, release = true) {
 }
 
 describe('mobile reader switching', () => {
+  it.each(['', 'not-a-date', '0', '1970-01-01T00:00:00.000Z', undefined])('opens an article with unavailable publication date %s without crashing', async publishedAt => {
+    initialPage.items[0] = { ...post('a'), kind: 'article', publishedAt: publishedAt as string, timestamp: 0 }
+    await mount()
+    expect(container.querySelector('.article-kicker')?.textContent).toContain('Date unavailable')
+    expect(container.querySelector('.story-list')?.textContent).toContain('Date unavailable')
+    expect(container.textContent).not.toContain('NaNd')
+  })
+
   it.each(['j', 'k'])('keeps %s navigation working after marking an unread folder read', async key => {
     history.replaceState(null, '', '/?kind=category&id=instagram&title=Instagram&entry=a&pane=article&unread=1')
     initialPage.continuation = 'old-page'
@@ -104,6 +112,136 @@ describe('mobile reader switching', () => {
     expect(location.search).toContain('entry=c')
     expect(api.entries).toHaveBeenCalledTimes(1)
     expect(vi.mocked(api.entries).mock.calls[0][3]).toBe('')
+  })
+
+  it.each([false, true])('keeps a newer list and selection when bulk read finishes, including return=%s', async returnToFolder => {
+    history.replaceState(null, '', '/?kind=category&id=instagram&title=Instagram&entry=a&pane=article&unread=1')
+    initialPage.items = initialPage.items.map(entry => ({ ...entry, read: false, stateRevision: 1 }))
+    let finish!: (result: { ok: boolean; count: number; undoToken: string }) => void
+    vi.mocked(api.markStreamRead).mockReturnValue(new Promise(resolve => { finish = resolve }))
+    vi.mocked(api.undo).mockResolvedValue({ ok: true, count: 2 })
+    await mount()
+    await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'A', shiftKey: true })) })
+    const navigate = async (id: string, entry: string) => {
+      await act(async () => {
+        history.pushState(null, '', `/?kind=category&id=${id}&title=${id === 'tech' ? 'Tech' : 'Instagram'}&entry=${entry}&pane=article&unread=1`)
+        window.dispatchEvent(new PopStateEvent('popstate'))
+      })
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    }
+    await navigate('tech', 'c')
+    if (returnToFolder) {
+      initialPage.items.push({ ...post('new'), read: false, stateRevision: 1 })
+      await navigate('instagram', 'new')
+    }
+    const rows = container.querySelectorAll('.story-row').length
+    const selection = location.search
+    await act(async () => { finish({ ok: true, count: 2, undoToken: 'synthetic-undo' }) })
+    expect(container.querySelectorAll('.story-row')).toHaveLength(rows)
+    expect(location.search).toBe(selection)
+    expect(container.querySelector('.article-view')).not.toBeNull()
+    vi.mocked(api.entries).mockClear()
+    await act(async () => { container.querySelector<HTMLButtonElement>('.toast button')!.click() })
+    expect(api.undo).toHaveBeenCalledWith('synthetic-undo')
+    expect(api.entries).not.toHaveBeenCalled()
+    expect(container.querySelectorAll('.story-row')).toHaveLength(rows)
+    expect(location.search).toBe(selection)
+  })
+
+  it('traverses feeds in sidebar order, skips empty feeds, and deduplicates memberships', async () => {
+    history.replaceState(null, '', '/?kind=feed&id=first&entry=a&pane=article&unread=1')
+    const feed = (id: string, unread = 1) => ({ id, title: id, unread, url: `https://example.com/${id}` })
+    vi.mocked(api.navigation).mockResolvedValue({ unread: 3, starred: 0, uncategorized: [feed('last')], folders: [
+      { id: 'one', title: 'One', unread: 2, feeds: [feed('first'), feed('empty', 0), feed('stale'), feed('next')] },
+      { id: 'two', title: 'Two', unread: 1, feeds: [feed('first')] },
+    ] })
+    vi.mocked(api.entries).mockImplementation(async target => ({ items: target.id === 'stale' ? [] : [post(target.id === 'first' ? 'a' : target.id)], continuation: '' }))
+    await mount()
+    vi.mocked(api.entries).mockClear()
+    const key = async (key: string) => { await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key })) }) }
+    await key('j')
+    expect(location.search).toContain('id=next')
+    expect(vi.mocked(api.entries).mock.calls.map(call => call[0].id)).toEqual(['stale', 'next'])
+    await key('j')
+    expect(location.search).toContain('id=last')
+    await key('k')
+    expect(location.search).toContain('id=next')
+  })
+
+  it('does not navigate articles from a select or editable descendant', async () => {
+    await mount()
+    const select = container.querySelector<HTMLSelectElement>('[aria-label="Article order"]')!
+    const editable = document.createElement('div')
+    editable.contentEditable = 'true'
+    editable.setAttribute('contenteditable', 'true')
+    editable.innerHTML = '<span>Editing</span>'
+    container.append(editable)
+    await act(async () => {
+      select.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'j' }))
+      editable.firstElementChild!.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'j' }))
+    })
+    expect(location.search).toContain('entry=a')
+    editable.remove()
+  })
+
+  it('ignores an obsolete source failure after a successful reload, but keeps a current failure visible', async () => {
+    const sources: EventTarget[] = []
+    vi.stubGlobal('EventSource', class extends EventTarget { constructor() { super(); sources.push(this) } close() {} })
+    let failOld!: (error: Error) => void
+    vi.mocked(api.organization).mockImplementationOnce(() => new Promise((_resolve, reject) => { failOld = reject }))
+    await mount()
+    const oldSignal = vi.mocked(api.organization).mock.calls[0][1]!
+    await act(async () => { sources.at(-1)!.dispatchEvent(new Event('sync')) })
+    expect(oldSignal.aborted).toBe(true)
+    expect(container.textContent).toContain('Instagram')
+    await act(async () => { failOld(new TypeError('NetworkError while attempting to fetch sources')) })
+    expect(container.querySelector('.reader-status')?.textContent).not.toContain('NetworkError')
+    vi.mocked(api.organization).mockRejectedValueOnce(new TypeError('Current source failure'))
+    await act(async () => { sources.at(-1)!.dispatchEvent(new Event('sync')) })
+    expect(container.querySelector('.reader-status')?.textContent).toContain('Current source failure')
+    await act(async () => { sources.at(-1)!.dispatchEvent(new Event('sync')) })
+    expect(container.querySelector('.reader-status')?.textContent).not.toContain('Current source failure')
+  })
+
+  it('aborts source requests when a reload leaves the page', async () => {
+    let fail!: (error: Error) => void
+    vi.mocked(api.organization).mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
+    await mount()
+    const signal = vi.mocked(api.organization).mock.calls[0][1]!
+    await act(async () => {
+      window.dispatchEvent(new PageTransitionEvent('pagehide'))
+      fail(new TypeError('NetworkError while attempting to fetch sources'))
+    })
+    expect(signal.aborted).toBe(true)
+    expect(container.querySelector('.reader-status')?.textContent).not.toContain('NetworkError')
+    await act(async () => { window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })) })
+    expect(api.organization).toHaveBeenCalledTimes(2)
+    expect(container.textContent).toContain('Instagram')
+  })
+
+  it('keeps the programmatic reader focus target out of Tab order and leaves article controls tabbable', async () => {
+    await mount()
+    const article = container.querySelector<HTMLElement>('.article-view')!
+    expect(article.tabIndex).toBe(-1)
+    article.focus()
+    expect(document.activeElement).toBe(article)
+    expect(article.querySelector<HTMLAnchorElement>('a[href]')!.tabIndex).toBe(0)
+    expect(article.querySelector<HTMLButtonElement>('button:not(:disabled)')!.tabIndex).toBe(0)
+  })
+
+  it('opens the existing discovery flow from the Feeds add menu and returns focus on close', async () => {
+    await mount()
+    const plus = container.querySelector<HTMLButtonElement>('[aria-label="Add feed or folder"]')!
+    await act(async () => { plus.focus(); plus.click() })
+    const add = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === 'Add feed')!
+    await act(async () => add.click())
+    expect(container.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('Settings')
+    expect(container.querySelector('[aria-label="Discover feeds"]')).not.toBeNull()
+    expect(container.querySelectorAll('.subscription-tools')).toHaveLength(1)
+    expect(container.querySelector('.feed-add-form')).toBeNull()
+    await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' })) })
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(plus)
   })
 
   it('reveals the end marker before J crosses into the next folder', async () => {
@@ -499,7 +637,8 @@ describe('Sources read filter', () => {
     const heading = container.querySelector('.sidebar-heading')!
     expect(heading.children[0].textContent).toBe('Library')
     expect(heading.children[1].className).toBe('source-filter')
-    expect(heading.children[2].getAttribute('aria-label')).toBe('Manage feeds')
+    expect(heading.children).toHaveLength(2)
+    expect(container.querySelector('.organization-header [aria-label="Add feed or folder"]')).not.toBeNull()
     expect(container.querySelector('.source-nav .source-filter')).toBeNull()
     expect(container.querySelector('.source-filter [aria-pressed="true"]')?.textContent).toBe('Unread')
     expect(container.querySelector('.story-pane [aria-label="Article filter"]')).toBeNull()
@@ -650,6 +789,7 @@ describe('organization keeps the reading session', () => {
     const rows = [...container.querySelectorAll('.story-row')]
     const historyLength = history.length
     const originalEntry = new URLSearchParams(location.search).get('entry')
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Edit feeds"]')!.click())
     const options = container.querySelector<HTMLButtonElement>('button[aria-label="Options for Instagram"]')!
     await act(async () => { options.focus(); options.click() })
     await act(async () => { [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === 'Rename folder')!.click() })

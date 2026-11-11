@@ -1,5 +1,6 @@
 import sanitizeHtml from 'sanitize-html'
 import { decodeHTML } from 'entities'
+import { Parser } from 'htmlparser2'
 
 const allowedTags = [
   'a', 'article', 'aside', 'blockquote', 'br', 'code', 'del', 'details', 'div', 'em',
@@ -9,10 +10,7 @@ const allowedTags = [
 ]
 
 export function cleanArticleHtml(input: string): string {
-  const prepared = decodeEscapedArticleMarkup(repairLinkedImageSources(input))
-    .replace(/<post-hero\b[^>]*>[\s\S]*?<\/post-hero>/gi, '')
-    .replace(/<p\b[^>]*>\s*The post\s+<a\b[\s\S]*?appeared first on\s+<a\b[\s\S]*?<\/p>/gi, '')
-    .replace(/<figure\b[^>]*class=(["'])[^"']*\benclosure\b[^"']*\1[^>]*>[\s\S]*?<a\b[^>]*href=(["'])(https?:\/\/(?:www\.)?youtube\.com\/watch\?[^"']+)\2[^>]*>[\s\S]*?<\/a>[\s\S]*?<\/figure>/gi, '<p><a href="$3">Watch video</a></p>')
+  const prepared = cleanArticleMarkup(decodeEscapedArticleMarkup(repairLinkedImageSources(input)))
 
   return sanitizeHtml(prepared, {
     allowedTags,
@@ -53,11 +51,148 @@ export function cleanArticleHtml(input: string): string {
   })
 }
 
+interface MarkupEdit {
+  start: number
+  end: number
+  replacement: string
+}
+
+function applyMarkupEdits(input: string, edits: MarkupEdit[]): string {
+  const parts: string[] = []
+  let cursor = 0
+  // Edits are recorded in opening-tag order. A completed outer edit takes
+  // precedence over any edits inside it; incomplete elements have end = -1.
+  for (const edit of edits) {
+    if (edit.end < 0 || edit.start < cursor) continue
+    parts.push(input.slice(cursor, edit.start), edit.replacement)
+    cursor = edit.end
+  }
+  parts.push(input.slice(cursor))
+  return parts.join('')
+}
+
+function removePostHeroes(input: string): string {
+  const stack: MarkupEdit[] = []
+  const edits: MarkupEdit[] = []
+  const parser = new Parser({
+    onopentag(name) {
+      if (name !== 'post-hero') return
+      const edit = { start: parser.startIndex, end: -1, replacement: '' }
+      edits.push(edit)
+      stack.push(edit)
+    },
+    onclosetag(name, implied) {
+      if (name !== 'post-hero') return
+      const edit = stack.pop()
+      if (edit && !implied) edit.end = parser.endIndex + 1
+    },
+  })
+  parser.end(input)
+  return applyMarkupEdits(input, edits)
+}
+
+function cleanArticleMarkup(markup: string): string {
+  // Hero removal precedes footer matching, as in the original cleanup order.
+  // Separate structural passes prevent discarded hero text from matching a footer.
+  const input = removePostHeroes(markup)
+  interface Frame {
+    name: string
+    edit?: MarkupEdit
+    enclosure?: boolean
+    href?: string
+    video?: string
+    paragraph?: {
+      previous?: Frame
+      anchorStart: number
+      hasAnchor: boolean
+      nested: boolean
+      isPost: boolean
+      isFooter: boolean
+    }
+  }
+  const stack: Frame[] = []
+  const edits: MarkupEdit[] = []
+  let paragraph: Frame | undefined
+  const parser = new Parser({
+    onopentag(name, attributes, implied) {
+      const frame: Frame = { name }
+      if (!implied && (name === 'p' || name === 'figure')) {
+        frame.edit = { start: parser.startIndex, end: -1, replacement: '' }
+        edits.push(frame.edit)
+      }
+      if (name === 'figure') frame.enclosure = /\benclosure\b/i.test(attributes.class || '')
+      if (name === 'p') {
+        if (paragraph?.paragraph) paragraph.paragraph.nested = true
+        frame.paragraph = { previous: paragraph, anchorStart: parser.endIndex + 1, hasAnchor: false, nested: false, isPost: false, isFooter: false }
+        paragraph = frame
+      }
+      if (name === 'a') {
+        if (/^https?:\/\/(?:www\.)?youtube\.com\/watch\?./i.test(attributes.href || '')) frame.href = attributes.href
+        const current = paragraph?.paragraph
+        if (current && !current.nested) {
+          // Each interval ends at the next anchor. Never rescan a growing
+          // paragraph prefix or search outside the paragraph's parser boundary.
+          const between = input.slice(current.anchorStart, parser.startIndex)
+          if (current.isPost && /appeared first on\s+$/i.test(between)) current.isFooter = true
+          if (!current.hasAnchor) current.isPost = /^\s*The post\s+$/i.test(between)
+          current.hasAnchor = true
+          current.anchorStart = parser.endIndex + 1
+        }
+      }
+      stack.push(frame)
+    },
+    onclosetag(_name, implied) {
+      const frame = stack.pop()
+      if (!frame) return
+      if (frame.paragraph) paragraph = frame.paragraph.previous
+      let removed = false
+      // EOF and implied closes cannot establish a source range to remove.
+      if (!implied && frame.edit) {
+        if (frame.paragraph?.isFooter && !frame.paragraph.nested) {
+          frame.edit.end = parser.endIndex + 1
+          removed = true
+        } else if (frame.enclosure && frame.video) {
+          frame.edit.end = parser.endIndex + 1
+          frame.edit.replacement = `<p><a href="${escapeHtml(frame.video)}">Watch video</a></p>`
+        }
+      }
+      const video = !implied && frame.href ? frame.href : frame.video
+      const parent = stack.at(-1)
+      // Propagate once per close instead of walking all enclosing figures.
+      // Links in removed footers must not replace an outer figure.
+      if (!removed && video && parent && !parent.video) parent.video = video
+    },
+  })
+  parser.end(input)
+  return applyMarkupEdits(input, edits)
+}
+
 function repairLinkedImageSources(input: string): string {
-  return input.replace(
-    /(src\s*=\s*)(["'])<a\b[^>]*\bhref=(["'])(https?:\/\/[^"']+)\3[^>]*>[\s\S]*?<\/a>\2/gi,
-    '$1$2$4$2',
-  )
+  const candidates = Array.from(input.matchAll(/\bsrc\s*=\s*(["'])<a\b/gi))
+  const edits: MarkupEdit[] = []
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index]
+    const start = candidate.index + candidate[0].length - 2
+    const limit = candidates[index + 1]?.index ?? input.length
+    let href: string | undefined
+    let anchorDepth = 0
+    const parser = new Parser({
+      onopentag(name, attributes) {
+        if (name === 'a') anchorDepth += 1
+        if (name === 'a' && parser.startIndex === 0 && /^https?:\/\//i.test(attributes.href || '')) href = attributes.href
+      },
+      onclosetag(name, implied) {
+        if (name !== 'a' || --anchorDepth !== 0) return
+        const end = start + parser.endIndex + 1
+        if (!implied && href && input[end] === candidate[1]) edits.push({ start, end, replacement: escapeHtml(href) })
+        parser.pause()
+      },
+    })
+    // A malformed candidate cannot scan through later candidates. These slices
+    // are disjoint, including when none of the anchors ever closes.
+    parser.end(input.slice(start, limit))
+  }
+  return applyMarkupEdits(input, edits)
 }
 
 function decodeEscapedArticleMarkup(input: string): string {
