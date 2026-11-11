@@ -244,9 +244,7 @@ app.post('/api/filters', (request, response) => {
   if (!['title', 'content', 'any'].includes(scope)) return response.status(400).json({ error: 'Unknown filter scope' })
   try { if (feedId) backend.validateFeedId(feedId, 'filter') }
   catch (error) {
-    if (error instanceof StateConflictError) return response.status(409).json({ code: 'state-conflict', error: error.message, states: error.states })
-  if (error instanceof UndoExpiredError) return response.status(410).json({ error: error.message })
-  if (error instanceof BackendValidationError) return response.status(400).json({ error: 'Unknown feed' })
+    if (error instanceof BackendValidationError) return response.status(400).json({ error: 'Unknown feed' })
     throw error
   }
   const filter = database.createMuteFilter(phrase, scope as import('./db.js').MuteFilterScope, feedId)
