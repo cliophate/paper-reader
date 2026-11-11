@@ -1,4 +1,4 @@
-import { resolveHttpUrl } from './network-policy.js'
+import { boundedFetch, FeedHttpError } from './feed-http.js'
 import { Readability } from '@mozilla/readability'
 import { JSDOM } from 'jsdom'
 import type { ArticleCacheRecord, PaperDatabase } from './db.js'
@@ -127,31 +127,26 @@ function normalizeUrl(input: string): URL {
 }
 
 export async function fetchHtml(startUrl: URL, fallbackEnabled = false): Promise<{ html: string; finalUrl: URL }> {
-  let url = startUrl
-  for (let redirect = 0; redirect <= MAX_REDIRECTS; redirect += 1) {
-    await assertPublicUrl(url)
-    const response = await fetch(url, {
-      redirect: 'manual',
-      signal: AbortSignal.timeout(20_000),
-      headers: {
-        Accept: 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.8',
-        'User-Agent': 'Mozilla/5.0 (compatible; PaperReader/1.0; +https://github.com/cliophate/paper-reader)',
-      },
+  let response
+  try {
+    response = await boundedFetch(startUrl.href, {
+      accept: 'text/html,application/xhtml+xml',
+      timeoutMs: 20_000,
+      maxResponseBytes: MAX_HTML_BYTES,
+      maxDecompressedBytes: MAX_HTML_BYTES,
+      maxDecodedBytes: MAX_HTML_BYTES,
+      maxRedirects: MAX_REDIRECTS,
+      acquire: async url => { normalizeUrl(url.href); return () => {} },
     })
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get('location')
-      if (!location) throw new Error(`The article returned an incomplete redirect with status ${response.status}`)
-      url = normalizeUrl(new URL(location, url).href)
-      continue
-    }
-    if (fallbackEnabled && [401, 403, 406, 429].includes(response.status)) return fetchReaderPage(url)
-    if (!response.ok) throw new Error(`The article page returned status ${response.status}`)
-    const contentType = response.headers.get('content-type') || ''
-    if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) throw new Error('The article URL did not return an HTML page')
-    return { html: await readLimited(response), finalUrl: url }
+  } catch (error) {
+    if (error instanceof FeedHttpError && error.code === 'limit') throw new Error('The article page is too large to extract')
+    throw error
   }
-  throw new Error('The article redirected too many times')
+  const url = new URL(response.url)
+  if (fallbackEnabled && [401, 403, 406, 429].includes(response.status)) return fetchReaderPage(url)
+  if (response.status < 200 || response.status >= 300) throw new Error(`The article page returned status ${response.status}`)
+  if (!response.contentType.includes('text/html') && !response.contentType.includes('application/xhtml+xml')) throw new Error('The article URL did not return an HTML page')
+  return { html: response.text, finalUrl: url }
 }
 
 async function fetchReaderPage(url: URL): Promise<{ html: string; finalUrl: URL }> {
@@ -177,11 +172,7 @@ async function fetchReaderPage(url: URL): Promise<{ html: string; finalUrl: URL 
   return { html, finalUrl: url }
 }
 
-export async function assertPublicUrl(url: URL) {
-  await resolveHttpUrl(url)
-}
-
-export async function readLimited(response: Response): Promise<string> {
+async function readLimited(response: Response): Promise<string> {
   const declaredLength = Number(response.headers.get('content-length') || 0)
   if (declaredLength > MAX_HTML_BYTES) throw new Error('The article page is too large to extract')
   if (!response.body) return ''
