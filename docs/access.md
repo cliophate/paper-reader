@@ -9,7 +9,7 @@ Use a current Docker Compose version supporting !reset, version 2.24.4 or newer.
 Generate a password hash with the same Caddy image used by the example:
 
 ```sh
-docker run --rm -it caddy:2.11.9 caddy hash-password
+docker run --rm -it caddy:2.11.9@sha256:0c2243efcf437ab7f7a978f1027fcf0d4f9be8a75df27b1b3fbc5dbe0ffa8cf0 caddy hash-password
 ```
 
 Enter the password interactively. Add these settings to your private .env:
