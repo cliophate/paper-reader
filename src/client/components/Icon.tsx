@@ -1,7 +1,7 @@
 import type { SVGProps } from 'react'
 
 // Feather 4.29.2, MIT. See licenses/feather/LICENSE and docs/provenance.md.
-type IconName = 'archive' | 'back' | 'bookmark' | 'check' | 'chevron' | 'close' | 'copy' | 'edit' | 'external' | 'feed' | 'folder' | 'moon' | 'plus' | 'reader' | 'refresh' | 'report' | 'search' | 'settings' | 'star' | 'sun' | 'topics'
+type IconName = 'archive' | 'back' | 'bookmark' | 'check' | 'chevron' | 'close' | 'copy' | 'discussion' | 'edit' | 'external' | 'feed' | 'folder' | 'moon' | 'plus' | 'reader' | 'refresh' | 'report' | 'search' | 'settings' | 'star' | 'sun' | 'topics'
 
 const paths: Record<IconName, React.ReactNode> = {
   archive: <><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></>,
@@ -11,6 +11,7 @@ const paths: Record<IconName, React.ReactNode> = {
   chevron: <><polyline points="9 18 15 12 9 6"/></>,
   close: <><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>,
   copy: <><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></>,
+  discussion: <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>,
   edit: <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>,
   external: <><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></>,
   feed: <><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></>,

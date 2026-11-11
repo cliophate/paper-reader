@@ -91,6 +91,28 @@ describe('mobile reader switching', () => {
     expect(container.querySelector('.filter-row')?.textContent).toContain(unreadOnly ? '8 of 8 loaded' : '9 loaded')
   })
 
+  it('hides the discussion action when discussion is not configured', async () => {
+    await mount()
+    expect(container.querySelector('button[aria-label="Discuss article"]')).toBeNull()
+  })
+
+  it('shows a distinct discussion icon when configured and disables the action offline', async () => {
+    vi.mocked(api.status).mockResolvedValue({ ...(await api.status()), discussionConfigured: true })
+    initialPage.items[0] = { ...post('a'), kind: 'article' }
+    await mount()
+    const discuss = container.querySelector<HTMLButtonElement>('button[aria-label="Discuss article"]')!
+    expect(discuss.disabled).toBe(false)
+    expect(discuss.title).toBe('Discuss article')
+    expect(discuss.querySelector('svg')?.innerHTML).not.toBe(container.querySelector('button[aria-label="Fetch full article"] svg')?.innerHTML)
+    const connection = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    await act(async () => { window.dispatchEvent(new Event('offline')) })
+    expect(discuss.disabled).toBe(true)
+    connection.mockReturnValue(true)
+    await act(async () => { window.dispatchEvent(new Event('online')) })
+    expect(discuss.disabled).toBe(false)
+    connection.mockRestore()
+  })
+
   it('exposes separate story open and options buttons without nested interactive controls', async () => {
     await mount()
     const interactive = 'button, a[href], input, select, textarea, [role="button"], [tabindex]'

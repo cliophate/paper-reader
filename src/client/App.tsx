@@ -1856,7 +1856,7 @@ const ArticleView = forwardRef<HTMLElement, {
         <a href={entry.url} target="_blank" rel="noopener noreferrer" aria-label="Open original" title="Open original"><Icon name="external" /><span>Original</span></a>
         <button onClick={onCopyUrl} aria-label="Copy article URL" title="Copy article URL"><Icon name="copy" /><span>Copy URL</span></button>
         <button onClick={onReport} aria-label="Report a problem" title="Report a problem"><Icon name="report" /><span>Report</span></button>
-        <button disabled={!discussionConfigured || !online} onClick={onDiscuss} aria-label="Discuss article" title={discussionConfigured ? 'Discuss article' : 'Discussion is not configured'}><Icon name="reader" /><span>Discuss</span></button>
+        {discussionConfigured && <button disabled={!online} onClick={onDiscuss} aria-label="Discuss article" title="Discuss article"><Icon name="discussion" /><span>Discuss</span></button>}
       </div>
       <button className="type-button" onClick={onAppearance} aria-label="Appearance">Aa</button>
     </div>
