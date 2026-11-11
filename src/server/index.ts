@@ -629,7 +629,7 @@ app.get('/briefings/:id/confirm', (request, response) => {
   const token = String(request.query.token || '')
   if (!briefing || !token || !briefings.verifyToken(briefing, token)) return response.status(404).send(messagePage('This link is not valid.', 'Paper could not find this briefing.'))
   const count = database.entryIdsForBriefing(briefing.id).length
-  if (briefing.acknowledgedAt) return response.send(messagePage('Already marked read.', `${count} entries from this briefing are read in FreshRSS.`))
+  if (briefing.acknowledgedAt) return response.send(messagePage('Already marked read.', `${count} entries from this briefing are read in Paper.`))
   response.send(confirmPage(briefing.id, token, count, briefing.kind))
 })
 

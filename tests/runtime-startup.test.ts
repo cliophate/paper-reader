@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { createHash } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
@@ -204,4 +205,26 @@ it('returns 400 for unknown streams and invalid feed preview input', async () =>
     fixture.closeAllConnections()
     await new Promise<void>(resolve => fixture.close(() => resolve()))
   }
+}, 15000)
+
+
+it('uses Paper wording for an acknowledged briefing confirmation', async () => {
+  const { PaperDatabase } = await import('../src/server/db.js')
+  const db = new PaperDatabase(path.join(directory, 'paper.sqlite'))
+  db.bindStandalone()
+  const now = new Date().toISOString(), token = 'synthetic-confirmation-token'
+  db.createBriefing({
+    id: 'synthetic-briefing', kind: 'morning', windowStart: now, cutoff: now,
+    subject: 'Synthetic briefing', html: '', text: '', status: 'generated',
+    tokenHash: createHash('sha256').update(token).digest('hex'),
+    selection: { news: [], worthNoticing: [], social: [] },
+    createdAt: now, deliveredAt: now, acknowledgedAt: now,
+  }, [])
+  db.close()
+  const number = await port(), server = start('index', number)
+  await ready(number)
+  const response = await fetch(`http://127.0.0.1:${number}/briefings/synthetic-briefing/confirm?token=${token}`)
+  expect(response.status).toBe(200)
+  expect(await response.text()).toContain('entries from this briefing are read in Paper.')
+  server.child.kill('SIGTERM'); expect((await server.exited).code).toBe(0)
 }, 15000)
