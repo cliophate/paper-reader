@@ -28,7 +28,7 @@ async function worker(mode: 'shared' | 'exclusive') {
 async function kill(child: ChildProcess) { const exited = once(child, 'exit'); child.kill('SIGKILL'); await exited }
 
 describe('process coordination', () => {
-  it('allows server and briefing participants together, excludes migration, and releases after crashes', async () => {
+  it('allows server and briefing participants together, excludes exclusive access, and releases after crashes', async () => {
     const server = await worker('shared')
     const briefing = await worker('shared')
     expect(server.status).toBe('held'); expect(briefing.status).toBe('held')
@@ -36,11 +36,11 @@ describe('process coordination', () => {
     await kill(server.child)
     expect((await worker('exclusive')).status).toBe('blocked')
     await kill(briefing.child)
-    const migration = await worker('exclusive')
-    expect(migration.status).toBe('held')
+    const exclusive = await worker('exclusive')
+    expect(exclusive.status).toBe('held')
     expect((await worker('shared')).status).toBe('blocked')
     expect((await worker('exclusive')).status).toBe('blocked')
-    await kill(migration.child)
+    await kill(exclusive.child)
     expect((await worker('shared')).status).toBe('held')
   })
 

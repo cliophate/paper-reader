@@ -13,8 +13,6 @@ flat-folder mapping, partial failures and the bounded discovery transport.
 leases and conditional requests. [Bounded HTTP transport](feed-http.md) defines
 the shared collector, discovery and repair fetch contract.
 
-[Backend migration](backend-migration.md) documents schema v10, offline
-staging, process coordination, runtime activation and rollback.
 [Search indexing](search-index.md) documents schema v11 and the collection and
 search responsiveness regression.
 

@@ -3,7 +3,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 export class StateLockError extends Error {
-  constructor(readonly busy = false) { super('Paper storage is in use or its coordination lock is unavailable. Stop Paper before running migration commands.') }
+  constructor(readonly busy = false) { super('Paper storage is in use or its coordination lock is unavailable.') }
 }
 
 export interface StateLock {
@@ -13,7 +13,7 @@ export interface StateLock {
 }
 
 // This permanent database is separate from application backups and replacements.
-// Normal processes share a read lock; migration requires exclusive access.
+// Normal processes share a read lock; schema upgrades require exclusive access.
 export function acquireStateLock(directory: string, mode: StateLock['mode']): StateLock {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
   const stateDir = fs.realpathSync(directory)

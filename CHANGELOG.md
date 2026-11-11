@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+The offline FreshRSS migration command was removed. FreshRSS mode remains
+available. Start new installations as standalone.
+
 ## 0.1.0-alpha.3
 
 Changes since [0.1.0-alpha.2](https://github.com/cliophate/paper-reader/releases/tag/v0.1.0-alpha.2).
@@ -106,7 +111,7 @@ backs up later standalone work before restoring the original snapshot and privat
 settings. Restore the original FreshRSS configuration before restarting. Later
 standalone edits stay in the backup; there is no reverse sync or merge into
 FreshRSS. Keep original and post-activation backups. Follow the
-[offline migration guide](docs/backend-migration.md).
+[offline migration guide](https://github.com/cliophate/paper-reader/blob/v0.1.0-alpha.3/docs/backend-migration.md).
 
 ### Installation and limits
 

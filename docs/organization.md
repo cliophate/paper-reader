@@ -3,8 +3,7 @@
 [#18](https://github.com/cliophate/paper-reader/issues/18) adds the persistence
 and service contract for [#13](https://github.com/cliophate/paper-reader/issues/13).
 The sidebar uses these operations in standalone mode. FreshRSS exposes only
-the capabilities its adapter can support. [Backend setup and migration](backend-migration.md)
-select the owner without changing the shared organization contract.
+the capabilities its adapter can support.
 
 ## Identity, names and ordering
 

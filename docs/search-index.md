@@ -71,18 +71,18 @@ The rebuild reads saved article fields, including `full_content_text`, rather
 than trusting old FTS rowids. Those rowids may have diverged through previous
 updates and full-text repairs. Article identity, content, state, historical URLs
 and private settings are unchanged. The mapping's explicit integer keys survive
-`VACUUM INTO`, backend migration and rollback; they do not depend on implicit
+`VACUUM INTO`; they do not depend on implicit
 `entries.rowid`. Current-schema server and briefing processes perform no schema
 DDL when opening storage.
 
 Keep a complete private backup before upgrading. Index rebuild time and temporary
 disk space grow with the archive. An older binary needs its matching pre-upgrade
-database backup. Follow [recovery](recovery.md) and [offline backend migration](backend-migration.md).
+database backup. Follow [recovery](recovery.md).
 
 ## Regression coverage
 
 Unit tests cover legacy rowid divergence, full-text preservation, failed upgrades,
-exclusive bootstrap, no-op updates, deletions, `VACUUM INTO` and backend rollback.
+exclusive bootstrap, no-op updates, deletions and `VACUUM INTO`.
 The built-server collection regression uses 200,000 articles with multi-KiB
 bodies, 1,266 feeds and a permitted 1,000-item feed that changes existing articles.
 It keeps the two-second health budget during collection, completion callbacks,

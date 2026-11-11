@@ -242,11 +242,11 @@ export class PaperDatabase {
   bindBackend(backend: BackendIdentity) {
     transaction(this.db, () => {
       const active = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
-      if (active && active !== backend.id) throw new Error('This database belongs to another backend. Use its original configuration, a separate data directory, or the offline migration command.')
+      if (active && active !== backend.id) throw new Error('This database belongs to another backend. Use its original configuration or a separate data directory.')
       this.identities.registerBackend(backend)
       if (active) return
       if (backend.kind === 'standalone' && (this.entryCount() || this.db.prepare('SELECT 1 FROM feeds LIMIT 1').get())) {
-        throw new Error('Existing FreshRSS data requires an explicit migration before local ownership')
+        throw new Error('Existing FreshRSS data requires FreshRSS mode. Use a separate data directory for standalone mode.')
       }
       for (const row of this.db.prepare('SELECT id FROM feeds UNION SELECT feed_id AS id FROM entries').all()) {
         this.identities.subscription(backend.id, String(row.id), String(row.id))
@@ -273,7 +273,7 @@ export class PaperDatabase {
     return transaction(this.db, () => {
       const active = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
       const identity: BackendIdentity = active ? this.identities.backend(active) : { id: `standalone:${crypto.randomUUID()}`, kind: 'standalone' }
-      if (identity.kind !== 'standalone') throw new Error('This database belongs to FreshRSS. Complete the offline migration before selecting standalone mode.')
+      if (identity.kind !== 'standalone') throw new Error('This database belongs to FreshRSS. Use a separate data directory for standalone mode.')
       this.bindBackend(identity)
       return identity
     })
