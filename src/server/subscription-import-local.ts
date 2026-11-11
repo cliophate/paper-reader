@@ -4,8 +4,8 @@ import type { SubscriptionImportStore } from './subscription-import.js'
 import { ImportConflictError } from './subscription-import.js'
 import { SubscriptionInputError } from './opml.js'
 
-// Internal only. #21 owns selecting standalone mode. Snapshot and database
-// guards reject FreshRSS or another backend; this never binds or selects one.
+// Imports into the bound standalone backend. Snapshot and database guards
+// reject FreshRSS or another backend; this never binds or selects one.
 export function localImportStore(db: PaperDatabase, backendId: string): SubscriptionImportStore {
   const snapshot = () => db.organization.snapshot(backendId)
   const check = (expected: number | null) => {
