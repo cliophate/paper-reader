@@ -80,6 +80,17 @@ async function edge(target = 'video', cancel = false, release = true) {
 }
 
 describe('mobile reader switching', () => {
+  it.each([true, false])('counts loaded rows using the active unread filter, unread=%s', async unreadOnly => {
+    history.replaceState(null, '', `/?kind=category&id=instagram&title=Instagram&pane=stories&unread=${unreadOnly ? '1' : '0'}`)
+    initialPage.items = Array.from({ length: 9 }, (_, index) => ({ ...post(String(index)), read: index === 0 }))
+    vi.mocked(api.navigation).mockResolvedValue({ unread: 8, starred: 0, uncategorized: [], folders: [
+      { id: 'instagram', title: 'Instagram', unread: 8, feeds: [] },
+    ] })
+    await mount()
+    expect(container.querySelectorAll('.story-row')).toHaveLength(9)
+    expect(container.querySelector('.filter-row')?.textContent).toContain(unreadOnly ? '8 of 8 loaded' : '9 loaded')
+  })
+
   it.each(['', 'not-a-date', '0', '1970-01-01T00:00:00.000Z', undefined])('opens an article with unavailable publication date %s without crashing', async publishedAt => {
     initialPage.items[0] = { ...post('a'), kind: 'article', publishedAt: publishedAt as string, timestamp: 0 }
     await mount()
