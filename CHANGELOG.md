@@ -9,7 +9,10 @@ Changes since [0.1.0-alpha.2](https://github.com/cliophate/paper-reader/releases
 Paper can run without FreshRSS. New setup selects `PAPER_BACKEND=standalone`
 and stores subscriptions, articles and read/star state locally. Search works
 immediately, and active feeds fetch automatically with persistent schedules,
-conditional HTTP requests and retry backoff. RSS, Atom and RDF feeds are supported.
+conditional HTTP requests and retry backoff. The default successful-fetch interval
+is 15 minutes, subject to `Retry-After`; failures use backoff. The scheduler polls
+for due work every second. Refresh runs due feeds only, without forcing a fetch
+of every feed. RSS, Atom and RDF feeds are supported.
 
 FreshRSS remains available with `PAPER_BACKEND=freshrss`. Existing configuration
 that omits `PAPER_BACKEND` keeps FreshRSS behavior. AI, Readwise Reader and Kirby
@@ -17,9 +20,12 @@ remain optional; the standard reader needs none of their credentials.
 
 ### Feed and folder management
 
-The sidebar now supports feed rename, move and confirmed unsubscribe. Standalone
-also supports empty folders, folder rename, merge, removal and ordering, feed
-ordering and multiple folder memberships. Menus, keyboard controls, touch controls
+The sidebar **+** menu offers Add feed and, in standalone mode, New folder.
+The **Edit feeds** pencil reveals drag grips, selection checkboxes and row options.
+Changes save immediately; **Done** exits edit mode. Grips support pointer, touch
+and keyboard use. Row options support feed rename, move and confirmed unsubscribe.
+Standalone also supports empty folders, folder rename, merge, removal and ordering,
+feed ordering and multiple folder memberships. Menus, keyboard controls, touch controls
 and drag targets use the operations supported by the selected backend. Unsubscribe
 retains article history. FreshRSS exposes its supported feed operations and keeps
 its upstream folder order.
@@ -40,6 +46,16 @@ ambiguous matches never merge histories silently. Standalone state updates commi
 with their activity records, and revision checks reject stale conditional edits
 and undo. See [article identity and state](docs/article-identity.md).
 
+### Reader fixes
+
+Articles with missing or invalid publication dates render without crashing.
+Source navigation ignores stale responses, cancels abandoned loads and reloads
+when a browser restores the page. Pending mark-read, undo and bulk-preview
+responses no longer replace a newer reader selection. Next/previous navigation
+can continue across feeds as well as folders. Source loading also works when
+optional browser abort helpers are unavailable. These fixes do not resolve the
+separate viewport-jump and transition-flicker reports listed below.
+
 ### Collection and search responsiveness
 
 Feed refreshes update the full-text index through stable indexed row IDs instead
@@ -47,7 +63,15 @@ of scanning the article corpus for every changed item. Common-term search uses
 indexed metadata and row-ID lookups while preserving complete result snapshots,
 ranking and pagination. Slow local searches run in a separate worker so reading
 and state updates can continue. Search admits one active request and eight waiting
-requests; excess requests receive a retryable busy response.
+requests; excess requests receive a retryable HTTP 503 response. Broad searches
+still cost more as their result sets grow.
+
+Article cleanup uses structural source ranges instead of repeated regex scans
+for video enclosures, hero blocks, syndication footers and broken image links.
+The sanitizer still runs after cleanup. Malformed unclosed elements no longer
+borrow a closing tag from unrelated content. Synthetic regressions cover the
+known CPU stalls and health responsiveness during collection. This does not
+guarantee a fixed processing time for arbitrary HTML sizes or nesting depths.
 
 ### Upgrade and offline migration
 
@@ -57,18 +81,25 @@ Startup creates a consistent pre-upgrade database backup, but that does not
 replace backups of settings, secrets, AI logins or FreshRSS. Downgrading requires
 the older image's matching database backup. Follow [backup and restore](docs/recovery.md).
 
-An existing FreshRSS database can move to standalone through a reviewed offline
-preview/apply process. It uses the last completed local import and state
-reconciliation, leaves FreshRSS untouched and excludes later remote edits. It
-preserves article and subscription IDs, reading state, folder memberships,
+A fresh standalone installation is the normal alpha path. Moving an existing
+FreshRSS snapshot is advanced and experimental, using an offline preview/apply
+process with reviewed backups and identity evidence. It uses the last completed
+local import and state reconciliation, leaves FreshRSS untouched and excludes
+later remote edits. It preserves article and subscription IDs, reading state, folder memberships,
 progress, discussions and briefings. Configuration changes alone cannot transfer
 ownership.
 
 Publisher identity mappings require explicit reviewed evidence. URL or date
-similarity cannot establish equivalence; unmatched future feed items may become
-separate articles. Unsafe endpoints need an explicit pause decision, and folder
-naming conflicts need reviewed replacements. Interrupted migration blocks normal
-startup until recovery completes.
+similarity cannot establish equivalence. When publisher IDs are unknown, the
+first standalone collection can import historical copies as new unread articles.
+This can inflate the inbox substantially while the original rows retain their
+read states. Preserving those rows does not prevent duplicates or preserve the
+overall unread count. Preview does not predict every future duplicate. There is
+no general public cleanup tool for this backlog.
+
+Unsafe endpoints need an explicit pause decision, and folder naming conflicts
+need reviewed replacements. Interrupted migration blocks normal startup until
+recovery completes.
 
 Rollback requires its own preview digest and explicit loss acknowledgement. It
 backs up later standalone work before restoring the original snapshot and private
@@ -96,3 +127,14 @@ collection block private network destinations unless an operator allows an exact
 trusted origin. Offline browser copies are device-local reading copies, not a
 server backup or a durable queue of FreshRSS writes. Identity conflicts still
 have no dedicated resolution UI.
+
+### Known alpha issues
+
+These follow-ups remain open; the reader fixes above do not close them.
+
+- [#32](https://github.com/cliophate/paper-reader/issues/32): readable URLs.
+- [#33](https://github.com/cliophate/paper-reader/issues/33): clearer refresh controls.
+- [#34](https://github.com/cliophate/paper-reader/issues/34): iPad bottom padding.
+- [#35](https://github.com/cliophate/paper-reader/issues/35): header blur report, unconfirmed.
+- [#36](https://github.com/cliophate/paper-reader/issues/36): article-transition flicker.
+- [#37](https://github.com/cliophate/paper-reader/issues/37): viewport jump when marking read and scrolling.

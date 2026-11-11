@@ -24,6 +24,10 @@ See the [changelog](CHANGELOG.md) for alpha.3 changes and upgrade notes.
 
 ## Quick start
 
+Start with a fresh standalone installation for this alpha. Moving an existing
+FreshRSS snapshot is an [advanced, experimental operation](docs/backend-migration.md)
+that can create historical duplicates and a large unread backlog.
+
 You need Docker Compose 2.24.4 or newer. The alpha.3 images support Linux amd64.
 Standalone mode needs one Paper container and a persistent data directory. No
 FreshRSS or optional integration credentials are needed.
@@ -41,9 +45,20 @@ unavailable, it downloads the release image archive, verifies its SHA-256
 checksum, and loads it into Docker.
 
 Setup creates private configuration with `PAPER_BACKEND=standalone`. Open
-[localhost:8080](http://localhost:8080), choose **Add feeds**, and add an RSS or
-Atom feed, discover a feed from a website, or preview an OPML import. Paper
-fetches active feeds automatically. Search and reading state work immediately.
+[localhost:8080](http://localhost:8080), choose **+ > Add feed** in the sidebar,
+and add an RSS or Atom feed, discover a feed from a website, or preview an OPML
+import. Paper fetches active feeds automatically. The default interval after a
+successful fetch is 15 minutes; `Retry-After` and failure backoff can delay the next fetch. Paper
+checks for due feeds every second. **Refresh** runs only feeds that are already
+due, so it does not force every feed to fetch again. Search and reading state
+work immediately.
+
+Use the sidebar **+** menu to add a feed or create a standalone folder. Select
+the **Edit feeds** pencil to show drag grips, selection checkboxes and row options.
+Changes save immediately; **Done** leaves edit mode. Row options support rename,
+move and confirmed unsubscribe. Standalone also supports folder management and
+ordering; FreshRSS offers its supported feed operations. See
+[sidebar controls](docs/organization.md#sidebar-controls).
 
 For a source image outside Compose, set `PAPER_BACKEND=standalone`, mount a
 persistent volume at `/data`, and publish port 8080 to loopback. Paper creates
@@ -63,9 +78,12 @@ container refers to Paper itself. Use a shared Docker network or reachable URL.
 
 The database binds to one backend instance. Changing the backend or FreshRSS
 account in configuration does not transfer its data. Follow the
-[offline migration guide](docs/backend-migration.md) to move an existing FreshRSS
-snapshot to standalone. Settings > Backend & data shows the current mode and
-migration commands.
+[experimental offline migration guide](docs/backend-migration.md) before considering
+a FreshRSS snapshot cutover. Unknown publisher IDs can cause the first collection
+to import historical copies as new unread articles even though the original rows
+keep their read states. There is no general duplicate cleanup tool or reverse sync
+to FreshRSS. Keep backups and review the preview and identity evidence before
+applying. Settings > Backend & data shows the current mode and migration commands.
 
 To use a different local port, change `PAPER_PORT` and `PUBLIC_URL` in `.env`.
 For access from other devices, follow the [remote access guide](docs/access.md).
@@ -95,6 +113,16 @@ FreshRSS separately.
 See [backup, restore, and upgrades](docs/recovery.md) before updating Paper,
 and [security and privacy](SECURITY.md) for details about stored data and
 external services.
+
+## Known alpha limits
+
+Readable URLs and clearer refresh controls remain open, along with iPad bottom
+padding, an unconfirmed header blur report, article-transition flicker and a
+mark-read plus scroll viewport jump. See the
+[known alpha issues](CHANGELOG.md#known-alpha-issues) for tracking links.
+Broad searches can still take time, although they run outside the HTTP event
+loop. Article cleanup avoids known repeated-markup scans; very deep or large
+HTML still has a processing cost.
 
 ## Build from source
 

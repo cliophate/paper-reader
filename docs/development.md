@@ -61,6 +61,19 @@ checks concurrent state writes, cancellation, queue saturation, shutdown locks,
 retained state and checkpoints. It uses about 6 GiB of temporary storage
 while seeding its multi-KiB article bodies.
 
+After building, run the article-cleanup collection regression separately:
+
+```sh
+node scripts/article-cleanup-responsiveness-test.mjs
+```
+
+It collects a synthetic malformed article through the built standalone server
+and checks health under the same two-second deadline. The normal test suite also
+runs repeated and deeply nested cleanup fixtures in killable subprocesses. For
+diagnostic timings across fixture sizes, run
+`node scripts/article-cleanup-benchmark.mjs`. These fixtures cover known cleanup
+stalls, not a processing-time guarantee for arbitrary HTML.
+
 ## Docker integration test
 
 This test requires Docker and Python 3. Build the image, then run:

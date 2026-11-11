@@ -1,13 +1,37 @@
-# Offline backend migration
+# Experimental offline backend migration
 
 Paper supports `PAPER_BACKEND=standalone` and `PAPER_BACKEND=freshrss`. Omitting
 it preserves legacy FreshRSS behavior. A new standalone data directory gets one
 persisted opaque instance ID. Existing account bindings remain strict, including
 when local reads are disabled. Configuration alone cannot transfer ownership.
 
-This is a one-way snapshot cutover, not ongoing synchronization between backends.
-FreshRSS remains untouched. Use a reviewed release that includes this migration
-before applying it to an installation.
+Start a fresh standalone installation for the normal alpha setup. Moving a
+FreshRSS snapshot is advanced and experimental. This is a one-way snapshot
+cutover; FreshRSS remains untouched and later standalone edits never sync back.
+Use a reviewed release that includes this migration before applying it.
+
+## Duplicates and unread backlog
+
+FreshRSS's Google Reader item IDs do not establish the publisher GUIDs or Atom
+IDs used by standalone collection. Without reviewed identity mappings, the first
+collection can import historical copies as new unread articles. The inbox can
+grow substantially even though the original rows keep their read/star states.
+Preserving original state does not preserve the overall unread count or prevent
+duplicate articles.
+
+Preview reports the frozen snapshot and reviewed mappings. It cannot predict
+every item a publisher will return after activation. Matching URLs or dates are
+not evidence of identity, and there is no general public cleanup tool that makes
+this cutover automatic. Do not use bulk mark-read as a substitute for resolving
+identity; it can hide unread articles without removing duplicates.
+
+Before proceeding, take a complete private backup and understand the rollback
+steps below. Review article, unread and subscription counts in the frozen source
+and after activation, then inspect the first collection for duplicate copies and
+unexpected unread growth. Keep these reports private. If the result is not
+acceptable, stop Paper and every writer, preserve the changed data, and review a
+rollback. Later standalone work remains only in its rollback backup, with no
+reverse sync or merge into FreshRSS.
 
 ## Run a migration
 
@@ -26,7 +50,11 @@ docker compose run --rm --no-deps paper node dist-server/migration-cli.js apply 
 ```
 
 After apply reports `active`, set `PAPER_BACKEND=standalone` in private
-configuration and run `docker compose up -d --no-build paper`. Environment-provided
+configuration. For a baseline inspection before the first collection, also set
+`PAPER_SYNC_ENABLED=false`, then run `docker compose up -d --no-build paper`.
+This stops automatic collection and manual Refresh. Inspect the preserved state,
+then set `PAPER_SYNC_ENABLED=true` and recreate Paper with the same command when
+ready to review the first collection and its unread counts. Environment-provided
 signing secrets keep precedence. Missing secrets are generated privately in
 `secrets.json`; include that file in future backups. AI, Readwise and Kirby stay
 optional. Preserve their existing settings through migration.
@@ -186,8 +214,9 @@ existing article ID and evidence. The plan binds it to the exact source and
 target backend instances. Cross-subscription and duplicate mappings fail.
 Unresolved candidates can be recorded as ambiguities. Unmatched historical
 articles receive no inferred target aliases or fallback fingerprints. Future
-publisher items can therefore become separate articles when identity remains
-unknown. URL/date similarity alone never joins their histories.
+publisher items can therefore become separate unread articles when identity
+remains unknown, including historical items returned during the first collection.
+URL/date similarity alone never joins their histories.
 
 Missing or unsafe active feed URLs require an explicit paused-subscription
 decision. The feed remains visible and active, but receives no fetch schedule.
