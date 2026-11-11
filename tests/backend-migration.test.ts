@@ -220,7 +220,7 @@ describe('offline backend migration', () => {
     session(migration => expect(migration.apply(preview.planDigest).phase).toBe('active'))
     expect(sql(db => db.prepare('SELECT COUNT(*) AS n FROM entries').get()?.n)).toBe(2003)
     expect(sql(db => db.prepare('SELECT COUNT(*) AS n FROM feed_fetch_state').get()?.n)).toBe(2000)
-  }, 30000)
+  }, 120000)
 
   it('blocks cooperating readers in both directions and releases the lock when initialization fails', () => {
     const normal = acquireStateLock(directory, 'shared')
@@ -230,7 +230,7 @@ describe('offline backend migration', () => {
     fs.renameSync(file, file + '.saved')
     expect(() => new BackendMigration(directory)).toThrow()
     acquireStateLock(directory, 'shared').release()
-  }, 120000)
+  })
 
   it('does not accept an existing corrupt source backup or changed mapping plan', () => {
     const preview = session(migration => migration.preview(source.id))
