@@ -18,6 +18,7 @@ import { KirbyPublisher } from './kirby.js'
 import { PaperRepository, switchingEntrySource } from './repository.js'
 import { requireSameOrigin } from './request-origin.js'
 import { previewFeed } from './feed-repair.js'
+import { FeedHttpError } from './feed-http.js'
 import { subscriptionToolsRoutes } from './subscription-tools-routes.js'
 import { freshRssImportStore } from './subscription-import-freshrss.js'
 import { discoveryTransport } from './discovery-transport.js'
@@ -653,7 +654,7 @@ app.use((error: Error, request: Request, response: Response, _next: NextFunction
   if (error instanceof SearchUnavailableError) return response.status(503).json({ error: error.message })
   if (error instanceof StateConflictError) return response.status(409).json({ code: 'state-conflict', error: error.message, states: error.states })
   if (error instanceof UndoExpiredError) return response.status(410).json({ error: error.message })
-  if (error instanceof BackendValidationError) return response.status(400).json({ error: error.message })
+  if (error instanceof BackendValidationError || (error instanceof FeedHttpError && error.code === 'policy')) return response.status(400).json({ error: error.message })
   console.error(`${request.method} ${request.path}`, error)
   response.status(500).json({ error: error.message || 'Paper could not complete the request' })
 })
@@ -724,7 +725,7 @@ function parseStream(request: Request): StreamRef {
 
 function parseStreamBody(input: Record<string, unknown> | undefined): StreamRef {
   const kind = String(input?.kind || 'all') as StreamKind
-  if (!['all', 'starred', 'category', 'feed'].includes(kind)) throw new Error('Unknown stream')
+  if (!['all', 'starred', 'category', 'feed'].includes(kind)) throw new BackendValidationError('Unknown stream')
   return { kind, id: String(input?.id || kind), title: String(input?.title || '') }
 }
 

@@ -181,3 +181,27 @@ it('bounds remote search pages and resumes from the returned continuation', asyn
     await new Promise<void>(resolve => fixture.close(() => resolve()))
   }
 }, 15000)
+
+it('returns 400 for unknown streams and invalid feed preview input', async () => {
+  const fixture = http.createServer((_request, response) => response.end('<html><title>Website</title></html>')).listen(0, '127.0.0.1')
+  await once(fixture, 'listening')
+  try {
+    const origin = `http://127.0.0.1:${(fixture.address() as { port: number }).port}`
+    const number = await port(), server = start('index', number, { PAPER_TRUSTED_FEED_ORIGINS: origin })
+    await ready(number)
+    const base = `http://127.0.0.1:${number}`
+    const post = (route: string, body: unknown) => fetch(base + route, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })
+    const responses = await Promise.all([
+      fetch(base + '/api/entries?kind=unknown'),
+      post('/api/streams/mark-read', { kind: 'unknown' }),
+      ...['not a URL', 'file:///etc/hosts', 'http://127.0.0.1/', origin].map(url => post('/api/feeds/preview', { url })),
+    ])
+    expect(responses.map(response => response.status)).toEqual([400, 400, 400, 400, 400, 400])
+    server.child.kill('SIGTERM'); expect((await server.exited).code).toBe(0)
+  } finally {
+    fixture.closeAllConnections()
+    await new Promise<void>(resolve => fixture.close(() => resolve()))
+  }
+}, 15000)
