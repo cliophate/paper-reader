@@ -64,7 +64,7 @@ export function ingestFeed(db: PaperDatabase, input: FeedEndpoint & {
     entry: {
       feedTitle: parsed.title, feedUrl: parsed.siteUrl, title: item.title || 'Untitled', author: item.author,
       url: item.url, contentHtml: item.contentHtml, excerpt: excerpt(item.contentHtml),
-      publishedAt: item.publishedAt, timestamp: item.publishedAt ? Date.parse(item.publishedAt) : 0,
+      publishedAt: item.publishedAt, timestamp: item.publishedAt ? Date.parse(item.publishedAt) : fetchedTime,
       crawledAt: fetchedTime, readingMinutes: readingMinutes(item.contentHtml),
       thumbnailUrl: firstImage(item.contentHtml) || item.thumbnailUrl,
       kind: detectKind(parsed.title, item.url, parsed.siteUrl),

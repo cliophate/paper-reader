@@ -47,9 +47,10 @@ Each item goes through `PaperDatabase.importSourceEntries` and the existing
 [article identity rules](article-identity.md). GUIDs and Atom IDs remain opaque.
 RSS items without IDs use the persisted fallback fingerprint. Content is never
 part of an article's permanent ID. A missing or invalid publication date stays
-an empty string with chronology timestamp zero; fetch time never enters the
-identity fingerprint. The identity store retains first arrival and insertion
-order independently. Every response entry is considered, regardless of its
+an empty string. Undated articles sort by their first fetch time, which stays
+fixed across later imports. Standalone imports preserve the first `crawled_at`
+value as well as `first_seen_at`. Fetch time never enters the identity
+fingerprint. The identity store retains insertion order independently. Every response entry is considered, regardless of its
 publication date or the previous successful fetch time.
 
 Identical deliveries of one explicit source ID collapse within a response.

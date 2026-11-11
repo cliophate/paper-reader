@@ -65,7 +65,10 @@ explicit refresh; it does not infer article identity from a shared URL.
 
 ## Arrival order and checkpoints
 
-Publication date controls reader chronology. `article_arrivals` separately
+Publication date controls reader chronology. Undated standalone articles use
+their first fetch time for sorting and retain an empty publication date. Later
+fetches do not move that timestamp or add fetch time to identity fingerprints.
+`article_arrivals` separately
 assigns a durable insertion sequence that does not change on reimport. Local
 parity candidates use that sequence, independent of UUID ordering or publication
 time. FreshRSS supplies an explicit `sourceOrder` using its canonical fixed-width

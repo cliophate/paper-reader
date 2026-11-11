@@ -306,10 +306,16 @@ export class PaperDatabase {
       this.assertLocalBackend(backendId)
       this.identities.assertSubscription(backendId, subscriptionId)
       const entries: Entry[] = []
+      const arrival = this.db.prepare('SELECT crawled_at, first_seen_at FROM entries WHERE id = ?')
       const results = items.map(item => {
         const result = this.identities.resolve(backendId, subscriptionId, item.identity)
         if (result.status === 'resolved') {
-          entries.push({ ...item.entry, id: result.id, feedId: subscriptionId, read: false, starred: false, sourceOrder: '' })
+          // Keep the first crawl for chronology without adding it to source identity.
+          const previous = arrival.get(result.id)
+          const crawledAt = previous ? Number(previous.crawled_at || previous.first_seen_at) : item.entry.crawledAt
+          entries.push({ ...item.entry, crawledAt,
+            timestamp: item.entry.publishedAt ? item.entry.timestamp : crawledAt ?? item.entry.timestamp,
+            id: result.id, feedId: subscriptionId, read: false, starred: false, sourceOrder: '' })
         }
         return result
       })
