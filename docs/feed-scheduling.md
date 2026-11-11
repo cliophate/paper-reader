@@ -5,7 +5,11 @@
 the runtime starts collection after binding the persisted instance and acquiring
 the shared process lock. FreshRSS continues using `BackendSynchronizer`.
 
-The runtime polls for due work every second. Each fetch batch remains bounded;
+The runtime polls for due work every second. An unexpected collection pass error
+appears as `lastError` in sync status. The runtime retries after five seconds,
+doubling the delay up to five minutes. A successful pass clears that error and
+restores the one-second polling interval, even when no feeds are due. Shutdown
+aborts the wait as well as active collection. Each fetch batch remains bounded;
 new subscriptions receive durable due schedules. `PAPER_SYNC_ENABLED=false` stops
 collection, including manual sync. Shutdown rejects new requests, aborts the
 collector, drains admitted writes and closes the database before releasing its
