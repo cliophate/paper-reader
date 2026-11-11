@@ -226,6 +226,8 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .pull-refresh-indicator { display: none; }
 .story-row { position: relative; min-height: 118px; display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 13px; padding: 15px 14px; border-bottom: 1px solid var(--line); cursor: pointer; background: var(--panel); user-select: none; -webkit-touch-callout: none; }
 .story-row.no-thumbnail { grid-template-columns: minmax(0, 1fr); }
+.story-open { position: absolute; inset: 0; width: 100%; border: 0; padding: 0; background: transparent; cursor: pointer; }
+.story-copy, .story-thumb { pointer-events: none; }
 .story-row:hover { background: var(--hover); }
 .story-row.active { background: var(--selected); box-shadow: inset 3px 0 0 var(--ink); }
 .story-row.read h2 { font-weight: 560; color: var(--muted); }
@@ -1038,7 +1040,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .offline-banner, .article-error { flex-shrink: 0; padding: 8px 16px; font-size: 12px; border-bottom: 1px solid var(--line); background: var(--soft); }
 .article-error { color: var(--danger); }
 .article-error button { color: inherit; background: transparent; border: 0; text-decoration: underline; cursor: pointer; }
-button:focus-visible, summary:focus-visible, .story-row:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
 @media (max-width: 1040px) {
   .reader-back-button { width: 32px; height: 38px; }
   .folder-expand { width: 32px; height: 43px; flex-basis: 32px; }

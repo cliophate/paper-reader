@@ -1731,8 +1731,7 @@ const StoryRow = forwardRef<HTMLElement, { entry: Entry; active: boolean; onOpen
   const showThumbnail = Boolean(entry.thumbnailUrl && thumbnailReady)
   return <article
     ref={ref}
-    tabIndex={0} role="button" aria-label={entry.displayTitle || entry.title}
-    onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onOpen() } }}
+    onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') event.stopPropagation() }}
     className={`story-row kind-${entry.kind} ${showThumbnail ? '' : 'no-thumbnail'} ${active ? 'active' : ''} ${entry.read ? 'read' : ''}`}
     onPointerDown={event => {
       if (event.pointerType === 'mouse') return
@@ -1767,6 +1766,7 @@ const StoryRow = forwardRef<HTMLElement, { entry: Entry; active: boolean; onOpen
       onOpen()
     }}
   >
+    <button className="story-open" aria-label={entry.displayTitle || entry.title} title={entry.displayTitle ? `Original: ${entry.title}` : undefined} />
     {showThumbnail && <img className="story-thumb" src={entry.thumbnailUrl} alt="" onError={() => setThumbnailReady(false)} />}
     <button className="row-options" aria-label={`Options for ${entry.title}`} onClick={event => { event.stopPropagation(); const box = event.currentTarget.getBoundingClientRect(); onContext(box.left, box.bottom) }}>⋯</button>
     <div className="story-copy">
