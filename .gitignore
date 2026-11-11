@@ -8,6 +8,8 @@ node_modules/
 dist/
 dist-server/
 coverage/
+test-results/
+playwright-report/
 *.log
 
 # Runtime state and deployment snapshots

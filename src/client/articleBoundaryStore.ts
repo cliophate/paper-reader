@@ -2,7 +2,7 @@ import type { ArticleEdgeState } from './mobileGestures'
 
 export type ArticleBoundaryState = Pick<ArticleEdgeState, 'direction' | 'progress' | 'ready'>
 
-// Only the two edge indicators subscribe. Scrolling does not rerender the app,
+// The edge indicators and mobile tabs subscribe. Scrolling does not rerender the app,
 // story rows, or the article's media.
 export function createArticleBoundaryStore() {
   let state: ArticleBoundaryState | null = null
