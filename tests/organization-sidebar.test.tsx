@@ -51,6 +51,19 @@ async function dragTo(handle: Element, row: Element) {
 }
 
 describe('sidebar organization interactions', () => {
+  it('shows broken feeds with zero unread in folders and Uncategorized', async () => {
+    snapshot.navigation.folders[0].feeds[0].broken = true
+    snapshot.navigation.uncategorized[0].broken = true
+    await render({ unreadOnly: true })
+    await click('Expand Essays')
+    expect(button('First')).toBeTruthy()
+    expect(button('Second')).toBeUndefined()
+    await click('Uncategorized')
+    expect(button('Unfiled')).toBeTruthy()
+    expect(button('First').textContent).toContain('Update failed')
+    expect(button('Unfiled').textContent).toContain('Update failed')
+  })
+
   it('keeps the Feeds heading and add menu visible in edit mode, with contextual selection and focus restoration', async () => {
     snapshot.navigation.folders[0].unread = 3
     snapshot.navigation.folders[0].feeds[0].unread = 3

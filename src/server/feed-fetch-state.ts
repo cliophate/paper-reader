@@ -131,6 +131,12 @@ export class FeedFetchStore {
           update.lastStatus, update.lastError, update.etag ?? lease.etag, update.lastModified ?? lease.lastModified,
           update.validatorUrl ?? lease.validatorUrl, update.lastSuccessAt ?? lease.lastSuccessAt,
           update.ambiguous ?? lease.ambiguous, lease.backendId, lease.subscriptionId)
+      const checkedAt = new Date(now).toISOString()
+      if (update.failures > 0) {
+        this.db.prepare('UPDATE feeds SET broken = 1, last_error_at = ? WHERE id = ?').run(checkedAt, lease.subscriptionId)
+      } else {
+        this.db.prepare('UPDATE feeds SET broken = 0, last_checked_at = ? WHERE id = ?').run(checkedAt, lease.subscriptionId)
+      }
       return { committed: true, value }
     })
   }

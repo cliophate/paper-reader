@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { PaperDatabase } from '../src/server/db.js'
 import { ingestFeed, successfulFeedFetch, type FeedEndpoint } from '../src/server/feed-ingestion.js'
+import { StandaloneBackend } from '../src/server/standalone-backend.js'
 import { escapeHtml } from '../src/server/text.js'
 
 let directory: string
@@ -44,6 +45,47 @@ beforeEach(() => {
 afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
 
 describe('repeatable feed ingestion', () => {
+  it('replaces an added feed URL title once and advances the organization revision', async () => {
+    const standalone = new StandaloneBackend(db)
+    await standalone.addFeed(url + '/untitled', '', 'Synthetic folder')
+    const before = db.organization.snapshot(backend.id)
+    const folder = before.navigation.folders[0]
+    const subscription = folder.feeds[0]
+    const schedule = db.feedFetch.get(backend.id, subscription.id)
+    const ingestAdded = (xml = rss()) => ingest(xml, { subscriptionId: subscription.id, requestUrl: subscription.url })
+    ingestAdded(rss().replace('<title>Fixture</title>', '<title> </title>'))
+    expect(db.organization.snapshot(backend.id)).toEqual(before)
+    ingestAdded()
+    const after = db.organization.snapshot(backend.id)
+    expect(after.revision).toBe(before.revision + 1)
+    expect(after.navigation.folders[0].feeds[0]).toEqual({ ...subscription, title: 'Fixture' })
+    expect(db.feedFetch.get(backend.id, subscription.id)).toEqual(schedule)
+    expect(() => db.organization.apply(backend.id, before.revision, [{ type: 'rename-feed', feedId: subscription.id, title: 'Stale edit' }])).toThrow(/Organization changed/)
+    ingestAdded(rss().replace('<title>Fixture</title>', '<title>Publisher renamed</title>'))
+    expect(db.organization.snapshot(backend.id)).toEqual(after)
+    db.organization.apply(backend.id, after.revision, [{ type: 'rename-feed', feedId: subscription.id, title: 'My title' }])
+    ingestAdded()
+    expect(db.organization.snapshot(backend.id).navigation.folders[0].feeds[0].title).toBe('My title')
+  })
+  it('keeps a chosen subscription title during ingestion', () => {
+    db.saveLocalSubscription(backend.id, { id: endpoint.subscriptionId, title: 'Chosen title', url })
+    const before = db.organization.snapshot(backend.id)
+    ingest()
+    const after = db.organization.snapshot(backend.id)
+    expect(after.revision).toBe(before.revision)
+    expect(after.navigation.uncategorized[0].title).toBe('Chosen title')
+  })
+  it('rolls back an inferred title and its revision when ingestion checkpoint persistence fails', () => {
+    db.saveLocalSubscription(backend.id, { id: endpoint.subscriptionId, title: url, url })
+    const before = db.organization.snapshot(backend.id)
+    sql(c => c.exec("CREATE TRIGGER reject_title_checkpoint BEFORE INSERT ON backend_checkpoints BEGIN SELECT RAISE(ABORT, 'synthetic title failure'); END"))
+    expect(() => ingest()).toThrow(/synthetic title/)
+    expect(db.organization.snapshot(backend.id)).toEqual(before)
+    expect(db.entryCount()).toBe(0)
+    sql(c => c.exec('DROP TRIGGER reject_title_checkpoint'))
+    ingest()
+    expect(db.organization.snapshot(backend.id).navigation.uncategorized[0].title).toBe('Fixture')
+  })
   it('preserves state and references through updates, redirects, disappearance, repair and restart', () => {
     const id = resolvedId(ingest())
     const related = resolvedId(ingest(rss(item('related', '/related'))))
@@ -83,12 +125,89 @@ describe('repeatable feed ingestion', () => {
     expect(db.syncEntryIds(all)).toEqual([second, first])
     expect(successfulFeedFetch(db, endpoint)?.fetchedAt).toBe('2026-11-02T00:00:00.000Z')
   })
-  it('keeps missing publication dates absent and fallback identity independent of fetch time', () => {
+  it('sorts undated articles by their first fetch without changing dates or identity on refetch', () => {
     const xml = rss(item('', '/undated', 'Undated', ''))
     const id = resolvedId(ingest(xml))
+    const firstSeen = sql(c => c.prepare('SELECT first_seen_at FROM entries WHERE id = ?').get(id)?.first_seen_at)
+    const firstFetch = Date.parse(fetchedAt)
+    expect(db.localEntry(id)).toMatchObject({ publishedAt: '', timestamp: firstFetch, crawledAt: firstFetch })
+    const newer = resolvedId(ingest(rss(item('newer', '/newer', 'Newer', '2026-11-02T00:00:00Z'))))
+    expect(db.localEntriesPage(all).items.map(entry => entry.id)).toEqual([newer, id])
+    reopen()
     expect(resolvedId(ingest(xml, { fetchedAt: '2026-11-03T00:00:00Z' }))).toBe(id)
-    expect(db.localEntry(id)).toMatchObject({ publishedAt: '', timestamp: 0 })
+    expect(db.localEntry(id)).toMatchObject({ publishedAt: '', timestamp: firstFetch, crawledAt: firstFetch })
+    expect(db.localEntriesPage(all).items.map(entry => entry.id)).toEqual([newer, id])
+    expect(sql(c => c.prepare('SELECT first_seen_at FROM entries WHERE id = ?').get(id)?.first_seen_at)).toBe(firstSeen)
     expect(resolvedId(ingest(rss(item('new-guid', '/undated', 'Undated', ''))))).toBe(id)
+    expect(db.localEntry(id)?.timestamp).toBe(firstFetch)
+  })
+  it('uses the first fetch when a previously dated article loses its source date', () => {
+    const id = resolvedId(ingest())
+    ingest(rss(item()), { fetchedAt: '2026-11-02T00:00:00Z' })
+    expect(resolvedId(ingest(rss(item('one', '/article', 'Original', '')), { fetchedAt: '2026-11-03T00:00:00Z' }))).toBe(id)
+    expect(db.localEntry(id)).toMatchObject({ publishedAt: '', timestamp: Date.parse(fetchedAt), crawledAt: Date.parse(fetchedAt) })
+  })
+  it('imports reused GUIDs through fingerprints and keeps their identities on refetch', () => {
+    const first = item('reused', '/first', 'First')
+    const second = item('reused', '/second', 'Second')
+    const initial = ingest(rss(first + second + first))
+    expect(initial).toMatchObject({ resolved: 2, ambiguous: 0 })
+    expect(initial.feed.entries.every(entry => entry.externalId === undefined)).toBe(true)
+    const ids = initial.results.map(result => result.status === 'resolved' && result.id)
+    reopen()
+    const later = ingest(rss(second + first), { fetchedAt: '2026-11-03T00:00:00Z' })
+    expect(later.results.map(result => result.status === 'resolved' && result.id)).toEqual([...ids].reverse())
+    expect(db.entryCount()).toBe(2)
+    expect(successfulFeedFetch(db, endpoint)?.fetchedAt).toBe('2026-11-03T00:00:00.000Z')
+  })
+  it('remembers conflicting GUIDs through the A, A+B, B sequence, restart and later refetches', () => {
+    const a = item('g', '/a', 'A', '2024-01-01T00:00:00Z', '<p>Content A</p>')
+    const b = item('g', '/b', 'B', '2024-01-02T00:00:00Z', '<p>Content B</p>')
+    const aId = resolvedId(ingest(rss(a)))
+    const together = ingest(rss(a + b))
+    expect(together).toMatchObject({ resolved: 2, ambiguous: 0 })
+    expect(together.results[0]).toMatchObject({ id: aId, created: false })
+    const bResult = together.results[1]
+    if (bResult.status !== 'resolved') throw new Error('Expected B to resolve')
+    const bId = bResult.id
+    expect(bId).not.toBe(aId)
+    reopen()
+    expect(resolvedId(ingest(rss(b)))).toBe(bId)
+    const assertArticles = () => {
+      expect(db.entryCount()).toBe(2)
+      expect(db.localEntry(aId)).toMatchObject({ title: 'A', contentHtml: '<p>Content A</p>', url: 'https://example.test/a' })
+      expect(db.localEntry(bId)).toMatchObject({ title: 'B', contentHtml: '<p>Content B</p>', url: 'https://example.test/b' })
+    }
+    assertArticles()
+    db.saveLocalSubscription(backend.id, { id: endpoint.subscriptionId, title: 'Repaired', url: url + '/repaired' })
+    endpoint.endpointGeneration = 'generation-2'
+    for (const [xml, id] of [[b, bId], [a, aId], [b, bId]]) {
+      expect(resolvedId(ingest(rss(xml), { requestUrl: url + '/repaired' }))).toBe(id)
+      assertArticles()
+    }
+  })
+  it('scopes remembered GUID conflicts to their subscription', () => {
+    ingest(rss(item('g', '/a', 'A') + item('g', '/b', 'B')))
+    const subscriptionId = db.saveLocalSubscription(backend.id, { title: 'Other', url })
+    const id = resolvedId(ingest(rss(item('g', '/other', 'Other')), { subscriptionId }))
+    expect(resolvedId(ingest(rss(item('g', '/moved', 'Updated')), { subscriptionId }))).toBe(id)
+    expect(db.localEntry(id)?.title).toBe('Updated')
+    expect(db.entryCount()).toBe(3)
+  })
+  it('rolls back articles and fetch success when saving conflicting GUIDs fails', () => {
+    const id = resolvedId(ingest(rss(item('g', '/a', 'A'))))
+    const saved = successfulFeedFetch(db, endpoint)
+    const initialArrivals = arrivals()
+    sql(c => c.exec("CREATE TRIGGER reject_conflicting_ids BEFORE INSERT ON backend_checkpoints WHEN NEW.key LIKE 'feed-conflicting-ids:%' BEGIN SELECT RAISE(ABORT, 'synthetic conflict checkpoint failure'); END"))
+    expect(() => ingest(rss(item('g', '/a', 'Changed') + item('g', '/b', 'B')), { fetchedAt: '2026-11-05T00:00:00Z' })).toThrow(/synthetic conflict checkpoint/)
+    expect(db.entryCount()).toBe(1)
+    expect(db.localEntry(id)?.title).toBe('A')
+    expect(arrivals()).toEqual(initialArrivals)
+    expect(successfulFeedFetch(db, endpoint)).toEqual(saved)
+    sql(c => c.exec('DROP TRIGGER reject_conflicting_ids'))
+    reopen()
+    expect(resolvedId(ingest(rss(item('g', '/moved', 'Updated'))))).toBe(id)
+    expect(db.entryCount()).toBe(1)
   })
   it('never infers changed GUIDs from reused URLs, even with identical date and content', () => {
     const first = resolvedId(ingest())
@@ -161,11 +280,10 @@ describe('repeatable feed ingestion', () => {
     sql(c => c.exec('DROP TRIGGER reject_checkpoint'))
     expect(ingest(rss(item('new', '/new'))).resolved).toBe(1)
   })
-  it('rejects malformed XML and contradictory duplicate IDs before changing stored content or fetch success', () => {
+  it('rejects malformed XML before changing stored content or fetch success', () => {
     const id = resolvedId(ingest())
     const saved = successfulFeedFetch(db, endpoint)
     expect(() => ingest(rss(item('one', '/changed')) + '<broken>')).toThrow(/Malformed/)
-    expect(() => ingest(rss(item('one') + item('one', '/changed')))).toThrow(/duplicate/)
     expect(db.localEntry(id)?.url).toBe('https://example.test/article')
     expect(successfulFeedFetch(db, endpoint)).toEqual(saved)
   })

@@ -68,7 +68,9 @@ when every item fails. Each merge is atomic. An unexpected storage failure rolls
 back the entire batch and throws instead of reporting partial success.
 
 One effective batch change increments the revision once. Identical saves,
-no-op commands and article imports do not advance it. Commands that cancel one
+no-op commands and content-only article imports do not advance it. Ingestion
+replaces a subscription title that still equals its URL when the feed supplies
+a nonempty title. That rename advances the revision in the ingestion transaction. Commands that cancel one
 another within a batch leave the revision unchanged if the final organization
 matches its initial state. Actual subscription metadata changes through the
 existing `saveLocalSubscription` API advance the revision in that save's

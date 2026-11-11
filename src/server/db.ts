@@ -301,20 +301,28 @@ export class PaperDatabase {
   importSourceEntries(backendId: string, subscriptionId: string, items: Array<{
     identity: SourceItemIdentity
     entry: Omit<Entry, 'id' | 'feedId' | 'read' | 'starred' | 'sourceOrder'>
-  }>, options: { checkpoint?: { key: string; value: string } } = {}): IdentityResolution[] {
+  }>, options: { checkpoint?: { key: string; value: string } | Array<{ key: string; value: string }>; feedTitle?: string } = {}): IdentityResolution[] {
     return transaction(this.db, () => {
       this.assertLocalBackend(backendId)
       this.identities.assertSubscription(backendId, subscriptionId)
       const entries: Entry[] = []
+      const arrival = this.db.prepare('SELECT crawled_at, first_seen_at FROM entries WHERE id = ?')
       const results = items.map(item => {
         const result = this.identities.resolve(backendId, subscriptionId, item.identity)
         if (result.status === 'resolved') {
-          entries.push({ ...item.entry, id: result.id, feedId: subscriptionId, read: false, starred: false, sourceOrder: '' })
+          // Keep the first crawl for chronology without adding it to source identity.
+          const previous = arrival.get(result.id)
+          const crawledAt = previous ? Number(previous.crawled_at || previous.first_seen_at) : item.entry.crawledAt
+          entries.push({ ...item.entry, crawledAt,
+            timestamp: item.entry.publishedAt ? item.entry.timestamp : crawledAt ?? item.entry.timestamp,
+            id: result.id, feedId: subscriptionId, read: false, starred: false, sourceOrder: '' })
         }
         return result
       })
       this.upsertEntries(entries)
-      if (options.checkpoint) this.identities.setCheckpoint(backendId, options.checkpoint.key, options.checkpoint.value)
+      if (options.feedTitle) this.organization.adoptFeedTitle(backendId, subscriptionId, options.feedTitle)
+      const checkpoints = options.checkpoint ? (Array.isArray(options.checkpoint) ? options.checkpoint : [options.checkpoint]) : []
+      for (const checkpoint of checkpoints) this.identities.setCheckpoint(backendId, checkpoint.key, checkpoint.value)
       return results
     })
   }

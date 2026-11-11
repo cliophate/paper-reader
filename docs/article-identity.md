@@ -25,8 +25,11 @@ subscription ID. Composite foreign keys prevent attaching an alias to another
 owner. Content imports also check ownership before changing an existing row.
 The original FreshRSS article ID is its first alias.
 
-Collectors must pass the RSS GUID or Atom ID as `externalId`. Matching proceeds
-in this order:
+Collectors pass the RSS GUID or Atom ID as `externalId`. If a feed response
+reuses one ID for different items, ingestion permanently records that conflict
+for the backend and subscription in a checkpoint committed with the articles.
+Items carrying that ID use fallback fingerprints in every later response, even
+after restart or endpoint repair. Matching proceeds in this order:
 
 1. Resolve that alias and any explicitly verified `previousExternalIds` within
    this subscription. If they identify different articles, record a conflict
@@ -64,7 +67,10 @@ explicit refresh; it does not infer article identity from a shared URL.
 
 ## Arrival order and checkpoints
 
-Publication date controls reader chronology. `article_arrivals` separately
+Publication date controls reader chronology. Undated standalone articles use
+their first fetch time for sorting and retain an empty publication date. Later
+fetches do not move that timestamp or add fetch time to identity fingerprints.
+`article_arrivals` separately
 assigns a durable insertion sequence that does not change on reimport. Local
 parity candidates use that sequence, independent of UUID ordering or publication
 time. FreshRSS supplies an explicit `sourceOrder` using its canonical fixed-width

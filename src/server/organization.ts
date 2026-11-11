@@ -73,6 +73,16 @@ export class LocalOrganizationService {
       ON CONFLICT(backend_id) DO UPDATE SET revision = revision + 1`).run(backendId)
   }
 
+  adoptFeedTitle(backendId: string, feedId: string, title: string) {
+    if (!title.trim()) return
+    transaction(this.db, () => {
+      this.assertLocal(backendId)
+      const result = this.db.prepare('UPDATE feeds SET title = ? WHERE id = ? AND active = 1 AND title = url AND title != ?')
+        .run(this.title(title), feedId, this.title(title))
+      if (result.changes) this.subscriptionChanged(backendId)
+    })
+  }
+
   apply(backendId: string, expectedRevision: number, commands: OrganizationCommand[]): {
     revision: number; results: OrganizationItemResult[]
   } {

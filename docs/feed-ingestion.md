@@ -3,7 +3,7 @@
 [#16](https://github.com/cliophate/paper-reader/issues/16) adds internal feed
 parsing and ingestion for the standalone backend in
 [#1](https://github.com/cliophate/paper-reader/issues/1). These modules do not fetch URLs, schedule work, reconcile
-reading state or change subscription organization.
+reading state. Successful ingestion can replace an auto-filled subscription title.
 
 ## Supported feeds
 
@@ -20,7 +20,7 @@ RSS imports GUIDs, links, titles, authors, publication dates, descriptions,
 resolved `rdf:about` URI as its source ID. Atom imports IDs, alternate links,
 authors inherited from source/feed, and text, HTML and XHTML content. External
 Atom content is not fetched; an inline summary can supply the body. Atom
-`updated` does not substitute for a missing `published` date.
+`updated` supplies the date when `published` is absent.
 
 Relative article and content URLs use the final response URL and inherited
 `xml:base`. Nested XHTML bases apply to links and media. Article HTML passes
@@ -40,20 +40,25 @@ network policy used by `feed-repair.ts`.
 
 `ingestFeed` takes an existing backend ID, opaque subscription ID and endpoint
 generation. The caller creates or repairs the subscription through
-`saveLocalSubscription`. Redirects affect URL resolution only. Feed metadata
-never renames, recreates or moves a subscription during ingestion.
+`saveLocalSubscription`. Redirects affect URL resolution only. When a subscription title still equals its configured URL, a nonempty parsed
+feed title replaces it. Ingestion preserves any other subscription title. This
+rename and its organization revision commit with entries and the checkpoint.
+Feed metadata never recreates or moves a subscription.
 
 Each item goes through `PaperDatabase.importSourceEntries` and the existing
 [article identity rules](article-identity.md). GUIDs and Atom IDs remain opaque.
 RSS items without IDs use the persisted fallback fingerprint. Content is never
 part of an article's permanent ID. A missing or invalid publication date stays
-an empty string with chronology timestamp zero; fetch time never enters the
-identity fingerprint. The identity store retains first arrival and insertion
-order independently. Every response entry is considered, regardless of its
+an empty string. Undated articles sort by their first fetch time, which stays
+fixed across later imports. Standalone imports preserve the first `crawled_at`
+value as well as `first_seen_at`. Fetch time never enters the identity
+fingerprint. The identity store retains insertion order independently. Every response entry is considered, regardless of its
 publication date or the previous successful fetch time.
 
 Identical deliveries of one explicit source ID collapse within a response.
-Conflicting duplicates reject the batch, avoiding an order-dependent overwrite.
+If one source ID has conflicting items, ingestion remembers the conflict for
+that backend and subscription, including after restart or endpoint repair.
+Items carrying that ID use fallback fingerprints in this and all later responses.
 Distinct IDs stay distinct even when URLs, dates and content match. A reused
 URL alone cannot establish a GUID change. If a trusted caller has verified a
 publisher ID change, it may supply `verifiedAliasChanges` with prior IDs and a
@@ -88,7 +93,8 @@ scope, but this checkpoint does not claim to implement ETags, Last-Modified,
 retry state, stale-response fencing or 304 handling.
 
 The optional fourth `importSourceEntries` argument supplies a checkpoint
-key/value. The database commits it after entry resolution and content updates
+key/value or a list of checkpoints, including newly discovered conflicting IDs.
+The database commits them after entry resolution and content updates
 inside the same transaction. Empty parsed feeds advance the checkpoint and
 still run backend/subscription ownership checks. An item error rolls back the
 whole batch. A checkpoint write failure also rolls back entries, aliases,
