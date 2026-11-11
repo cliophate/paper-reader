@@ -56,6 +56,7 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
   const capabilities = snapshot?.capabilities
   const writable = online && !!snapshot && !busy && !needsReload
   const folders = navigation?.folders || []
+  const uncategorizedUnread = (navigation?.uncategorized || []).reduce((total, feed) => total + feed.unread, 0)
   const namedUncategorized = snapshot?.backend === 'freshrss' && folders.some(folder => folder.title === 'Uncategorized')
   const feedsIn = (id: string | null) => id === null ? navigation?.uncategorized || [] : folders.find(folder => folder.id === id)?.feeds || []
   const members = [...folders.flatMap(folder => folder.feeds.map(feed => ({ feed, folderId: folder.id }))), ...(navigation?.uncategorized || []).map(feed => ({ feed, folderId: null }))]
@@ -305,7 +306,7 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
       </div>
     })}
     {((editing && !namedUncategorized) || (navigation?.uncategorized || []).some(feed => !unreadOnly || feed.unread > 0 || feed.broken) || (drag?.kind === 'feed' && !namedUncategorized)) && <div className="folder">
-      <button className="folder-row" {...rowProps(folderRow(null))} aria-expanded={expanded.has(null)} onClick={() => toggle(null)}><Icon name="chevron" className={expanded.has(null) ? 'rotated' : ''} /><span className="source-label">Uncategorized</span></button>
+      <button className="folder-row" {...rowProps(folderRow(null))} aria-expanded={expanded.has(null)} onClick={() => toggle(null)}><Icon name="chevron" className={expanded.has(null) ? 'rotated' : ''} /><span className="source-label">Uncategorized</span>{uncategorizedUnread > 0 && <span className="source-count">{uncategorizedUnread}</span>}</button>
       {expanded.has(null) && renderFeeds(null)}
     </div>}
     {headerMenu && createPortal(<OrganizationMenu menu={{ ...headerMenu, title: 'Add' }} onClose={closeHeaderMenu}>
