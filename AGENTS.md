@@ -31,6 +31,26 @@ before claiming the installed feature is ready.
 Do not restart services or deploy to a live account without rollout authorization.
 Once a rollout is authorized, do not ask for the same permission again.
 
+## Branches and cleanup
+
+Before starting, check the current branch and how it compares with `origin/main`.
+Start each change on a new short-lived branch from `main`, named `fix/...`,
+`feat/...`, `docs/...` or `chore/...`, with one pull request per branch. GitHub
+deletes a head branch when its pull request merges. Release tags (`v*`) mark
+releases, so do not keep release branches.
+
+To delete a branch by hand, first confirm its tip equals the head of its merged
+pull request. Then delete it by exact name with
+`git push --force-with-lease=refs/heads/<name>:<sha> origin :refs/heads/<name>`.
+Remove local branches and worktrees for merged work the same way. Before
+removing a worktree, check it for uncommitted changes and compare them with
+`main`.
+
+Delete files only by exact path, after confirming the current task created
+them. Never use wildcards to clean up shared locations such as `/tmp`, because
+other agents use the same name prefixes. Keep test state in a directory created
+for the task and remove that exact path.
+
 ## Validation
 
 Run type checks, relevant tests, a production build, and the server smoke test
