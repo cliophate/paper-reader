@@ -412,7 +412,7 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
 
   const items: Entry[] = []
   const seenContinuations = new Set<string>()
-  while (items.length < ENTRY_PAGE_SIZE) {
+  for (let pages = 0; pages < 10 && items.length < ENTRY_PAGE_SIZE; pages += 1) {
     const page = await backend.entriesPage(stream, { unreadOnly, limit: SEARCH_SCAN_SIZE, continuation })
     items.push(...page.items.filter(entry => entryMatchesSearch(entry, query)))
     if (!page.continuation || page.continuation === continuation || seenContinuations.has(page.continuation)) {
