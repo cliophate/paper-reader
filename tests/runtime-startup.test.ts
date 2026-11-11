@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { createHash } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
@@ -140,5 +141,90 @@ it('enforces route CAS, publishes committed revisions, and prevents bulk undo fr
     expect((await post('/api/undo', { token: unstar.body.undoToken })).status).toBe(200)
     expect((await post('/api/undo', { token: unstar.body.undoToken })).status).toBe(410)
   } finally { await reader.cancel() }
+  server.child.kill('SIGTERM'); expect((await server.exited).code).toBe(0)
+}, 15000)
+
+it('bounds remote search pages and resumes from the returned continuation', async () => {
+  const pages: number[] = []
+  const fixture = http.createServer((request, response) => {
+    const url = new URL(request.url!, 'http://fixture')
+    if (url.pathname.endsWith('/accounts/ClientLogin')) return response.end('Auth=synthetic-token\n')
+    if (url.pathname.includes('/stream/contents/')) {
+      const page = Number(url.searchParams.get('c') || 0)
+      pages.push(page)
+      response.setHeader('Content-Type', 'application/json')
+      return response.end(JSON.stringify({ items: [{
+        id: `tag:google.com,2005:reader/item/${String(page + 1).padStart(16, '0')}`,
+        title: page === 10 ? 'Needle found' : 'Unrelated article', published: 1, categories: [],
+        canonical: [{ href: `https://example.test/${page}` }],
+        origin: { streamId: 'feed/1', title: 'Synthetic feed' }, summary: { content: '<p>Fixture</p>' },
+      }], continuation: page < 11 ? String(page + 1) : '' }))
+    }
+    response.statusCode = 404; response.end()
+  }).listen(0, '127.0.0.1')
+  await once(fixture, 'listening')
+  try {
+    const number = await port()
+    const server = start('index', number, { PAPER_BACKEND: 'freshrss', PAPER_LOCAL_READS: 'false',
+      FRESHRSS_BASE_URL: `http://127.0.0.1:${(fixture.address() as { port: number }).port}`,
+      FRESHRSS_USERNAME: 'synthetic', FRESHRSS_API_PASSWORD: 'synthetic' })
+    await ready(number)
+    const base = `http://127.0.0.1:${number}/api/entries?q=needle`
+    const first = await (await fetch(base)).json()
+    expect(pages).toEqual(Array.from({ length: 10 }, (_, index) => index))
+    expect(first).toMatchObject({ items: [], continuation: '10' })
+    const second = await (await fetch(`${base}&continuation=${first.continuation}`)).json()
+    expect(second).toMatchObject({ items: [{ title: 'Needle found' }], continuation: '' })
+    expect(pages).toHaveLength(12)
+    server.child.kill('SIGTERM'); expect((await server.exited).code).toBe(0)
+  } finally {
+    fixture.closeAllConnections()
+    await new Promise<void>(resolve => fixture.close(() => resolve()))
+  }
+}, 15000)
+
+it('returns 400 for unknown streams and invalid feed preview input', async () => {
+  const fixture = http.createServer((_request, response) => response.end('<html><title>Website</title></html>')).listen(0, '127.0.0.1')
+  await once(fixture, 'listening')
+  try {
+    const origin = `http://127.0.0.1:${(fixture.address() as { port: number }).port}`
+    const number = await port(), server = start('index', number, { PAPER_TRUSTED_FEED_ORIGINS: origin })
+    await ready(number)
+    const base = `http://127.0.0.1:${number}`
+    const post = (route: string, body: unknown) => fetch(base + route, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })
+    const responses = await Promise.all([
+      fetch(base + '/api/entries?kind=unknown'),
+      post('/api/streams/mark-read', { kind: 'unknown' }),
+      ...['not a URL', 'file:///etc/hosts', 'http://127.0.0.1/', origin].map(url => post('/api/feeds/preview', { url })),
+    ])
+    expect(responses.map(response => response.status)).toEqual([400, 400, 400, 400, 400, 400])
+    server.child.kill('SIGTERM'); expect((await server.exited).code).toBe(0)
+  } finally {
+    fixture.closeAllConnections()
+    await new Promise<void>(resolve => fixture.close(() => resolve()))
+  }
+}, 15000)
+
+
+it('uses Paper wording for an acknowledged briefing confirmation', async () => {
+  const { PaperDatabase } = await import('../src/server/db.js')
+  const db = new PaperDatabase(path.join(directory, 'paper.sqlite'))
+  db.bindStandalone()
+  const now = new Date().toISOString(), token = 'synthetic-confirmation-token'
+  db.createBriefing({
+    id: 'synthetic-briefing', kind: 'morning', windowStart: now, cutoff: now,
+    subject: 'Synthetic briefing', html: '', text: '', status: 'generated',
+    tokenHash: createHash('sha256').update(token).digest('hex'),
+    selection: { news: [], worthNoticing: [], social: [] },
+    createdAt: now, deliveredAt: now, acknowledgedAt: now,
+  }, [])
+  db.close()
+  const number = await port(), server = start('index', number)
+  await ready(number)
+  const response = await fetch(`http://127.0.0.1:${number}/briefings/synthetic-briefing/confirm?token=${token}`)
+  expect(response.status).toBe(200)
+  expect(await response.text()).toContain('entries from this briefing are read in Paper.')
   server.child.kill('SIGTERM'); expect((await server.exited).code).toBe(0)
 }, 15000)

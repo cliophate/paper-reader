@@ -30,6 +30,20 @@ afterEach(async () => { await Promise.all(servers.splice(0).map(server => new Pr
 const xml = '<rss><channel><title>Fixture</title></channel></rss>'
 
 describe('bounded feed HTTP transport', () => {
+  it('keeps collector header defaults and sends only the requested reader header overrides', async () => {
+    const seen: Array<{ userAgent?: string; acceptLanguage?: string }> = []
+    const origin = await server((req, res) => {
+      seen.push({ userAgent: req.headers['user-agent'], acceptLanguage: req.headers['accept-language'] })
+      res.end(xml)
+    })
+    await boundedFetch(origin, { trustedOrigins: [origin] })
+    await boundedFetch(origin, { trustedOrigins: [origin], userAgent: 'PaperReader test', acceptLanguage: 'en-US,en;q=0.8' })
+    expect(seen).toEqual([
+      { userAgent: 'Paper feed collector', acceptLanguage: undefined },
+      { userAgent: 'PaperReader test', acceptLanguage: 'en-US,en;q=0.8' },
+    ])
+  })
+
   it('blocks private, mapped, special and credential URLs unless the exact origin is trusted', async () => {
     const origin = await server((_req, res) => res.end(xml))
     await expect(boundedFetch(origin)).rejects.toMatchObject({ code: 'policy' })
@@ -76,6 +90,18 @@ describe('bounded feed HTTP transport', () => {
     expect(validLastModified('Wed, 21 Oct 2015 07:28:00 GMT')).toBeDefined()
   })
 
+  it('returns final response metadata without waiting for a listed status body and still follows redirects', async () => {
+    const origin = await server((req, res) => {
+      if (req.url === '/') { res.writeHead(302, { Location: '/blocked' }); res.end() }
+      else { res.writeHead(403, { 'Content-Type': 'text/html', 'Retry-After': '60' }); res.flushHeaders() }
+    })
+    const release = vi.fn()
+    await expect(boundedFetch(origin, {
+      trustedOrigins: [origin], skipBodyStatuses: [302, 403], timeoutMs: 1000, acquire: async () => release,
+    })).resolves.toMatchObject({ status: 403, url: origin + '/blocked', text: '', contentType: 'text/html', retryAfter: '60' })
+    expect(release).toHaveBeenCalledTimes(2)
+  })
+
   it('enforces wire, decompressed and decoded limits for streamed and compressed bodies', async () => {
     const origin = await server((req, res) => {
       if (req.url === '/zip') { res.setHeader('Content-Encoding', 'gzip'); res.end(gzipSync('x'.repeat(10000))) }
@@ -100,6 +126,16 @@ describe('bounded feed HTTP transport', () => {
     await expect(boundedFetch(origin + '/brokenzip', { trustedOrigins: [origin] })).rejects.toMatchObject({ code: 'network' })
     expect((await boundedFetch(origin + '/utf16', { trustedOrigins: [origin] })).text).toContain(xml)
     expect((await boundedFetch(origin, { trustedOrigins: [origin] })).text).toContain('é')
+    expect((await boundedFetch(origin + '/utf16', { trustedOrigins: [origin], fatalDecoding: false })).text).toContain(xml)
+    expect((await boundedFetch(origin, { trustedOrigins: [origin], fatalDecoding: false })).text).toContain('é')
+    await expect(boundedFetch(origin + '/unsupported', { trustedOrigins: [origin], fatalDecoding: false })).rejects.toMatchObject({ code: 'encoding' })
+  })
+
+  it('allows replacement decoding only when requested and counts replacement bytes toward the decoded limit', async () => {
+    const origin = await server((_req, res) => res.end(Buffer.from([0xff])))
+    await expect(boundedFetch(origin, { trustedOrigins: [origin] })).rejects.toMatchObject({ code: 'encoding' })
+    await expect(boundedFetch(origin, { trustedOrigins: [origin], fatalDecoding: false })).resolves.toMatchObject({ text: '\ufffd' })
+    await expect(boundedFetch(origin, { trustedOrigins: [origin], fatalDecoding: false, maxDecodedBytes: 2 })).rejects.toMatchObject({ code: 'limit' })
   })
 
   it('uses one deadline for slow headers/body and releases slots on interruption', async () => {

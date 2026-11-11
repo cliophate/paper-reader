@@ -18,6 +18,7 @@ import { KirbyPublisher } from './kirby.js'
 import { PaperRepository, switchingEntrySource } from './repository.js'
 import { requireSameOrigin } from './request-origin.js'
 import { previewFeed } from './feed-repair.js'
+import { FeedHttpError } from './feed-http.js'
 import { subscriptionToolsRoutes } from './subscription-tools-routes.js'
 import { freshRssImportStore } from './subscription-import-freshrss.js'
 import { discoveryTransport } from './discovery-transport.js'
@@ -243,9 +244,7 @@ app.post('/api/filters', (request, response) => {
   if (!['title', 'content', 'any'].includes(scope)) return response.status(400).json({ error: 'Unknown filter scope' })
   try { if (feedId) backend.validateFeedId(feedId, 'filter') }
   catch (error) {
-    if (error instanceof StateConflictError) return response.status(409).json({ code: 'state-conflict', error: error.message, states: error.states })
-  if (error instanceof UndoExpiredError) return response.status(410).json({ error: error.message })
-  if (error instanceof BackendValidationError) return response.status(400).json({ error: 'Unknown feed' })
+    if (error instanceof BackendValidationError) return response.status(400).json({ error: 'Unknown feed' })
     throw error
   }
   const filter = database.createMuteFilter(phrase, scope as import('./db.js').MuteFilterScope, feedId)
@@ -412,7 +411,7 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
 
   const items: Entry[] = []
   const seenContinuations = new Set<string>()
-  while (items.length < ENTRY_PAGE_SIZE) {
+  for (let pages = 0; pages < 10 && items.length < ENTRY_PAGE_SIZE; pages += 1) {
     const page = await backend.entriesPage(stream, { unreadOnly, limit: SEARCH_SCAN_SIZE, continuation })
     items.push(...page.items.filter(entry => entryMatchesSearch(entry, query)))
     if (!page.continuation || page.continuation === continuation || seenContinuations.has(page.continuation)) {
@@ -628,7 +627,7 @@ app.get('/briefings/:id/confirm', (request, response) => {
   const token = String(request.query.token || '')
   if (!briefing || !token || !briefings.verifyToken(briefing, token)) return response.status(404).send(messagePage('This link is not valid.', 'Paper could not find this briefing.'))
   const count = database.entryIdsForBriefing(briefing.id).length
-  if (briefing.acknowledgedAt) return response.send(messagePage('Already marked read.', `${count} entries from this briefing are read in FreshRSS.`))
+  if (briefing.acknowledgedAt) return response.send(messagePage('Already marked read.', `${count} entries from this briefing are read in Paper.`))
   response.send(confirmPage(briefing.id, token, count, briefing.kind))
 })
 
@@ -653,7 +652,7 @@ app.use((error: Error, request: Request, response: Response, _next: NextFunction
   if (error instanceof SearchUnavailableError) return response.status(503).json({ error: error.message })
   if (error instanceof StateConflictError) return response.status(409).json({ code: 'state-conflict', error: error.message, states: error.states })
   if (error instanceof UndoExpiredError) return response.status(410).json({ error: error.message })
-  if (error instanceof BackendValidationError) return response.status(400).json({ error: error.message })
+  if (error instanceof BackendValidationError || (error instanceof FeedHttpError && error.code === 'policy')) return response.status(400).json({ error: error.message })
   console.error(`${request.method} ${request.path}`, error)
   response.status(500).json({ error: error.message || 'Paper could not complete the request' })
 })
@@ -724,7 +723,7 @@ function parseStream(request: Request): StreamRef {
 
 function parseStreamBody(input: Record<string, unknown> | undefined): StreamRef {
   const kind = String(input?.kind || 'all') as StreamKind
-  if (!['all', 'starred', 'category', 'feed'].includes(kind)) throw new Error('Unknown stream')
+  if (!['all', 'starred', 'category', 'feed'].includes(kind)) throw new BackendValidationError('Unknown stream')
   return { kind, id: String(input?.id || kind), title: String(input?.title || '') }
 }
 

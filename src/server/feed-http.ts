@@ -19,6 +19,11 @@ export interface BoundedFetchOptions {
   maxDecodedBytes?: number
   maxRedirects?: number
   accept?: string
+  userAgent?: string
+  acceptLanguage?: string
+  // Return response metadata with empty text without consuming these bodies.
+  skipBodyStatuses?: readonly number[]
+  fatalDecoding?: boolean
   validators?: FeedValidators
   // Applied to every hop, including redirects. The scheduler uses this to
   // reserve global and per-host slots before opening a connection.
@@ -62,14 +67,14 @@ function counter(max: number): Transform {
     callback(count > max ? new FeedHttpError('limit', 'The response exceeds its byte limit.') : null, chunk)
   } })
 }
-function decode(bytes: Buffer, contentType: string, max: number): string {
+function decode(bytes: Buffer, contentType: string, max: number, fatal: boolean): string {
   const charset = /charset\s*=\s*["']?([^\s;"']+)/i.exec(contentType)?.[1]
   const bom = bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf-16le' : bytes[0] === 0xfe && bytes[1] === 0xff ? 'utf-16be' : bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])) ? 'utf-8' : undefined
   const sniff = bom || (bytes[0] === 0x3c && bytes[1] === 0 ? 'utf-16le' : bytes[0] === 0 && bytes[1] === 0x3c ? 'utf-16be' : 'utf-8')
   try {
     const prefix = new TextDecoder(sniff).decode(bytes.subarray(0, 512))
     const declared = /^\s*<\?xml\s[^?]*encoding\s*=\s*["']([^"']+)["']/i.exec(prefix)?.[1]
-    const decoder = new TextDecoder(bom || charset || declared || sniff, { fatal: true })
+    const decoder = new TextDecoder(bom || charset || declared || sniff, { fatal })
     for (const label of [charset, declared]) {
       if (label && new TextDecoder(label).encoding !== decoder.encoding && !(label.toLowerCase() === 'utf-16' && decoder.encoding === 'utf-16be')) {
         throw new Error('Conflicting encodings')
@@ -118,7 +123,8 @@ export async function boundedFetch(input: string, options: BoundedFetchOptions =
             lookup: (_hostname, lookupOptions, callback) => lookupOptions.all
               ? callback(null, [addresses[0]]) : callback(null, addresses[0].address, addresses[0].family),
             headers: { Accept: options.accept || 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/html',
-              'Accept-Encoding': 'gzip, deflate, br', 'User-Agent': 'Paper feed collector',
+              'Accept-Encoding': 'gzip, deflate, br', 'User-Agent': options.userAgent ?? 'Paper feed collector',
+              ...(options.acceptLanguage ? { 'Accept-Language': options.acceptLanguage } : {}),
               ...(etag ? { 'If-None-Match': etag } : {}), ...(lastModified ? { 'If-Modified-Since': lastModified } : {}) },
           }, resolve)
           request.on('error', reject)
@@ -135,7 +141,7 @@ export async function boundedFetch(input: string, options: BoundedFetchOptions =
         const result: BoundedFetchResult = { status, url: url.href, text: '', contentType: header(response, 'content-type'),
           etag: validEtag(header(response, 'etag')), lastModified: validLastModified(header(response, 'last-modified')),
           retryAfter: header(response, 'retry-after').slice(0, 128) || undefined, conditional: Boolean(etag || lastModified) }
-        if (status === 304 || status === 204) { response.destroy(); return result }
+        if (status === 304 || status === 204 || options.skipBodyStatuses?.includes(status)) { response.destroy(); return result }
         if (Number(header(response, 'content-length')) > limits.maxResponseBytes) {
           response.destroy(); throw new FeedHttpError('limit', 'The response exceeds its byte limit.')
         }
@@ -146,7 +152,7 @@ export async function boundedFetch(input: string, options: BoundedFetchOptions =
         const sink = new Writable({ write(chunk: Buffer, _encoding, callback) { chunks.push(chunk); callback() } })
         await pipeline(response, counter(limits.maxResponseBytes), decompressor, counter(limits.maxDecompressedBytes), sink, { signal })
         signal.throwIfAborted()
-        result.text = decode(Buffer.concat(chunks), result.contentType, limits.maxDecodedBytes)
+        result.text = decode(Buffer.concat(chunks), result.contentType, limits.maxDecodedBytes, options.fatalDecoding ?? true)
         signal.throwIfAborted()
         return result
       } finally { release() }

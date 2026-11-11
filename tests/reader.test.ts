@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { boundedFetch, FeedHttpError } from '../src/server/feed-http.js'
 import { extractReadableArticle, fetchHtml } from '../src/server/reader.js'
 
-afterEach(() => vi.unstubAllGlobals())
+vi.mock('../src/server/feed-http.js', async importOriginal => ({ ...await importOriginal<typeof import('../src/server/feed-http.js')>(), boundedFetch: vi.fn() }))
+afterEach(() => { vi.unstubAllGlobals(); vi.resetAllMocks() })
+const page = (status: number, url = 'https://93.184.216.34/story') => ({ status, url, text: '', contentType: 'text/html', conditional: false })
 
 describe('reader extraction', () => {
   it('extracts the article and removes page chrome and scripts', () => {
@@ -37,16 +40,17 @@ describe('reader extraction', () => {
   })
 
   it('contacts no fallback service by default when the publisher blocks access', async () => {
-    const fetcher = vi.fn().mockResolvedValue(new Response('Forbidden', { status: 403 }))
+    vi.mocked(boundedFetch).mockResolvedValue(page(403))
+    const fetcher = vi.fn()
     vi.stubGlobal('fetch', fetcher)
     await expect(fetchHtml(new URL('https://93.184.216.34/blocked'))).rejects.toThrow('status 403')
-    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   it('uses the opt-in reader fallback when the publisher returns 403', async () => {
     const articleHtml = '<html><body><article><h1>Blocked article</h1><p>The complete article body is available through the fallback reader.</p></article></body></html>'
+    vi.mocked(boundedFetch).mockResolvedValue(page(403))
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response('Forbidden', { status: 403 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { html: articleHtml } }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -55,9 +59,9 @@ describe('reader extraction', () => {
 
     const sourceUrl = new URL('https://93.184.216.34/story')
     await expect(fetchHtml(sourceUrl, true)).resolves.toEqual({ html: articleHtml, finalUrl: sourceUrl })
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(String(fetchMock.mock.calls[1][0])).toBe('https://r.jina.ai/https://93.184.216.34/story')
-    expect(fetchMock.mock.calls[1][1]?.headers).toMatchObject({
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0][0])).toBe('https://r.jina.ai/https://93.184.216.34/story')
+    expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
       Accept: 'application/json',
       DNT: '1',
       'X-Return-Format': 'html',
@@ -65,20 +69,37 @@ describe('reader extraction', () => {
   })
 
   it('does not proxy ordinary not-found responses', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response('Not found', { status: 404 }))
+    vi.mocked(boundedFetch).mockResolvedValue(page(404))
+    const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(fetchHtml(new URL('https://93.184.216.34/missing'))).rejects.toThrow('status 404')
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it.each([401, 403, 406, 429])('uses the reader fallback for status %s', async status => {
     const articleHtml = '<html><body><article><h1>Fallback article</h1><p>The fallback returned enough readable text for Paper to display this blocked article in its own reader view.</p></article></body></html>'
+    vi.mocked(boundedFetch).mockResolvedValue(page(status))
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response('Blocked', { status }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { html: articleHtml } }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(fetchHtml(new URL('https://93.184.216.34/story'), true)).resolves.toMatchObject({ html: articleHtml })
   })
+})
+
+it('uses bounded HTML transport and retains the final URL and reader limits', async () => {
+  vi.mocked(boundedFetch).mockResolvedValue({ ...page(200, 'https://example.test/final'), text: '<p>Article</p>' })
+  await expect(fetchHtml(new URL('https://example.test/start'))).resolves.toEqual({ html: '<p>Article</p>', finalUrl: new URL('https://example.test/final') })
+  expect(boundedFetch).toHaveBeenCalledWith('https://example.test/start', expect.objectContaining({
+    accept: 'text/html,application/xhtml+xml', timeoutMs: 20_000, maxRedirects: 5,
+    maxResponseBytes: 5 * 1024 * 1024, maxDecompressedBytes: 5 * 1024 * 1024, maxDecodedBytes: 5 * 1024 * 1024,
+  }))
+})
+
+it('retains HTML content-type and size error messages', async () => {
+  vi.mocked(boundedFetch).mockResolvedValue({ ...page(200), contentType: 'text/plain' })
+  await expect(fetchHtml(new URL('https://example.test/story'))).rejects.toThrow('The article URL did not return an HTML page')
+  vi.mocked(boundedFetch).mockRejectedValue(new FeedHttpError('limit', 'The response exceeds its byte limit.'))
+  await expect(fetchHtml(new URL('https://example.test/story'))).rejects.toThrow('The article page is too large to extract')
 })

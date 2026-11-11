@@ -1433,7 +1433,7 @@ export default function App() {
           <span>{loading
             ? 'Loading'
             : entries.length
-              ? visibleStreamTotal === null ? `${entries.length} loaded` : `${entries.length} of ${visibleStreamTotal} loaded`
+              ? visibleStreamTotal === null ? `${entries.length} loaded` : `${entries.filter(entry => !entry.read).length} of ${visibleStreamTotal} loaded`
               : 'No articles'}</span>
         </div>
         <div className={`story-list ${pullDistance > 0 ? 'pulling pull-active' : ''} ${refreshing ? 'pull-active' : ''}`} ref={listRef} tabIndex={0} aria-label="Articles" onTouchStart={beginStoryGesture} onTouchMove={continueStoryGesture} onTouchEnd={releaseStoryGesture} onTouchCancel={releaseStoryGesture} style={{ '--pull-distance': `${pullDistance || (refreshing ? 44 : 0)}px` } as React.CSSProperties}>

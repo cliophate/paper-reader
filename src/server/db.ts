@@ -279,6 +279,10 @@ export class PaperDatabase {
     })
   }
 
+  transaction<T>(operation: () => T): T {
+    return transaction(this.db, operation)
+  }
+
   saveLocalSubscription(backendId: string, feed: { id?: string; title: string; url: string; siteUrl?: string; iconUrl?: string }): string {
     return transaction(this.db, () => {
       this.assertLocalBackend(backendId)
