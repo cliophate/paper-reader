@@ -175,16 +175,24 @@ export function parseFeed(xml: string, responseUrl: string): ParsedFeed {
       thumbnailUrl: enclosure ? feedUrl(attribute(enclosure, 'url'), enclosure.base) : '',
     }
   })
-  // Repeated identical items are harmless; contradictory uses of one source ID
-  // must not overwrite one another according to incidental document order.
+  // A reused source ID cannot identify any of its conflicting items. Keep
+  // distinct items for fingerprint matching and collapse exact deliveries.
   const seen = new Map<string, string>()
+  const conflicts = new Set<string>()
+  const serializedItems = new Set<string>()
   const unique = entries.filter(entry => {
-    if (!entry.externalId) return true
     const serialized = JSON.stringify(entry)
-    const previous = seen.get(entry.externalId)
-    if (previous && previous !== serialized) throw new Error('Feed contains conflicting duplicate source IDs')
-    seen.set(entry.externalId, serialized)
-    return !previous
+    if (entry.externalId) {
+      const previous = seen.get(entry.externalId)
+      if (previous && previous !== serialized) conflicts.add(entry.externalId)
+      seen.set(entry.externalId, serialized)
+    }
+    if (serializedItems.has(serialized)) return false
+    serializedItems.add(serialized)
+    return true
   })
+  for (const entry of unique) {
+    if (entry.externalId && conflicts.has(entry.externalId)) delete entry.externalId
+  }
   return { format, title, siteUrl, entries: unique }
 }

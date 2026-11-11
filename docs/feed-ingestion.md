@@ -53,7 +53,8 @@ order independently. Every response entry is considered, regardless of its
 publication date or the previous successful fetch time.
 
 Identical deliveries of one explicit source ID collapse within a response.
-Conflicting duplicates reject the batch, avoiding an order-dependent overwrite.
+If one source ID has conflicting items, the parser removes that ID from all
+items sharing it. Those items use the existing fallback fingerprint rules.
 Distinct IDs stay distinct even when URLs, dates and content match. A reused
 URL alone cannot establish a GUID change. If a trusted caller has verified a
 publisher ID change, it may supply `verifiedAliasChanges` with prior IDs and a

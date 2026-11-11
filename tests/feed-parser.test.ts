@@ -45,10 +45,18 @@ describe('feed parsing', () => {
     expect(feed.entries[0].contentHtml).not.toMatch(/javascript|data:|onerror|onload|iframe|svg|srcset|password/)
     expect(() => parseFeed(rss(''), 'https://user:password@example.test/feed')).toThrow(/credentials/)
   })
-  it('collapses identical source IDs and rejects contradictory duplicates', () => {
-    const item = '<item><guid>x</guid><title>One</title></item>'
-    expect(parseFeed(rss(item + item), base).entries).toHaveLength(1)
-    expect(() => parseFeed(rss(item + item.replace('One', 'Two')), base)).toThrow(/duplicate/)
+  it('deduplicates exact items and removes every conflicting source ID regardless of order', () => {
+    const one = '<item><guid>x</guid><title>One</title><link>/one</link></item>'
+    const two = one.replace('One', 'Two').replace('/one', '/two')
+    const other = one.replace('<guid>x', '<guid>y')
+    expect(parseFeed(rss(one + one), base).entries).toHaveLength(1)
+    for (const items of [one + two + one + other, two + one + two + other]) {
+      const entries = parseFeed(rss(items), base).entries
+      expect(entries).toHaveLength(3)
+      expect(entries.slice(0, 2).map(entry => entry.externalId)).toEqual([undefined, undefined])
+      expect(entries[2].externalId).toBe('y')
+      expect(new Set(entries.slice(0, 2).map(entry => entry.title))).toEqual(new Set(['One', 'Two']))
+    }
   })
   it.each([
     '', '<rss>', '<rss version="2.0"><channel></rss>', rss('<item>&unknown;</item>'), rss('<item>&#0;</item>'),

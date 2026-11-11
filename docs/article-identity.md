@@ -25,8 +25,9 @@ subscription ID. Composite foreign keys prevent attaching an alias to another
 owner. Content imports also check ownership before changing an existing row.
 The original FreshRSS article ID is its first alias.
 
-Collectors must pass the RSS GUID or Atom ID as `externalId`. Matching proceeds
-in this order:
+Collectors pass the RSS GUID or Atom ID as `externalId`. If a feed response
+reuses one ID for different items, the parser removes it from every item sharing
+that ID. Those items use fallback fingerprints. Matching proceeds in this order:
 
 1. Resolve that alias and any explicitly verified `previousExternalIds` within
    this subscription. If they identify different articles, record a conflict

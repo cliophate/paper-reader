@@ -90,6 +90,19 @@ describe('repeatable feed ingestion', () => {
     expect(db.localEntry(id)).toMatchObject({ publishedAt: '', timestamp: 0 })
     expect(resolvedId(ingest(rss(item('new-guid', '/undated', 'Undated', ''))))).toBe(id)
   })
+  it('imports reused GUIDs through fingerprints and keeps their identities on refetch', () => {
+    const first = item('reused', '/first', 'First')
+    const second = item('reused', '/second', 'Second')
+    const initial = ingest(rss(first + second + first))
+    expect(initial).toMatchObject({ resolved: 2, ambiguous: 0 })
+    expect(initial.feed.entries.every(entry => entry.externalId === undefined)).toBe(true)
+    const ids = initial.results.map(result => result.status === 'resolved' && result.id)
+    reopen()
+    const later = ingest(rss(second + first), { fetchedAt: '2026-11-03T00:00:00Z' })
+    expect(later.results.map(result => result.status === 'resolved' && result.id)).toEqual([...ids].reverse())
+    expect(db.entryCount()).toBe(2)
+    expect(successfulFeedFetch(db, endpoint)?.fetchedAt).toBe('2026-11-03T00:00:00.000Z')
+  })
   it('never infers changed GUIDs from reused URLs, even with identical date and content', () => {
     const first = resolvedId(ingest())
     const second = resolvedId(ingest(rss(item('changed-guid'))))
@@ -161,11 +174,10 @@ describe('repeatable feed ingestion', () => {
     sql(c => c.exec('DROP TRIGGER reject_checkpoint'))
     expect(ingest(rss(item('new', '/new'))).resolved).toBe(1)
   })
-  it('rejects malformed XML and contradictory duplicate IDs before changing stored content or fetch success', () => {
+  it('rejects malformed XML before changing stored content or fetch success', () => {
     const id = resolvedId(ingest())
     const saved = successfulFeedFetch(db, endpoint)
     expect(() => ingest(rss(item('one', '/changed')) + '<broken>')).toThrow(/Malformed/)
-    expect(() => ingest(rss(item('one') + item('one', '/changed')))).toThrow(/duplicate/)
     expect(db.localEntry(id)?.url).toBe('https://example.test/article')
     expect(successfulFeedFetch(db, endpoint)).toEqual(saved)
   })
