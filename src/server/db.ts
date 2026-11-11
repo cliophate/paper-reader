@@ -163,6 +163,8 @@ export interface CoverageFeedbackRecord {
   createdAt: string
 }
 
+// Wait briefly for another process to finish writing instead of failing at once.
+const BUSY_TIMEOUT_MS = 5000
 const BACKEND_CHECKPOINTS = new Set(['backfill_complete', 'backfill_continuation', 'last_sync_started_at', 'last_sync_completed_at', 'last_sync_error', 'navigation_synced_at', 'state_synced_at', 'source_content_restored_v6', 'last_deep_sync_at'])
 
 export class PaperDatabase {
@@ -176,7 +178,7 @@ export class PaperDatabase {
   constructor(databasePath: string, options: { readOnly?: boolean } = {}) {
     this.databasePath = databasePath
     if (!options.readOnly) fs.mkdirSync(path.dirname(databasePath), { recursive: true })
-    this.db = new DatabaseSync(databasePath, { readOnly: options.readOnly })
+    this.db = new DatabaseSync(databasePath, { readOnly: options.readOnly, timeout: BUSY_TIMEOUT_MS })
     try {
       if (options.readOnly) {
         if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) !== DATABASE_VERSION
@@ -1704,7 +1706,10 @@ export class PaperDatabase {
 
   checkpointWalIfLarge(maxWalBytes = 64 * 1024 * 1024): boolean {
     if (fileSize(`${this.databasePath}-wal`) <= maxWalBytes) return false
-    this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    // Opportunistic: skip rather than block the event loop waiting on readers.
+    this.db.exec('PRAGMA busy_timeout = 0')
+    try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)') }
+    finally { this.db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`) }
     return true
   }
 

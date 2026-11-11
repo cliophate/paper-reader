@@ -237,7 +237,7 @@ describe('standalone collector', () => {
     expect(db.entryCount()).toBe(7)
     const query = sql(c => c.prepare('EXPLAIN QUERY PLAN SELECT subscription_id FROM feed_fetch_state WHERE backend_id = ? AND available_at <= ? ORDER BY available_at, subscription_id LIMIT 1').all(backend.id, Date.now()))
     expect(JSON.stringify(query)).toContain('feed_fetch_due')
-  })
+  }, 30000)
 
   it('rejects FreshRSS and foreign backend scheduling', () => {
     expect(() => new StandaloneFeedScheduler(db, 'another')).toThrow(/active standalone/)

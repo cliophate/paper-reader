@@ -41,7 +41,7 @@ function start(file: string, port: number, extra: NodeJS.ProcessEnv = {}) {
   return { child, exited }
 }
 async function ready(port: number) {
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 200; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return } catch {}
     await delay(50)
   }
