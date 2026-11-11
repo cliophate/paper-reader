@@ -90,6 +90,18 @@ describe('bounded feed HTTP transport', () => {
     expect(validLastModified('Wed, 21 Oct 2015 07:28:00 GMT')).toBeDefined()
   })
 
+  it('returns final response metadata without waiting for a listed status body and still follows redirects', async () => {
+    const origin = await server((req, res) => {
+      if (req.url === '/') { res.writeHead(302, { Location: '/blocked' }); res.end() }
+      else { res.writeHead(403, { 'Content-Type': 'text/html', 'Retry-After': '60' }); res.flushHeaders() }
+    })
+    const release = vi.fn()
+    await expect(boundedFetch(origin, {
+      trustedOrigins: [origin], skipBodyStatuses: [302, 403], timeoutMs: 1000, acquire: async () => release,
+    })).resolves.toMatchObject({ status: 403, url: origin + '/blocked', text: '', contentType: 'text/html', retryAfter: '60' })
+    expect(release).toHaveBeenCalledTimes(2)
+  })
+
   it('enforces wire, decompressed and decoded limits for streamed and compressed bodies', async () => {
     const origin = await server((req, res) => {
       if (req.url === '/zip') { res.setHeader('Content-Encoding', 'gzip'); res.end(gzipSync('x'.repeat(10000))) }

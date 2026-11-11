@@ -16,6 +16,39 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
+it.each([
+  [401, 'undecodable'], [403, 'undecodable'], [406, 'undecodable'], [429, 'undecodable'],
+  [403, 'oversized'], [403, 'stalled'],
+] as const)('reaches the fallback for status %s with an %s body without reading it', async (status, body) => {
+  transport.lookup.mockResolvedValue([{ address: '8.8.8.8', family: 4 }])
+  const response = Object.assign(new PassThrough(), { statusCode: status, headers: {
+    'content-type': 'text/html; charset=utf-8',
+    ...(body === 'oversized' ? { 'content-length': String(6 * 1024 * 1024) } : {}),
+  } })
+  const read = vi.spyOn(response, 'read')
+  transport.request.mockImplementation((url: URL, _options: RequestOptions, respond: (response: IncomingMessage) => void) =>
+    Object.assign(new EventEmitter(), { end() {
+      if (url.pathname === '/start') {
+        const redirect = Object.assign(new PassThrough(), { statusCode: 302, headers: { location: '/blocked' } })
+        respond(redirect as IncomingMessage)
+        redirect.end()
+      } else {
+        respond(response as IncomingMessage)
+        if (body !== 'stalled') response.end(Buffer.from([0xc3, 0x28]))
+      }
+    } }))
+  const html = '<p>Synthetic fallback article</p>'
+  vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ data: { html } })))
+
+  await expect(fetchHtml(new URL('http://publisher.test/start'), true)).resolves.toEqual({
+    html, finalUrl: new URL('http://publisher.test/blocked'),
+  })
+  expect(response.destroyed).toBe(true)
+  expect(read).not.toHaveBeenCalled()
+  expect(fetch).toHaveBeenCalledOnce()
+  expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe('https://r.jina.ai/http://publisher.test/blocked')
+})
+
 it('refuses private DNS answers before connecting or resolving again', async () => {
   transport.lookup.mockResolvedValue([{ address: '127.0.0.1', family: 4 }])
   await expect(fetchHtml(new URL('http://private.test/story'))).rejects.toMatchObject({ code: 'policy', message: 'Paper cannot fetch private network addresses' })

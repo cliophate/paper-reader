@@ -21,6 +21,8 @@ export interface BoundedFetchOptions {
   accept?: string
   userAgent?: string
   acceptLanguage?: string
+  // Return response metadata with empty text without consuming these bodies.
+  skipBodyStatuses?: readonly number[]
   validators?: FeedValidators
   // Applied to every hop, including redirects. The scheduler uses this to
   // reserve global and per-host slots before opening a connection.
@@ -138,7 +140,7 @@ export async function boundedFetch(input: string, options: BoundedFetchOptions =
         const result: BoundedFetchResult = { status, url: url.href, text: '', contentType: header(response, 'content-type'),
           etag: validEtag(header(response, 'etag')), lastModified: validLastModified(header(response, 'last-modified')),
           retryAfter: header(response, 'retry-after').slice(0, 128) || undefined, conditional: Boolean(etag || lastModified) }
-        if (status === 304 || status === 204) { response.destroy(); return result }
+        if (status === 304 || status === 204 || options.skipBodyStatuses?.includes(status)) { response.destroy(); return result }
         if (Number(header(response, 'content-length')) > limits.maxResponseBytes) {
           response.destroy(); throw new FeedHttpError('limit', 'The response exceeds its byte limit.')
         }
