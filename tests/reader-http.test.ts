@@ -42,5 +42,9 @@ it('pins the checked public address at connection time despite a private second 
   await expect(fetchHtml(new URL('http://rebind.test/story'))).resolves.toMatchObject({ html: '<p>Synthetic article</p>' })
   expect(transport.lookup).toHaveBeenCalledTimes(1)
   expect(transport.request).toHaveBeenCalledTimes(1)
+  expect(transport.request.mock.calls[0][1].headers).toMatchObject({
+    'User-Agent': 'Mozilla/5.0 (compatible; PaperReader/1.0; +https://github.com/cliophate/paper-reader)',
+    'Accept-Language': 'en-US,en;q=0.8',
+  })
   expect(fetch).not.toHaveBeenCalled()
 })

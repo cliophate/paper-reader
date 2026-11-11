@@ -19,6 +19,8 @@ export interface BoundedFetchOptions {
   maxDecodedBytes?: number
   maxRedirects?: number
   accept?: string
+  userAgent?: string
+  acceptLanguage?: string
   validators?: FeedValidators
   // Applied to every hop, including redirects. The scheduler uses this to
   // reserve global and per-host slots before opening a connection.
@@ -118,7 +120,8 @@ export async function boundedFetch(input: string, options: BoundedFetchOptions =
             lookup: (_hostname, lookupOptions, callback) => lookupOptions.all
               ? callback(null, [addresses[0]]) : callback(null, addresses[0].address, addresses[0].family),
             headers: { Accept: options.accept || 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/html',
-              'Accept-Encoding': 'gzip, deflate, br', 'User-Agent': 'Paper feed collector',
+              'Accept-Encoding': 'gzip, deflate, br', 'User-Agent': options.userAgent ?? 'Paper feed collector',
+              ...(options.acceptLanguage ? { 'Accept-Language': options.acceptLanguage } : {}),
               ...(etag ? { 'If-None-Match': etag } : {}), ...(lastModified ? { 'If-Modified-Since': lastModified } : {}) },
           }, resolve)
           request.on('error', reject)

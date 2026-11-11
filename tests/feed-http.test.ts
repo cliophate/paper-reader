@@ -30,6 +30,20 @@ afterEach(async () => { await Promise.all(servers.splice(0).map(server => new Pr
 const xml = '<rss><channel><title>Fixture</title></channel></rss>'
 
 describe('bounded feed HTTP transport', () => {
+  it('keeps collector header defaults and sends only the requested reader header overrides', async () => {
+    const seen: Array<{ userAgent?: string; acceptLanguage?: string }> = []
+    const origin = await server((req, res) => {
+      seen.push({ userAgent: req.headers['user-agent'], acceptLanguage: req.headers['accept-language'] })
+      res.end(xml)
+    })
+    await boundedFetch(origin, { trustedOrigins: [origin] })
+    await boundedFetch(origin, { trustedOrigins: [origin], userAgent: 'PaperReader test', acceptLanguage: 'en-US,en;q=0.8' })
+    expect(seen).toEqual([
+      { userAgent: 'Paper feed collector', acceptLanguage: undefined },
+      { userAgent: 'PaperReader test', acceptLanguage: 'en-US,en;q=0.8' },
+    ])
+  })
+
   it('blocks private, mapped, special and credential URLs unless the exact origin is trusted', async () => {
     const origin = await server((_req, res) => res.end(xml))
     await expect(boundedFetch(origin)).rejects.toMatchObject({ code: 'policy' })
