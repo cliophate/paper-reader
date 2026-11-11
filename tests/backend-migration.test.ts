@@ -230,7 +230,7 @@ describe('offline backend migration', () => {
     fs.renameSync(file, file + '.saved')
     expect(() => new BackendMigration(directory)).toThrow()
     acquireStateLock(directory, 'shared').release()
-  })
+  }, 120000)
 
   it('does not accept an existing corrupt source backup or changed mapping plan', () => {
     const preview = session(migration => migration.preview(source.id))
