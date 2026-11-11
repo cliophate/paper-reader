@@ -157,7 +157,7 @@ export function parseFeed(xml: string, responseUrl: string): ParsedFeed {
         externalId: value(item, 'id') || undefined,
         title: plainText(atomContent(child(item, 'title'))),
         author: atomAuthor(item) || atomAuthor(child(item, 'source') || channel) || atomAuthor(channel),
-        url: atomLink(item), publishedAt: date(value(item, 'published')),
+        url: atomLink(item), publishedAt: date(value(item, 'published') || value(item, 'updated')),
         contentHtml, thumbnailUrl: '',
       }
     }

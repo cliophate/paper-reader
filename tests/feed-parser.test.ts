@@ -21,7 +21,20 @@ describe('feed parsing', () => {
     expect(feed.entries[0]).toMatchObject({ externalId: 'urn:story:1', title: 'Plain <title>', author: 'Ada', url: 'https://example.test/root/posts/one', publishedAt: '2024-01-01T12:00:00.000Z' })
     expect(feed.entries[0].contentHtml).toContain('https://example.test/root/images/one.jpg')
     expect(feed.entries[0].contentHtml).toContain('https://example.test/root/two')
-    expect(feed.entries[1]).toMatchObject({ publishedAt: '', contentHtml: '&lt;script&gt;literal&lt;/script&gt;' })
+    expect(feed.entries[1]).toMatchObject({ publishedAt: '2026-01-01T00:00:00.000Z', contentHtml: '&lt;script&gt;literal&lt;/script&gt;' })
+  })
+  it('uses Atom updated only when published is absent and leaves undated entries empty', () => {
+    let index = 0
+    const entry = (dates: string) => `<entry><id>urn:date:${index++}</id>${dates}</entry>`
+    const xml = `<feed xmlns="http://www.w3.org/2005/Atom">
+      ${entry('<updated>2024-02-01T00:00:00Z</updated>')}
+      ${entry('<published>2024-01-01T00:00:00Z</published><updated>2024-02-01T00:00:00Z</updated>')}
+      ${entry('<published>invalid</published><updated>2024-02-01T00:00:00Z</updated>')}
+      ${entry('')}
+    </feed>`
+    expect(parseFeed(xml, base).entries.map(item => item.publishedAt)).toEqual([
+      '2024-02-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z', '', '',
+    ])
   })
   it('supports RSS 1.0 and 0.90 RDF with URI identity', () => {
     for (const xml of [fixture('rdf'), fixture('rdf').replaceAll('http://purl.org/rss/1.0/', 'http://my.netscape.com/rdf/simple/0.9/')]) {

@@ -20,7 +20,7 @@ RSS imports GUIDs, links, titles, authors, publication dates, descriptions,
 resolved `rdf:about` URI as its source ID. Atom imports IDs, alternate links,
 authors inherited from source/feed, and text, HTML and XHTML content. External
 Atom content is not fetched; an inline summary can supply the body. Atom
-`updated` does not substitute for a missing `published` date.
+`updated` supplies the date when `published` is absent.
 
 Relative article and content URLs use the final response URL and inherited
 `xml:base`. Nested XHTML bases apply to links and media. Article HTML passes
