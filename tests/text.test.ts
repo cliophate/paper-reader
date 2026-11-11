@@ -146,6 +146,15 @@ describe('article text', () => {
     expect(JSON.parse(child.stdout).count).toBe(10000)
   }, 10_000)
 
+  it('separates block boundaries without splitting inline words', () => {
+    for (const tag of ['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'tr', 'td', 'th', 'figcaption', 'article', 'section', 'dt', 'dd']) {
+      expect(plainText(`<${tag}>a.</${tag}><${tag}>b</${tag}>`)).toBe('a. b')
+    }
+    expect(excerpt('<p>months.</p><p>This is <em>inline</em> text.</p>')).toBe('months. This is inline text.')
+    expect(plainText('one<br>two<hr>three')).toBe('one two three')
+    expect(plainText('<p>in<strong>line</strong><script>hidden()</script></p>')).toBe('inline')
+  })
+
   it('creates a bounded plain excerpt', () => {
     expect(excerpt(`<p>${'word '.repeat(100)}</p>`, 40).length).toBeLessThanOrEqual(43)
   })

@@ -219,8 +219,23 @@ function preferredImageSource(attributes: Record<string, string>): string {
   return source
 }
 
+const textBoundaryTags = [
+  'address', 'article', 'aside', 'blockquote', 'br', 'dd', 'details', 'div', 'dl', 'dt',
+  'figcaption', 'figure', 'footer', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr',
+  'li', 'main', 'nav', 'ol', 'p', 'pre', 'section', 'summary', 'table', 'tbody', 'td',
+  'tfoot', 'th', 'thead', 'tr', 'ul',
+]
+
 export function plainText(html: string): string {
-  return decodeHtmlText(sanitizeHtml(html, { allowedTags: [], allowedAttributes: {} }))
+  const parts: string[] = []
+  // Keep only block tags, then turn their boundaries into spaces in one pass.
+  const parser = new Parser({
+    onopentag() { parts.push(' ') },
+    onclosetag() { parts.push(' ') },
+    ontext(text) { parts.push(text) },
+  }, { decodeEntities: false })
+  parser.end(sanitizeHtml(html, { allowedTags: textBoundaryTags, allowedAttributes: {} }))
+  return decodeHtmlText(parts.join(''))
     .replace(/\u00a0/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
