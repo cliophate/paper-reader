@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db.js'
 import * as feedContent from '../src/server/feed-content.js'
@@ -310,6 +311,23 @@ describe('Paper read model', () => {
     expect(before.databaseBytes).toBeGreaterThan(0)
     expect(database.checkpointWalIfLarge(0)).toBe(true)
     expect(database.storageStatus().walBytes).toBeLessThanOrEqual(before.walBytes)
+  })
+
+  it('skips a WAL checkpoint instead of waiting for an active reader', () => {
+    database.replaceNavigation(navigation)
+    database.upsertEntries([entry({ id: 'one' })])
+    const reader = new DatabaseSync(path.join(directory, 'paper.sqlite'), { readOnly: true })
+    try {
+      reader.exec('BEGIN')
+      reader.prepare('SELECT COUNT(*) FROM entries').get()
+      database.upsertEntries([entry({ id: 'two' })])
+      const started = performance.now()
+      expect(database.checkpointWalIfLarge(0)).toBe(true)
+      expect(performance.now() - started).toBeLessThan(1000)
+      reader.exec('COMMIT')
+    } finally { reader.close() }
+    database.upsertEntries([entry({ id: 'three' })])
+    expect(database.localEntry('three')).toBeTruthy()
   })
 
   it('persists shared coverage membership while reading current article state', () => {
