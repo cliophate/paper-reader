@@ -6,7 +6,7 @@ standalone explicitly; omitted backend selection retains FreshRSS behavior.
 
 ## Discovery
 
-Enter a website or feed URL. Paper shows advertised RSS, Atom and RDF links and
+Enter a website or feed URL. Paper shows advertised RSS, Atom, RDF and JSON Feed links and
 requires a choice when a page advertises several feeds. A direct feed URL is
 also supported. Preview the selected feed before subscribing.
 
@@ -118,3 +118,8 @@ candidate selection and submission, file download/upload, identity-preserving
 reimport, nested folder mapping and partial failures. The server smoke test
 exercises export/preview/reuse on the built server. The disposable installation
 test verifies FreshRSS and proxy behavior.
+
+Standalone URL repair keeps the subscription ID, folders, articles and reading
+state. It checks the previous URL and rejects a replacement already subscribed
+under another ID. A changed endpoint gets a fresh generation, invalidating old
+fetch leases and validators. A successful fetch clears its broken status.

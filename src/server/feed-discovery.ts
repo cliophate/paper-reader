@@ -19,7 +19,7 @@ export function parseDiscoveryDocument({ body, responseUrl, contentType }: Disco
     } catch {
       // An XML document must parse as a feed. Do not reinterpret malformed XML
       // as HTML and offer links extracted from an invalid document.
-      if (/xml|rss|atom/i.test(contentType) || /^\s*(?:<\?xml|<rss[\s>]|<feed[\s>])/i.test(body)) throw new SubscriptionInputError('The URL did not return a valid RSS or Atom feed.')
+      if (/xml|rss|atom|json/i.test(contentType) || /^\s*(?:<\?xml|<rss[\s>]|<feed[\s>])/i.test(body)) throw new SubscriptionInputError('The URL did not return a valid RSS, Atom or JSON feed.')
     }
   }
   let base = responseUrl, sawBase = false, title = '', sawTitle = false, titleDepth = 0, nodes = 0
@@ -36,7 +36,7 @@ export function parseDiscoveryDocument({ body, responseUrl, contentType }: Disco
       if (name === 'title' && !sawTitle) { sawTitle = true; titleDepth = stack.length }
       if (name !== 'link' || !(attributes.rel || '').toLowerCase().split(/\s+/).includes('alternate')) return
       const type = (attributes.type || '').split(';')[0].trim().toLowerCase()
-      const format = type === 'application/atom+xml' ? 'atom' : type === 'application/rss+xml' ? 'rss' : type === 'application/rdf+xml' ? 'rdf' : null
+      const format = type === 'application/atom+xml' ? 'atom' : type === 'application/rss+xml' ? 'rss' : type === 'application/rdf+xml' ? 'rdf' : type === 'application/feed+json' ? 'json' : null
       if (format && attributes.href) {
         if (links.length >= 1000) throw new SubscriptionInputError('The page advertises too many feed links. Use a feed URL directly.')
         links.push({ href: attributes.href, title: (attributes.title || '').trim().slice(0, 240), format })

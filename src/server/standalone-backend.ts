@@ -25,7 +25,6 @@ export class StandaloneBackend extends PaperRepository implements ReaderBackend 
     const feeds = [...nav.uncategorized, ...nav.folders.flatMap(folder => folder.feeds)]
     if (!feeds.some(feed => feed.id === id)) throw new BackendValidationError('This feed is no longer subscribed. Reload subscriptions.')
     this.database.identities.assertSubscription(this.identity.id, id)
-    if (operation === 'repair') throw new BackendValidationError('Use subscription discovery to add a replacement feed.')
   }
 
   async entriesPage(stream: StreamRef, options: BackendPageOptions | PageOptions = {}) {
@@ -48,6 +47,19 @@ export class StandaloneBackend extends PaperRepository implements ReaderBackend 
     const result = this.database.organization.apply(this.identity.id, snapshot.revision, [{ type: 'rename-feed', feedId: id, title }])
     if (result.results.some(item => item.status === 'failed')) throw new BackendValidationError('Could not rename this feed.')
     if (folder !== currentFolder) await localImportStore(this.database, this.identity.id).setFolders(id, folder ? [folder] : [], result.revision)
+  }
+  async repairFeed(id: string, url: string, expectedUrl: string) {
+    this.database.transaction(() => {
+      this.validateFeedId(id, 'repair')
+      const nav = this.database.localNavigation()
+      const feed = [...nav.uncategorized, ...nav.folders.flatMap(folder => folder.feeds)].find(feed => feed.id === id)!
+      if (feed.url !== expectedUrl) throw new BackendValidationError('The feed URL changed. Reload subscriptions.')
+      if (!/^https?:\/\//i.test(url) || new URL(url).username || new URL(url).password) throw new BackendValidationError('Use a feed URL without login details.')
+      const feeds = [...nav.uncategorized, ...nav.folders.flatMap(folder => folder.feeds)]
+      if (feeds.some(feed => feed.id !== id && feed.url === url)) throw new BackendValidationError('This URL is already subscribed. Keep the feeds separate or choose another URL.')
+      this.database.saveLocalSubscription(this.identity.id, { id, title: feed.title, url, siteUrl: feed.siteUrl, iconUrl: feed.iconUrl })
+      this.database.recordActivity({ kind: 'feed', origin: 'settings', summary: 'Repaired a feed URL', count: 1, details: { id } })
+    })
   }
   async removeFeed(id: string) {
     this.validateFeedId(id, 'remove')

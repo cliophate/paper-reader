@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { normalizeFeedContent, normalizeFeedThumbnail } from './feed-content.js'
+import { normalizeFeedContent, normalizeFeedThumbnail, normalizeFeedTitle } from './feed-content.js'
 import { isEditorialLinkedFeed } from './entry-kind.js'
 import { IdentityStore, migrateIdentity, type BackendIdentity, type SourceItemIdentity, type IdentityResolution } from './identity.js'
 import { transaction } from './transaction.js'
@@ -1993,7 +1993,7 @@ function entryFromRow(row: Record<string, string | number>): Entry {
     feedId: String(row.feed_id),
     feedTitle,
     feedUrl: String(row.feed_url),
-    title: decodeHtmlText(String(row.title)),
+    title: normalizeFeedTitle({ title: decodeHtmlText(String(row.title)), contentHtml, url, feedTitle }),
     author: decodeHtmlText(String(row.author)),
     url,
     contentHtml,

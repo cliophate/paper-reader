@@ -1,4 +1,4 @@
-export interface DiscoveryCandidate { url: string; title: string; format: 'rss' | 'atom' | 'rdf' }
+export interface DiscoveryCandidate { url: string; title: string; format: 'rss' | 'atom' | 'rdf' | 'json' }
 export interface DiscoveryResult { responseUrl: string; candidates: DiscoveryCandidate[] }
 export interface ImportRow {
   key: string

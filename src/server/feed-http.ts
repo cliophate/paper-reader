@@ -122,8 +122,8 @@ export async function boundedFetch(input: string, options: BoundedFetchOptions =
             agent: false, signal, maxHeaderSize: 16 * 1024,
             lookup: (_hostname, lookupOptions, callback) => lookupOptions.all
               ? callback(null, [addresses[0]]) : callback(null, addresses[0].address, addresses[0].family),
-            headers: { Accept: options.accept || 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/html',
-              'Accept-Encoding': 'gzip, deflate, br', 'User-Agent': options.userAgent ?? 'Paper feed collector',
+            headers: { Accept: options.accept || 'application/rss+xml, application/atom+xml, application/feed+json, application/xml, text/xml, text/html',
+              'Accept-Encoding': 'gzip, deflate, br', 'User-Agent': options.userAgent ?? 'Mozilla/5.0 (compatible; Paper/0.1; feed reader)',
               ...(options.acceptLanguage ? { 'Accept-Language': options.acceptLanguage } : {}),
               ...(etag ? { 'If-None-Match': etag } : {}), ...(lastModified ? { 'If-Modified-Since': lastModified } : {}) },
           }, resolve)

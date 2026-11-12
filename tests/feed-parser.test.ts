@@ -84,6 +84,41 @@ describe('feed parsing', () => {
   it('allows predefined/numeric XML entities and literal entity text in CDATA', () => {
     expect(parseFeed(rss('<item><guid>x</guid><title>&amp; &#65; &#x42;</title><description><![CDATA[Literal &unknown;]]></description></item>'), base).entries[0].title).toBe('& A B')
   })
+  it('repairs publisher whitespace, literal control characters, HTML entities and bare URL ampersands', () => {
+    const xml = '\n\n<?xml version="1.0"?>' + rss('<item><guid>a</guid><title>A&nbsp;B\x0c</title><link>https://example.test/?a=1&b=2</link><description><![CDATA[<p>Keep &amp; and &nbsp;</p>]]></description></item>')
+    expect(parseFeed(xml, base).entries[0]).toMatchObject({ title: 'A B', url: 'https://example.test/?a=1&b=2' })
+    expect(parseFeed(xml, base).entries[0].contentHtml).toContain('Keep &amp; and')
+    expect(() => parseFeed(rss('<item>&unknown;</item>'), base)).toThrow()
+    expect(() => parseFeed(rss('<item>&#0;</item>'), base)).toThrow()
+  })
+  it('removes only an empty Cloudflare email-decoding script appended after RSS', () => {
+    const script = '<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script>'
+    expect(parseFeed(rss('<item><guid>x</guid></item>') + script, base).entries).toHaveLength(1)
+    expect(() => parseFeed(rss('') + script.replace('></script>', '>alert(1)</script>'), base)).toThrow()
+    expect(() => parseFeed(rss('') + '<script src="https://evil.test/a.js"></script>', base)).toThrow()
+  })
+  it('parses JSON Feed 1 and 1.1 with safe HTML, inherited authors and conflicting IDs', () => {
+    for (const version of ['1', '1.1']) {
+      const body = JSON.stringify({ version: 'https://jsonfeed.org/version/' + version, title: 'JSON', home_page_url: '/', authors: [{ name: 'Ada' }], items: [
+        { id: 'a', title: 'One', url: '/one', date_published: '2024-01-01', content_html: '<p>Hello <a href="/source">source</a><script>bad()</script></p>' },
+        { id: 'a', title: 'Two', external_url: 'javascript:bad()', content_text: '<script>literal</script>' },
+      ] })
+      const feed = parseFeed(body, base)
+      expect(feed).toMatchObject({ format: 'json', title: 'JSON', siteUrl: 'https://example.test/', conflictingExternalIds: ['a'] })
+      expect(feed.entries[0]).toMatchObject({ author: 'Ada', url: 'https://example.test/one', publishedAt: '2024-01-01T00:00:00.000Z' })
+      expect(feed.entries[0].contentHtml).toContain('href="https://example.test/source"')
+      expect(feed.entries[0].contentHtml).not.toContain('bad()')
+      expect(feed.entries[1]).toMatchObject({ url: '', contentHtml: '&lt;script&gt;literal&lt;/script&gt;' })
+      expect(feed.entries.every(entry => !entry.externalId)).toBe(true)
+    }
+  })
+  it('bounds JSON structure and items and refuses invalid JSON Feed objects', () => {
+    const feed = (items: unknown[]) => JSON.stringify({ version: 'https://jsonfeed.org/version/1.1', title: 'Fixture', items })
+    for (const body of ['{', '{}', feed([{ id: 1 }]), feed([{ id: '' }])]) expect(() => parseFeed(body, base)).toThrow()
+    expect(() => parseFeed(feed(Array.from({ length: FEED_LIMITS.entries + 1 }, (_, id) => ({ id: String(id) }))), base)).toThrow(/entry limit/)
+    const nested = '{"version":"https://jsonfeed.org/version/1.1","title":"X","items":[],"extra":' + '['.repeat(70) + '0' + ']'.repeat(70) + '}'
+    expect(() => parseFeed(nested, base)).toThrow(/structure limit/)
+  })
   it('bounds bytes, nesting, nodes and entries before ingestion', () => {
     expect(() => parseFeed('é'.repeat(FEED_LIMITS.bytes / 2 + 1), base)).toThrow(/byte limit/)
     expect(() => parseFeed(rss('<x>'.repeat(64) + '</x>'.repeat(64)), base)).toThrow(/structure limit/)

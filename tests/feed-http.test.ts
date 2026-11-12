@@ -27,7 +27,7 @@ async function server(handler: RequestListener) {
   return `http://127.0.0.1:${address.port}`
 }
 afterEach(async () => { await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()) }))); vi.restoreAllMocks() })
-const xml = '<rss><channel><title>Fixture</title></channel></rss>'
+const xml = '<rss version="2.0"><channel><title>Fixture</title></channel></rss>'
 
 describe('bounded feed HTTP transport', () => {
   it('keeps collector header defaults and sends only the requested reader header overrides', async () => {
@@ -39,7 +39,7 @@ describe('bounded feed HTTP transport', () => {
     await boundedFetch(origin, { trustedOrigins: [origin] })
     await boundedFetch(origin, { trustedOrigins: [origin], userAgent: 'PaperReader test', acceptLanguage: 'en-US,en;q=0.8' })
     expect(seen).toEqual([
-      { userAgent: 'Paper feed collector', acceptLanguage: undefined },
+      { userAgent: 'Mozilla/5.0 (compatible; Paper/0.1; feed reader)', acceptLanguage: undefined },
       { userAgent: 'PaperReader test', acceptLanguage: 'en-US,en;q=0.8' },
     ])
   })
@@ -53,6 +53,9 @@ describe('bounded feed HTTP transport', () => {
     for (const address of ['127.0.0.1', '169.254.169.254', '100.64.1.1', '192.0.2.1', '224.0.0.1']) expect(isPublicAddress(address, 4)).toBe(false)
     for (const address of ['::1', '::ffff:127.0.0.1', '64:ff9b::7f00:1', '2002:7f00:1::', 'ff02::1', 'fe80::1', '2001:db8::1']) expect(isPublicAddress(address, 6)).toBe(false)
     expect(isPublicAddress('8.8.8.8', 4)).toBe(true)
+    expect(isPublicAddress('::ffff:8.8.8.8', 6)).toBe(true)
+    expect(isPublicAddress('0:0:0:0:0:ffff:808:808', 6)).toBe(true)
+    for (const ip of ['::ffff:192.168.1.1', '::ffff:7f00:1', '::ffff:100.64.1.1']) expect(isPublicAddress(ip, 6)).toBe(false)
     expect(isPublicAddress('2606:4700:4700::1111', 6)).toBe(true)
     expect((await boundedFetch(origin, { trustedOrigins: [origin] })).text).toBe(xml)
   })

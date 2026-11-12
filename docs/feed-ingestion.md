@@ -7,11 +7,12 @@ reading state. Successful ingestion can replace an auto-filled subscription titl
 
 ## Supported feeds
 
-`parseFeed(xml, responseUrl)` accepts a decoded XML string and the final HTTP
+`parseFeed(xml, responseUrl)` accepts a decoded XML or JSON string and the final HTTP
 response URL. It supports [RSS 2.0](https://www.rssboard.org/rss-specification),
 the same channel/item structure in RSS 0.91 and 0.92,
 [Atom 1.0](https://www.rfc-editor.org/rfc/rfc4287), and
-[RSS/RDF 1.0](https://web.resource.org/rss/1.0/spec) and 0.90. It matches XML
+[RSS/RDF 1.0](https://web.resource.org/rss/1.0/spec) and 0.90, and
+[JSON Feed 1 and 1.1](https://www.jsonfeed.org/version/1.1/). It matches XML
 namespace URIs, so publishers may choose their own prefixes. Unrelated extension
 items and titles do not replace feed fields.
 
@@ -28,9 +29,17 @@ through Paper's existing sanitizer. URL fields accept HTTP and HTTPS without
 embedded credentials. Image `srcset` candidates are removed; the ordinary `src`
 remains. Parsing does not execute scripts or load external resources.
 
-The parser rejects malformed XML, all document types and entity declarations,
-unknown XML entities, and unsupported roots. Predefined XML entities and numeric
-references remain supported. Limits are 5 MiB of UTF-8 decoded input, 64 nested
+JSON Feed imports item IDs, URLs, HTML or plain text bodies, publication dates,
+images, and item or feed authors. Discovery and replacement previews use the same
+parser as collection.
+
+Before strict XML parsing, Paper removes leading whitespace and invalid literal
+control characters, escapes bare ampersands, and converts known HTML entities to
+numeric references. It also removes an empty Cloudflare email decoder appended
+after the RSS root. CDATA, comments and processing instructions keep their entity
+text. Other malformed XML, document types, entity declarations, unknown entities,
+and unsupported roots are rejected. Predefined entities and numeric references
+remain supported. Limits are 5 MiB of UTF-8 decoded input, 64 nested
 elements, 100,000 elements, and 5,000 entries. No truncated feed is committed.
 The HTTP collector must separately bound response bytes during transfer and
 decompression, decode the response encoding, check redirects and enforce the

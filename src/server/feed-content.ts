@@ -1,4 +1,5 @@
 import { JSDOM } from 'jsdom'
+import { decodeHTML } from 'entities'
 import { escapeHtml, plainText } from './text.js'
 
 interface FeedContent {
@@ -18,6 +19,7 @@ export function normalizeFeedContent(entry: FeedContent): string {
     html = stripHuggingFaceModelPreamble(html)
   }
 
+  if (host === 'macrumors.com' || host === 'www.macrumors.com') html = cleanMacRumors(html)
   if (host === 'reactormag.com') html = stripReactorChrome(html)
   if (host === 'aperture.org') html = stripApertureAds(html)
   if (host === 'ofdollarsanddata.com') html = restoreBlankLineParagraphs(html)
@@ -33,6 +35,59 @@ export function normalizeFeedContent(entry: FeedContent): string {
   if (host === 'theregister.com' || host.endsWith('.theregister.com')) html = paragraphizeRegisterArticle(html)
 
   return html.trim()
+}
+
+
+export function normalizeFeedTitle(entry: FeedContent & { title: string }): string {
+  const title = entry.title.trim()
+  if (!/^https?:\/\//i.test(title)) return entry.title
+  const host = hostname(title)
+  if (title !== entry.url && !host.endsWith('.micro.blog')) return entry.title
+  const text = plainText(entry.contentHtml).trim()
+  if (text) return text.length > 120 ? text.slice(0, 117).trimEnd() + '...' : text
+  if (/<img\b/i.test(entry.contentHtml)) return 'Photo'
+  return 'Untitled post'
+}
+
+function cleanGumroadNewsletter(document: Document, title?: string) {
+  const leading = document.body.firstChild
+  if (title && leading?.nodeType === 3 && decodeHTML(leading.textContent || '').trim() === title.trim()) leading.remove()
+  const compact = (text: string) => text.replace(/\s+/g, ' ').trim()
+  const prose = compact([...document.querySelectorAll('p')].map(p => p.textContent).join(' '))
+  for (const div of [...document.querySelectorAll('div')]) {
+    if (div.children.length || !div.textContent) continue
+    const preview = compact(div.textContent).replace(/\.{3}$/, '')
+    if (preview.length >= 40 && prose.startsWith(preview)) div.remove()
+  }
+  for (const heading of document.querySelectorAll('h1, h2')) {
+    if (title && heading.textContent?.trim() === title.trim()) heading.remove()
+  }
+  for (const p of document.querySelectorAll('p')) {
+    if (!/^You've received this email because/i.test(p.textContent?.trim() || '')) continue
+    const footer = p.parentElement
+    if (footer?.querySelector('a[href*="unsubscribe"]') && footer.querySelectorAll('p').length <= 2) footer.remove()
+  }
+  for (const link of document.querySelectorAll('a')) {
+    if (/^Powered by\s*$/i.test(link.textContent?.trim() || '') && link.querySelector('img[src*="gumroad.com/"]')) link.remove()
+  }
+  for (const image of document.querySelectorAll('img[src]')) {
+    if (/^https?:\/\/track\.gumroad\.com\/CI\d\//i.test(image.getAttribute('src') || '')) image.remove()
+  }
+}
+
+function cleanMacRumors(html: string): string {
+  const dom = new JSDOM(`<body>${html}</body>`)
+  try {
+    const document = dom.window.document
+    for (const div of document.querySelectorAll('div')) {
+      if (/^(?:Related Roundups?|Tags?|Buyer's Guide|Related Forums?):/i.test(div.textContent?.trim() || '') && div.querySelector('a[href*="macrumors.com/"]') && !div.querySelector('p')) div.remove()
+    }
+    // The publisher appends its syndication credit and forum links after prose.
+    const serialized = document.body.innerHTML.replace(/<br\s*\/?>(?:\s*<br\s*\/?>)*\s*This article,\s*"<a href="https:\/\/(?:www\.)?macrumors\.com\/[\s\S]*$/, '')
+    if (document.querySelector('p')) return serialized
+    return serialized.replace(/(?:\r?\n)?<br\s*\/?>(?:\s*<br\s*\/?>)+/gi, '</p><p>')
+      .replace(/^([\s\S]+)$/, '<p>$1</p>').replace(/<p>\s*<\/p>/g, '')
+  } finally { dom.window.close() }
 }
 
 function cleanEnclosures(html: string): string {
@@ -67,6 +122,7 @@ function cleanNewsletterLayout(html: string, title?: string): string {
   const dom = new JSDOM(`<body>${html}</body>`)
   try {
     const document = dom.window.document
+    if (/track\.gumroad\.com/i.test(html)) cleanGumroadNewsletter(document, title)
     const leadingText = document.body.firstChild
     if (title && leadingText?.nodeType === dom.window.Node.TEXT_NODE && leadingText.textContent?.trim() === title.trim()) leadingText.remove()
     // Substack mail includes a hidden preview and a large email header outside
