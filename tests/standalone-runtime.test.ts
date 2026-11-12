@@ -64,3 +64,16 @@ it('aborts an active pass without recording a shutdown error or starting another
   expect(run).toHaveBeenCalledOnce()
   expect(delay).not.toHaveBeenCalled()
 })
+
+it('repairs a subscription in place and rejects stale or duplicate endpoints', async () => {
+  const backend = new StandaloneBackend(db)
+  const id = db.saveLocalSubscription(backend.identity.id, { title: 'Fixture', url: 'https://example.test/old' })
+  const generation = db.feedFetch.get(backend.identity.id, id)!.endpointGeneration
+  await runtime.repairFeed(id, 'https://example.test/new', 'https://example.test/old')
+  expect(db.localNavigation().uncategorized.find(feed => feed.id === id)).toMatchObject({ title: 'Fixture', url: 'https://example.test/new' })
+  expect(db.feedFetch.get(backend.identity.id, id)).toMatchObject({ url: 'https://example.test/new', failures: 0, availableAt: 0 })
+  expect(db.feedFetch.get(backend.identity.id, id)!.endpointGeneration).not.toBe(generation)
+  await expect(runtime.repairFeed(id, 'https://example.test/other', 'https://example.test/old')).rejects.toThrow(/changed/)
+  db.saveLocalSubscription(backend.identity.id, { title: 'Other', url: 'https://example.test/other' })
+  await expect(runtime.repairFeed(id, 'https://example.test/other', 'https://example.test/new')).rejects.toThrow(/already subscribed/)
+})

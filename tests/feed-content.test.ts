@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { JSDOM } from 'jsdom'
-import { normalizeFeedContent, normalizeFeedThumbnail } from '../src/server/feed-content.js'
+import { normalizeFeedContent, normalizeFeedThumbnail, normalizeFeedTitle } from '../src/server/feed-content.js'
 
 describe('feed-specific article cleanup', () => {
   it('removes duplicate enclosure images but keeps distinct images and captions', () => {
@@ -262,5 +262,43 @@ describe('feed-specific article cleanup', () => {
       contentHtml: '<div><p>This article is FREE, but only for humans.</p><p>Log in or register</p><div>Username Password Remember Me</div></div>',
     })
     expect(result).toBe('<p>This article is available after signing in on Banker on Wheels.</p>')
+  })
+})
+
+
+describe('reported article formatting', () => {
+  it('cleans Gumroad newsletter previews, repeated headings, footer and tracking pixels', () => {
+    const title = '"A useful newsletter"'
+    const prose = 'Here is a newsletter introduction long enough to identify its duplicated hidden preview.'
+    const entry = { title, feedTitle: 'Newsletter', url: 'https://reader.example/#newsletter-ab123', contentHtml: '&amp;quot;A useful newsletter&amp;quot;<div><div>' + prose + '...</div><h2>' + title + '</h2><p>' + prose + '</p><p>Keep the story and <a href="https://track.gumroad.com/CL0/story">its link</a>.</p></div><div><p>You\'ve received this email because you got a product. <a href="https://track.gumroad.com/unsubscribe">Unsubscribe</a></p><p>Postal address</p></div><a href="https://gumroad.com/">Powered by<img src="https://assets.gumroad.com/images/email/wordmark_logo.png"></a><img src="https://track.gumroad.com/CI0/pixel"><img src="https://example.test/illustration.jpg">' }
+    const result = normalizeFeedContent(entry)
+    expect(result.split(prose)).toHaveLength(2)
+    expect(result).not.toContain('Postal address')
+    expect(result).not.toContain('CI0/pixel')
+    expect(result).not.toContain('wordmark_logo')
+    expect(result).not.toContain('h2')
+    expect(result).not.toContain('&amp;quot;')
+    expect(result).toContain('CL0/story')
+    expect(result).toContain('illustration.jpg')
+    expect(normalizeFeedContent({ ...entry, contentHtml: result })).toBe(result)
+  })
+  it('paragraphizes MacRumors legacy text and removes feed metadata without dropping article links', () => {
+    const entry = { feedTitle: 'MacRumors', url: 'https://www.macrumors.com/2026/01/01/story/', contentHtml: '<img src="cover.jpg" width="160">First <a href="https://www.macrumors.com/roundup/ipad/">iPad</a> paragraph.<br>\r<br>Second paragraph.<div>Related Roundups: <a href="https://www.macrumors.com/roundup/ipad/">iPad</a></div><div>Buyer\'s Guide: <a href="https://buyersguide.macrumors.com/">Buy</a></div><br>This article, "<a href="https://www.macrumors.com/story">Story</a>" first appeared on MacRumors.com<br>Discuss this article' }
+    const result = normalizeFeedContent(entry)
+    const dom = new JSDOM(result)
+    expect(dom.window.document.querySelectorAll('p')).toHaveLength(2)
+    expect(result).toContain('Second paragraph.')
+    expect(result).toContain('roundup/ipad/')
+    expect(result).not.toContain('Related Roundups')
+    expect(result).not.toContain("Buyer's Guide")
+    expect(result).not.toContain('first appeared')
+    expect(normalizeFeedContent({ ...entry, contentHtml: result })).toBe(result)
+    dom.window.close()
+  })
+  it('gives URL-titled image posts a readable title while preserving real titles', () => {
+    const entry = { feedTitle: 'Photo blog', url: 'https://author.example/post', title: 'http://author.micro.blog/post', contentHtml: '<img src="photo.jpg">' }
+    expect(normalizeFeedTitle(entry)).toBe('Photo')
+    expect(normalizeFeedTitle({ ...entry, contentHtml: '<p>A short note.</p>' })).toBe('A short note.')
+    expect(normalizeFeedTitle({ ...entry, title: 'My actual title' })).toBe('My actual title')
   })
 })

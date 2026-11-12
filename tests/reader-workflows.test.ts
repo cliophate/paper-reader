@@ -95,7 +95,7 @@ describe('reading across changing lists', () => {
 
 describe('replacement feed preview', () => {
   it('reads RSS and namespaced Atom titles without executing markup', () => {
-    expect(parseFeedPreview('<rss><channel><title>Feed</title><item><title>First &amp; second</title><pubDate>Today</pubDate></item></channel></rss>', 'https://example.test/rss')).toMatchObject({ title: 'Feed', items: [{ title: 'First & second', date: 'Today' }] })
+    expect(parseFeedPreview('<rss version="2.0"><channel><title>Feed</title><item><title>First &amp; second</title><pubDate>2024-01-01</pubDate></item></channel></rss>', 'https://example.test/rss')).toMatchObject({ title: 'Feed', items: [{ title: 'First & second', date: '2024-01-01T00:00:00.000Z' }] })
     expect(parseFeedPreview('<feed xmlns="http://www.w3.org/2005/Atom"><title>Atom</title><entry><title>Post</title><updated>2026-09-23</updated></entry></feed>', 'https://example.test/atom').items[0].title).toBe('Post')
   })
   it('rejects website pages, malformed feeds and entity declarations', () => {

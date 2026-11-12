@@ -50,3 +50,7 @@ The optional internal `acquire(url, signal)` hook reserves a connection slot
 for each hop and returns its release callback. It must honor cancellation.
 The scheduler uses it to bound global and per-host connections through redirects.
 Discovery can omit it when its caller already bounds requests.
+
+Public IPv4-mapped IPv6 addresses use the same checks as their IPv4 address.
+Mapped loopback, private, and reserved addresses remain blocked. The default
+user agent identifies Paper in a browser-compatible form.

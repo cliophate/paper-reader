@@ -1,5 +1,6 @@
 import { SaxesParser, type SaxesAttributeNS } from 'saxes'
 import sanitizeHtml from 'sanitize-html'
+import { decodeHTMLStrict } from 'entities'
 import { cleanArticleHtml, escapeHtml, plainText } from './text.js'
 
 const ATOM = 'http://www.w3.org/2005/Atom'
@@ -22,7 +23,7 @@ export interface ParsedFeedEntry {
   thumbnailUrl: string
 }
 export interface ParsedFeed {
-  format: 'rss' | 'atom' | 'rdf'
+  format: 'rss' | 'atom' | 'rdf' | 'json'
   title: string
   siteUrl: string
   entries: ParsedFeedEntry[]
@@ -61,6 +62,54 @@ function date(value: string): string {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : ''
 }
 
+
+// Repair common publisher serialization mistakes before strict parsing. CDATA,
+// comments and processing instructions retain their entity text verbatim.
+function normalizeXml(xml: string): string {
+  const cleaned = xml.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '').trimStart()
+    .replace(/(<\/rss\s*>)\s*<script\s+data-cfasync="false"\s+src="\/cdn-cgi\/scripts\/[a-f\d]+\/cloudflare-static\/email-decode\.min\.js"\s*>\s*<\/script>\s*$/i, '$1')
+  return cleaned.replace(/<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|&(?:([a-z][a-z\d]*);|#(?:\d+|x[a-f\d]+);)?/gi, (token, name: string | undefined) => {
+    if (token[0] !== '&' || token.startsWith('&#')) return token
+    if (!name) return '&amp;'
+    if (['amp', 'lt', 'gt', 'quot', 'apos'].includes(name)) return token
+    const decoded = decodeHTMLStrict(token)
+    return decoded === token ? token : [...decoded].map(char => `&#${char.codePointAt(0)};`).join('')
+  })
+}
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+function string(value: unknown): string { return typeof value === 'string' ? value : '' }
+function parseJsonFeed(body: string, url: string): ParsedFeed {
+  let parsed: unknown
+  try { parsed = JSON.parse(body) } catch { throw new Error('Malformed JSON Feed') }
+  const pending = [{ value: parsed, depth: 0 }]
+  let nodes = 0
+  while (pending.length) {
+    const { value, depth } = pending.pop()!
+    if (++nodes > FEED_LIMITS.nodes || depth >= FEED_LIMITS.depth) throw new Error('Feed exceeds the JSON structure limit')
+    if (value && typeof value === 'object') for (const child of Object.values(value)) pending.push({ value: child, depth: depth + 1 })
+  }
+  const feed = record(parsed)
+  if (!feed || !['https://jsonfeed.org/version/1', 'https://jsonfeed.org/version/1.1'].includes(string(feed.version)) || typeof feed.title !== 'string' || !Array.isArray(feed.items)) throw new Error('Unsupported JSON Feed')
+  if (feed.items.length > FEED_LIMITS.entries) throw new Error('Feed exceeds the entry limit')
+  const authors = (value: unknown) => (Array.isArray(value) ? value : []).map(author => string(record(author)?.name)).filter(Boolean).join(', ')
+  const feedAuthor = authors(feed.authors) || string(record(feed.author)?.name)
+  const entries = feed.items.map(value => {
+    const item = record(value)
+    if (!item || typeof item.id !== 'string' || !item.id.trim()) throw new Error('JSON Feed items require a string ID')
+    const contentHtml = typeof item.content_html === 'string' ? safeHtml(item.content_html, url) : escapeHtml(string(item.content_text))
+    return {
+      externalId: item.id, title: plainText(string(item.title)),
+      author: authors(item.authors) || string(record(item.author)?.name) || feedAuthor,
+      url: feedUrl(string(item.url) || string(item.external_url), url),
+      publishedAt: date(string(item.date_published) || string(item.date_modified)), contentHtml,
+      thumbnailUrl: feedUrl(string(item.image) || string(item.banner_image), url),
+    }
+  })
+  return deduplicate({ format: 'json', title: plainText(feed.title), siteUrl: feedUrl(string(feed.home_page_url), url), entries, conflictingExternalIds: [] })
+}
+
 function parseXml(xml: string, url: string): Node {
   if (Buffer.byteLength(xml, 'utf8') > FEED_LIMITS.bytes) throw new Error('Feed exceeds the XML byte limit')
   const parser = new SaxesParser({ xmlns: true })
@@ -84,7 +133,9 @@ function parseXml(xml: string, url: string): Node {
   parser.on('text', append)
   parser.on('cdata', append)
   parser.on('closetag', () => { stack.pop() })
-  parser.write(xml).close()
+  const normalized = normalizeXml(xml)
+  if (Buffer.byteLength(normalized, 'utf8') > FEED_LIMITS.bytes) throw new Error('Feed exceeds the XML byte limit')
+  parser.write(normalized).close()
   if (!root) throw new Error('Empty feed XML')
   return root
 }
@@ -131,6 +182,8 @@ function atomAuthor(node: Node): string { return value(child(node, 'author', ATO
 export function parseFeed(xml: string, responseUrl: string): ParsedFeed {
   const url = feedUrl(responseUrl)
   if (!url) throw new Error('Feed response URL must use HTTP or HTTPS without credentials')
+  if (Buffer.byteLength(xml, 'utf8') > FEED_LIMITS.bytes) throw new Error('Feed exceeds the byte limit')
+  if (xml.trimStart().startsWith('{')) return parseJsonFeed(xml, url)
   const root = parseXml(xml, url)
   let format: ParsedFeed['format']
   let channel: Node
@@ -176,6 +229,10 @@ export function parseFeed(xml: string, responseUrl: string): ParsedFeed {
       thumbnailUrl: enclosure ? feedUrl(attribute(enclosure, 'url'), enclosure.base) : '',
     }
   })
+  return deduplicate({ format, title, siteUrl, entries, conflictingExternalIds: [] })
+}
+
+function deduplicate({ format, title, siteUrl, entries }: ParsedFeed): ParsedFeed {
   // A reused source ID cannot identify any of its conflicting items. Keep
   // distinct items for fingerprint matching and collapse exact deliveries.
   const seen = new Map<string, string>()

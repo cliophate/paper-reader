@@ -15,6 +15,14 @@ const globalV6 = new BlockList()
 globalV6.addSubnet('2000::', 3, 'ipv6')
 
 export function isPublicAddress(address: string, family: number): boolean {
+  if (family === 6 && isIP(address) === 6) {
+    const canonical = new URL(`http://[${address}]/`).hostname
+    const mapped = /^\[::ffff:([a-f\d]{1,4}):([a-f\d]{1,4})\]$/i.exec(canonical)
+    if (mapped) {
+      const value = parseInt(mapped[1], 16) * 65536 + parseInt(mapped[2], 16)
+      return isPublicAddress([value >>> 24, value >>> 16 & 255, value >>> 8 & 255, value & 255].join('.'), 4)
+    }
+  }
   return family === 4 ? !blocked.check(address, 'ipv4') : family === 6 && globalV6.check(address, 'ipv6') && !blocked.check(address, 'ipv6')
 }
 

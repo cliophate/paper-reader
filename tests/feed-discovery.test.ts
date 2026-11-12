@@ -16,6 +16,12 @@ describe('feed discovery documents', () => {
     expect(() => parse('<rss><channel>', 'text/xml')).toThrow(/valid RSS/)
     expect(() => parse('<!DOCTYPE rss [<!ENTITY x SYSTEM "file:///private">]><rss><channel/></rss>', 'text/xml')).toThrow()
   })
+  it('recognizes direct and advertised JSON Feeds', () => {
+    const body = JSON.stringify({ version: 'https://jsonfeed.org/version/1.1', title: 'JSON', items: [] })
+    expect(parse(body, 'application/feed+json').candidates[0].format).toBe('json')
+    expect(parse('<link rel="alternate" type="application/feed+json" href="/feed">').candidates[0].format).toBe('json')
+    expect(() => parse('{"version":', 'application/feed+json')).toThrow()
+  })
   it('uses only the injected shared transport and its final response URL', async () => {
     const transport = vi.fn(async () => ({ body: '<link rel="alternate" type="application/atom+xml" href="feed">', responseUrl: 'https://redirect.test/path/', contentType: 'text/html' }))
     const result = await discoverFeeds('https://example.test/', transport)

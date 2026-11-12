@@ -63,7 +63,7 @@ export class StandaloneRuntime {
   async addFeed(url: string, title: string, folder: string): Promise<{ refreshError?: string }> { await this.backend.addFeed(url, title, folder); return {} }
   async editFeed(id: string, title: string, folder: string, currentFolder: string) { await this.backend.editFeed(id, title, folder, currentFolder) }
   async removeFeed(id: string) { await this.backend.removeFeed(id) }
-  async repairFeed(_id: string, _url: string, _expectedUrl: string) { throw new Error('Use subscription discovery to add a replacement feed') }
+  async repairFeed(id: string, url: string, expectedUrl: string) { await this.backend.repairFeed(id, url, expectedUrl) }
   async applyOrganizationCommand(command: OrganizationCommand): Promise<{ refreshError?: string }> {
     const current = this.db.organization.snapshot(this.backend.identity.id)
     const result = this.db.organization.apply(this.backend.identity.id, current.revision, [command])
