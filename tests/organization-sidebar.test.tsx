@@ -51,15 +51,17 @@ async function dragTo(handle: Element, row: Element) {
 }
 
 describe('sidebar organization interactions', () => {
-  it('shows broken feeds with zero unread in folders and Uncategorized', async () => {
+  it('hides broken feeds with zero unread in unread-only mode and labels them otherwise', async () => {
     snapshot.navigation.folders[0].feeds[0].broken = true
     snapshot.navigation.uncategorized[0].broken = true
     await render({ unreadOnly: true })
+    expect(button('Essays')).toBeUndefined()
+    expect(button('Uncategorized')).toBeUndefined()
+    await act(async () => root.unmount())
+    container = document.createElement('div'); document.body.append(container); root = createRoot(container)
+    await render()
     await click('Expand Essays')
-    expect(button('First')).toBeTruthy()
-    expect(button('Second')).toBeUndefined()
     await click('Uncategorized')
-    expect(button('Unfiled')).toBeTruthy()
     expect(button('First').textContent).toContain('Update failed')
     expect(button('Unfiled').textContent).toContain('Update failed')
     await editFeeds()

@@ -5,6 +5,10 @@
 The offline FreshRSS migration command was removed. FreshRSS mode remains
 available. Start new installations as standalone.
 
+With unread-only on, the sidebar now hides feeds and folders that have nothing
+unread, even when a feed's last update failed. Failing feeds are listed under
+Needs attention in feed management.
+
 ## 0.1.0-alpha.3
 
 Changes since [0.1.0-alpha.2](https://github.com/cliophate/paper-reader/releases/tag/v0.1.0-alpha.2).
