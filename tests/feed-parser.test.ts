@@ -119,6 +119,11 @@ describe('feed parsing', () => {
     const nested = '{"version":"https://jsonfeed.org/version/1.1","title":"X","items":[],"extra":' + '['.repeat(70) + '0' + ']'.repeat(70) + '}'
     expect(() => parseFeed(nested, base)).toThrow(/structure limit/)
   })
+  it('rejects repeated unfinished CDATA, comments and instructions without rescanning the suffix', () => {
+    for (const opener of ['<![CDATA[', '<!--', '<?']) {
+      expect(() => parseFeed(rss('<item>') + opener.repeat(100_000), base)).toThrow(/Malformed/)
+    }
+  })
   it('bounds bytes, nesting, nodes and entries before ingestion', () => {
     expect(() => parseFeed('é'.repeat(FEED_LIMITS.bytes / 2 + 1), base)).toThrow(/byte limit/)
     expect(() => parseFeed(rss('<x>'.repeat(64) + '</x>'.repeat(64)), base)).toThrow(/structure limit/)
