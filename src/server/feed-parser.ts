@@ -68,13 +68,28 @@ function date(value: string): string {
 function normalizeXml(xml: string): string {
   const cleaned = xml.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '').trimStart()
     .replace(/(<\/rss\s*>)\s*<script\s+data-cfasync="false"\s+src="\/cdn-cgi\/scripts\/[a-f\d]+\/cloudflare-static\/email-decode\.min\.js"\s*>\s*<\/script>\s*$/i, '$1')
-  return cleaned.replace(/<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|&(?:([a-z][a-z\d]*);|#(?:\d+|x[a-f\d]+);)?/gi, (token, name: string | undefined) => {
-    if (token[0] !== '&' || token.startsWith('&#')) return token
-    if (!name) return '&amp;'
-    if (['amp', 'lt', 'gt', 'quot', 'apos'].includes(name)) return token
-    const decoded = decodeHTMLStrict(token)
-    return decoded === token ? token : [...decoded].map(char => `&#${char.codePointAt(0)};`).join('')
-  })
+  const tokens = /<!\[CDATA\[|<!--|<\?|&(?:([a-z][a-z\d]*);|#(?:\d+|x[a-f\d]+);)?/gi
+  const parts: string[] = []
+  let cursor = 0
+  for (let match; (match = tokens.exec(cleaned));) {
+    parts.push(cleaned.slice(cursor, match.index))
+    const token = match[0], name = match[1]
+    if (token[0] === '<') {
+      const endMarker = token === '<![CDATA[' ? ']]>' : token === '<!--' ? '-->' : '?>'
+      const end = cleaned.indexOf(endMarker, tokens.lastIndex)
+      if (end < 0) throw new Error('Malformed feed XML')
+      tokens.lastIndex = end + endMarker.length
+      parts.push(cleaned.slice(match.index, tokens.lastIndex))
+    } else if (token.startsWith('&#') || ['amp', 'lt', 'gt', 'quot', 'apos'].includes(name)) parts.push(token)
+    else if (!name) parts.push('&amp;')
+    else {
+      const decoded = decodeHTMLStrict(token)
+      parts.push(decoded === token ? token : [...decoded].map(char => `&#${char.codePointAt(0)};`).join(''))
+    }
+    cursor = tokens.lastIndex
+  }
+  parts.push(cleaned.slice(cursor))
+  return parts.join('')
 }
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
