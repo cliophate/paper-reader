@@ -478,7 +478,7 @@ export default function App() {
 
   const revealReaderChrome = useCallback(() => {
     const top = articleRef.current?.querySelector<HTMLElement>('.article-scroll')?.scrollTop || 0
-    readerChromeScroll.current = initialReaderChromeScrollState(top)
+    readerChromeScroll.current = initialReaderChromeScrollState(Math.max(0, top - ARTICLE_BOUNDARY_ZONE_SIZE))
     setReaderChromeHidden(false)
   }, [])
 
@@ -498,7 +498,9 @@ export default function App() {
     articleBoundaryStore.set(boundary)
 
     const logicalTop = Math.max(0, scroll.scrollTop - ARTICLE_BOUNDARY_ZONE_SIZE)
-    if (!readerChromeCanAutoHide(scroll.scrollHeight, scroll.clientHeight, ARTICLE_BOUNDARY_ZONE_SIZE)) {
+    const style = getComputedStyle(scroll)
+    const chromeHeight = (parseFloat(style.scrollPaddingTop) || 0) + (parseFloat(style.scrollPaddingBottom) || 0)
+    if (!readerChromeCanAutoHide(scroll.scrollHeight, scroll.clientHeight, ARTICLE_BOUNDARY_ZONE_SIZE, chromeHeight)) {
       readerChromeScroll.current = initialReaderChromeScrollState(logicalTop)
       setReaderChromeHidden(false)
       return
@@ -655,7 +657,11 @@ export default function App() {
     }
     onChange()
     mobile.addEventListener('change', onChange)
-    return () => mobile.removeEventListener('change', onChange)
+    window.addEventListener('orientationchange', revealReaderChrome)
+    return () => {
+      mobile.removeEventListener('change', onChange)
+      window.removeEventListener('orientationchange', revealReaderChrome)
+    }
   }, [revealReaderChrome])
 
   const pushLocation = useCallback((next: Partial<ReaderLocation>) => {
@@ -1468,6 +1474,7 @@ export default function App() {
       <main className="reader-pane panel">
         {selected ? <ArticleView
           ref={articleRef}
+          active={view === 'reader' && mobilePane === 'article'}
           entry={selected}
           feedIconUrl={feedIcons.get(selected.feedId) || ''}
           onBack={closeEntry}
@@ -1513,11 +1520,11 @@ export default function App() {
         ? <BriefingLibrary onBack={openSources} />
         : <TopicsLibrary initialCollection={linkedCollection} feedIcons={feedIcons} refreshKey={topicsRefreshKey} onBack={openSources} onOpenEntry={(id, context) => void openTopicEntry(id, context)} onMarkRead={markTopicRead} notify={notify} />}
 
-      <nav className="mobile-tabs" aria-label="Mobile navigation">
+      <MobileTabs boundaryStore={articleBoundaryStore}>
         <button className={view === 'reader' && mobilePane === 'sources' ? 'active' : ''} onClick={openSources}><Icon name="folder" /><span>Sources</span></button>
         <button className={view !== 'reader' || mobilePane === 'stories' ? 'active' : ''} onClick={() => view === 'briefings' ? openBriefings() : view === 'pulse' ? openTopics() : changeMobilePane('stories')}><Icon name={view === 'briefings' ? 'reader' : view === 'pulse' ? 'topics' : 'feed'} /><span>{view === 'briefings' ? 'Briefings' : view === 'pulse' ? 'Pulse' : 'Stories'}</span></button>
         <button className={mobilePane === 'article' ? 'active' : ''} disabled={!selected} onClick={() => selected && changeMobilePane('article')}><Icon name="bookmark" /><span>Reading</span></button>
-      </nav>
+      </MobileTabs>
 
       {bulkPreview && <Modal title="Mark search results read" onClose={() => !bulkBusy && setBulkPreview(null)}><p>{bulkPreview.label}: {bulkPreview.count} unread articles will be marked read.</p><button disabled={bulkBusy || !bulkPreview.count} onClick={() => {
         const generation = readerGeneration.current
@@ -1778,7 +1785,13 @@ const StoryRow = forwardRef<HTMLElement, { entry: Entry; active: boolean; onOpen
   </article>
 })
 
+function MobileTabs({ boundaryStore, children }: { boundaryStore: ArticleBoundaryStore; children: React.ReactNode }) {
+  const nextEdgeActive = useSyncExternalStore(boundaryStore.subscribe, () => boundaryStore.getSnapshot()?.direction === 'next')
+  return <nav className={`mobile-tabs${nextEdgeActive ? ' next-edge-active' : ''}`} aria-label="Mobile navigation">{children}</nav>
+}
+
 const ArticleView = forwardRef<HTMLElement, {
+  active: boolean
   entry: Entry
   feedIconUrl: string
   onBack: () => void
@@ -1820,9 +1833,25 @@ const ArticleView = forwardRef<HTMLElement, {
   previousTitle: string
   nextTitle: string
   onSelectionContext: (state: SelectionContextState | null) => void
-}>(function ArticleView({ entry, feedIconUrl, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, readwiseBusy, readwiseConfigured, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onReadwise, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, selectionActionsConfigured, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, transition, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext }, ref) {
+}>(function ArticleView({ active, entry, feedIconUrl, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, readwiseBusy, readwiseConfigured, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onReadwise, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, selectionActionsConfigured, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, transition, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext }, ref) {
   const content = useRef<HTMLDivElement>(null)
+  const chrome = useRef<HTMLDivElement>(null)
   const [hasSelection, setHasSelection] = useState(false)
+  useLayoutEffect(() => {
+    const scroll = content.current
+    const controls = chrome.current
+    if (!scroll || !controls) return
+    // Set the inset before the parent's reading-position restore. Transforms
+    // leave this height intact when the controls hide.
+    const measure = () => {
+      const height = controls.offsetHeight
+      if (height) scroll.style.setProperty('--reader-controls-height', `${height}px`)
+    }
+    measure()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    observer?.observe(controls)
+    return () => observer?.disconnect()
+  }, [active, entry.id, collectionTitle, online, actionError, fullTextError, hasSelection])
   useEffect(() => {
     const update = () => setHasSelection(Boolean(content.current && selectedTextWithin(content.current)))
     document.addEventListener('selectionchange', update)
@@ -1846,32 +1875,34 @@ const ArticleView = forwardRef<HTMLElement, {
   }
 
   return <article className={`article-view kind-${entry.kind}`} tabIndex={-1} ref={ref}>
-    <div className="reader-toolbar">
-      <button className="reader-back-button" onClick={onBack} aria-label={backLabel} title={backLabel}><Icon name="back" /></button>
-      <div className="reader-actions">
-        <button className={entry.starred ? 'active' : ''} onClick={onToggleStar} disabled={!online} aria-label={entry.starred ? 'Remove star' : 'Star article'} title={entry.starred ? 'Remove star' : 'Star article'}><Icon name="star" className={entry.starred ? 'filled' : ''} /><span>{entry.starred ? 'Starred' : 'Star'}</span></button>
-        <button onClick={onToggleRead} disabled={!online} aria-label={entry.read ? 'Mark unread' : 'Mark read'} title={entry.read ? 'Mark unread' : 'Mark read'}><Icon name={entry.read ? 'archive' : 'check'} /><span>{entry.read ? 'Mark unread' : 'Mark read'}</span></button>
-        {readwiseConfigured && <button onClick={onReadwise} disabled={!online || readwiseBusy || Boolean(entry.readwiseSavedAt)} aria-label={entry.readwiseSavedAt ? "Saved to Readwise" : "Save to Readwise"} title={entry.readwiseSavedAt ? "Saved to Readwise" : "Save to Readwise"}><Icon name="bookmark" /><span>{entry.readwiseSavedAt ? "Saved" : readwiseBusy ? "Saving..." : "Readwise"}</span></button>}
-        {entry.kind === 'article' && <button className={entry.fullText ? 'active' : ''} onClick={onFullText} disabled={fullTextBusy || !online} aria-label={fullTextBusy ? 'Fetching full article' : entry.fullText ? 'Showing full article' : 'Fetch full article'} title={entry.fullText ? 'Showing full article' : 'Fetch full article'}><Icon name="reader" /><span>{fullTextBusy ? 'Fetching...' : entry.fullText ? 'Full text' : 'Full article'}</span></button>}
-        <a href={entry.url} target="_blank" rel="noopener noreferrer" aria-label="Open original" title="Open original"><Icon name="external" /><span>Original</span></a>
-        <button onClick={onCopyUrl} aria-label="Copy article URL" title="Copy article URL"><Icon name="copy" /><span>Copy URL</span></button>
-        <button onClick={onReport} aria-label="Report a problem" title="Report a problem"><Icon name="report" /><span>Report</span></button>
-        {discussionConfigured && <button disabled={!online} onClick={onDiscuss} aria-label="Discuss article" title="Discuss article"><Icon name="discussion" /><span>Discuss</span></button>}
+    <div ref={chrome} className="reader-chrome">
+      <div className="reader-toolbar">
+        <button className="reader-back-button" onClick={onBack} aria-label={backLabel} title={backLabel}><Icon name="back" /></button>
+        <div className="reader-actions">
+          <button className={entry.starred ? 'active' : ''} onClick={onToggleStar} disabled={!online} aria-label={entry.starred ? 'Remove star' : 'Star article'} title={entry.starred ? 'Remove star' : 'Star article'}><Icon name="star" className={entry.starred ? 'filled' : ''} /><span>{entry.starred ? 'Starred' : 'Star'}</span></button>
+          <button onClick={onToggleRead} disabled={!online} aria-label={entry.read ? 'Mark unread' : 'Mark read'} title={entry.read ? 'Mark unread' : 'Mark read'}><Icon name={entry.read ? 'archive' : 'check'} /><span>{entry.read ? 'Mark unread' : 'Mark read'}</span></button>
+          {readwiseConfigured && <button onClick={onReadwise} disabled={!online || readwiseBusy || Boolean(entry.readwiseSavedAt)} aria-label={entry.readwiseSavedAt ? "Saved to Readwise" : "Save to Readwise"} title={entry.readwiseSavedAt ? "Saved to Readwise" : "Save to Readwise"}><Icon name="bookmark" /><span>{entry.readwiseSavedAt ? "Saved" : readwiseBusy ? "Saving..." : "Readwise"}</span></button>}
+          {entry.kind === 'article' && <button className={entry.fullText ? 'active' : ''} onClick={onFullText} disabled={fullTextBusy || !online} aria-label={fullTextBusy ? 'Fetching full article' : entry.fullText ? 'Showing full article' : 'Fetch full article'} title={entry.fullText ? 'Showing full article' : 'Fetch full article'}><Icon name="reader" /><span>{fullTextBusy ? 'Fetching...' : entry.fullText ? 'Full text' : 'Full article'}</span></button>}
+          <a href={entry.url} target="_blank" rel="noopener noreferrer" aria-label="Open original" title="Open original"><Icon name="external" /><span>Original</span></a>
+          <button onClick={onCopyUrl} aria-label="Copy article URL" title="Copy article URL"><Icon name="copy" /><span>Copy URL</span></button>
+          <button onClick={onReport} aria-label="Report a problem" title="Report a problem"><Icon name="report" /><span>Report</span></button>
+          {discussionConfigured && <button disabled={!online} onClick={onDiscuss} aria-label="Discuss article" title="Discuss article"><Icon name="discussion" /><span>Discuss</span></button>}
+        </div>
+        <button className="type-button" onClick={onAppearance} aria-label="Appearance">Aa</button>
       </div>
-      <button className="type-button" onClick={onAppearance} aria-label="Appearance">Aa</button>
-    </div>
-    {!online && <div className="offline-banner" role="status">Offline. Read and star changes need a connection.</div>}
-    {actionError && <div className="article-error" role="alert">{actionError} <button disabled={!online} onClick={onRetryAction}>Retry change</button></div>}
-    {fullTextError && <div className="article-error" role="alert">{fullTextError} <button disabled={fullTextBusy || !online} onClick={onRefreshText}>Retry full article</button></div>}
-    <div className="article-options">
-      {collectionTitle && <button className="collection-return" title="Back to collection" onClick={onBack}>{collectionTitle}</button>}
-      <button disabled={!previousAvailable || navigationBusy} onClick={onPrevious}>Previous</button><button disabled={!nextAvailable || navigationBusy} onClick={onNext}>Next</button>
-      <details><summary>Article options</summary><div className="article-options-menu">
-        {entry.kind === 'article' && <><button disabled={!entry.fullText || !online} onClick={onFeedText}>Show feed version</button><button disabled={fullTextBusy || !online} onClick={onRefreshText}>Refresh full article</button><label>Full text for this feed<select value={fullMode} onChange={event => onFullMode(event.target.value as FullTextMode)}><option value="auto">Auto</option><option value="always">Always</option><option value="never">Never automatically</option></select></label></>}
-        <button disabled={offlineBusy} onClick={onOffline}>{offlineBusy ? 'Saving offline...' : 'Save offline'}</button>
-        {onRemoveOffline && <button onClick={onRemoveOffline}>Remove offline copy</button>}
-      </div></details>
-      {hasSelection && <button onPointerDown={event => event.preventDefault()} onClick={selectedPassage}>Use selected text</button>}
+      {!online && <div className="offline-banner" role="status">Offline. Read and star changes need a connection.</div>}
+      {actionError && <div className="article-error" role="alert">{actionError} <button disabled={!online} onClick={onRetryAction}>Retry change</button></div>}
+      {fullTextError && <div className="article-error" role="alert">{fullTextError} <button disabled={fullTextBusy || !online} onClick={onRefreshText}>Retry full article</button></div>}
+      <div className="article-options">
+        {collectionTitle && <button className="collection-return" title="Back to collection" onClick={onBack}>{collectionTitle}</button>}
+        <button disabled={!previousAvailable || navigationBusy} onClick={onPrevious}>Previous</button><button disabled={!nextAvailable || navigationBusy} onClick={onNext}>Next</button>
+        <details><summary>Article options</summary><div className="article-options-menu">
+          {entry.kind === 'article' && <><button disabled={!entry.fullText || !online} onClick={onFeedText}>Show feed version</button><button disabled={fullTextBusy || !online} onClick={onRefreshText}>Refresh full article</button><label>Full text for this feed<select value={fullMode} onChange={event => onFullMode(event.target.value as FullTextMode)}><option value="auto">Auto</option><option value="always">Always</option><option value="never">Never automatically</option></select></label></>}
+          <button disabled={offlineBusy} onClick={onOffline}>{offlineBusy ? 'Saving offline...' : 'Save offline'}</button>
+          {onRemoveOffline && <button onClick={onRemoveOffline}>Remove offline copy</button>}
+        </div></details>
+        {hasSelection && <button onPointerDown={event => event.preventDefault()} onClick={selectedPassage}>Use selected text</button>}
+      </div>
     </div>
     {navigationBusy && <div className="article-navigation-status" role="status">Loading article...</div>}
     <div ref={content} className="article-scroll" onScroll={onScroll} onTouchEndCapture={() => onTouchEnd(false)} onTouchCancelCapture={() => onTouchEnd(true)} onContextMenu={openSelectionContext}>

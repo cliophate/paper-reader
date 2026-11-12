@@ -70,6 +70,18 @@ diagnostic timings across fixture sizes, run
 `node scripts/article-cleanup-benchmark.mjs`. These fixtures cover known cleanup
 stalls, not a processing-time guarantee for arbitrary HTML.
 
+The reader layout regression runs the built client in Chromium and WebKit with
+synthetic API responses. It starts a static fixture server with no backend or
+account access.
+
+```sh
+npx playwright install --with-deps chromium webkit
+npm run test:browser
+```
+
+It checks phone, tablet, landscape, and desktop layouts, including control
+hide/show, article-boundary gestures, reading progress, and growing controls.
+
 ## Docker integration test
 
 This test requires Docker and Python 3. Build the image, then run:

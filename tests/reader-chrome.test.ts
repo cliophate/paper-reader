@@ -34,4 +34,15 @@ describe('mobile reader chrome', () => {
   it('allows chrome hiding when the article has meaningful reading distance', () => {
     expect(readerChromeCanAutoHide(1800, 754, 96)).toBe(true)
   })
+
+  it('keeps the same eligibility when controls occupy space inside a full-height scroller', () => {
+    expect(readerChromeCanAutoHide(1242, 669, 96)).toBe(true)
+    expect(readerChromeCanAutoHide(1448, 875, 96, 206)).toBe(true)
+    expect(readerChromeCanAutoHide(1067, 875, 96, 206)).toBe(false)
+  })
+
+  it('requires a visible reading area after accounting for controls', () => {
+    expect(readerChromeCanAutoHide(1800, 754, 96, 754)).toBe(false)
+    expect(readerChromeCanAutoHide(1800, 754, 96, Number.NaN)).toBe(false)
+  })
 })

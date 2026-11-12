@@ -11,10 +11,32 @@ export function useReadingProgress(entry: Entry | null, ref: RefObject<HTMLEleme
     const local = stored()[entry.id]
     const position = local && (!entry.lastReadAt || local.at > entry.lastReadAt) ? local.position : entry.readingPosition || 0
     const inset = window.matchMedia('(max-width: 1040px)').matches ? 96 : 0
-    const restore = () => { scroll.scrollTop = inset + Math.max(0, scroll.scrollHeight - scroll.clientHeight - inset * 2) * position }
+    let restored = 0
+    const restore = () => {
+      scroll.scrollTop = inset + Math.max(0, scroll.scrollHeight - scroll.clientHeight - inset * 2) * position
+      restored = scroll.scrollTop
+    }
     restore()
     const frame = requestAnimationFrame(restore)
-    return () => cancelAnimationFrame(frame)
+    // Web fonts, images and measured controls can grow the article after this
+    // first layout. Keep the saved fraction until anything else moves the article.
+    // Native scroll anchoring would move it first, so it waits until then.
+    scroll.style.overflowAnchor = 'none'
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(restore)
+    observer?.observe(scroll)
+    for (const child of Array.from(scroll.children)) observer?.observe(child)
+    const inputs = ['wheel', 'touchstart', 'pointerdown'] as const
+    const moved = () => { if (Math.abs(scroll.scrollTop - restored) > 1) release() }
+    const release = () => {
+      cancelAnimationFrame(frame)
+      observer?.disconnect()
+      scroll.style.overflowAnchor = ''
+      scroll.removeEventListener('scroll', moved)
+      for (const type of inputs) scroll.removeEventListener(type, release, true)
+    }
+    scroll.addEventListener('scroll', moved)
+    for (const type of inputs) scroll.addEventListener(type, release, { capture: true, passive: true })
+    return release
   }, [entry?.id, enabled, ref])
   useEffect(() => {
     if (!entry || !enabled) return

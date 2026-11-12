@@ -12,10 +12,12 @@ const REVEAL_TRAVEL = 32
 const MINIMUM_READING_TRAVEL = 320
 const MINIMUM_READING_VIEWPORT_RATIO = 0.5
 
-export function readerChromeCanAutoHide(scrollHeight: number, clientHeight: number, edgeZoneSize = 0): boolean {
+export function readerChromeCanAutoHide(scrollHeight: number, clientHeight: number, edgeZoneSize = 0, chromeHeight = 0): boolean {
   if (!Number.isFinite(scrollHeight) || !Number.isFinite(clientHeight) || clientHeight <= 0) return false
+  const readingHeight = clientHeight - Math.max(0, chromeHeight)
+  if (!Number.isFinite(readingHeight) || readingHeight <= 0) return false
   const contentTravel = Math.max(0, scrollHeight - clientHeight - Math.max(0, edgeZoneSize) * 2)
-  return contentTravel >= Math.max(MINIMUM_READING_TRAVEL, clientHeight * MINIMUM_READING_VIEWPORT_RATIO)
+  return contentTravel >= Math.max(MINIMUM_READING_TRAVEL, readingHeight * MINIMUM_READING_VIEWPORT_RATIO)
 }
 
 export function initialReaderChromeScrollState(top = 0): ReaderChromeScrollState {
