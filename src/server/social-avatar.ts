@@ -1,8 +1,11 @@
+import { boundedFetch, FeedHttpError } from './feed-http.js'
+
 interface CachedAvatar {
   url: string
   expiresAt: number
 }
 
+const MAX_XML_BYTES = 2 * 1024 * 1024
 const SUCCESS_TTL = 12 * 60 * 60 * 1000
 const FAILURE_TTL = 5 * 60 * 1000
 
@@ -16,17 +19,22 @@ export class SocialAvatarService {
     if (cached && cached.expiresAt > Date.now()) return cached.url
 
     try {
-      const response = await fetch(feedUrl, {
-        headers: { Accept: 'application/rss+xml, application/xml;q=0.9' },
-        signal: AbortSignal.timeout(10_000),
+      const response = await boundedFetch(feedUrl, {
+        trustedOrigins: this.trustedOrigins,
+        accept: 'application/rss+xml, application/xml;q=0.9',
+        timeoutMs: 10_000,
+        maxResponseBytes: MAX_XML_BYTES,
+        maxDecompressedBytes: MAX_XML_BYTES,
+        maxDecodedBytes: MAX_XML_BYTES,
       })
-      if (!response.ok) throw new Error(`RSSHub returned ${response.status}`)
-      const avatarUrl = extractChannelImage(await response.text())
+      if (response.status < 200 || response.status >= 300) throw new Error(`RSSHub returned ${response.status}`)
+      const avatarUrl = extractChannelImage(response.text)
       if (!isHttpsImage(avatarUrl)) throw new Error('The social feed returned no profile image')
       this.cache.set(feedUrl, { url: avatarUrl, expiresAt: Date.now() + SUCCESS_TTL })
       return avatarUrl
     } catch (error) {
-      console.warn(`Could not resolve the social avatar for ${feedUrl}: ${error instanceof Error ? error.message : String(error)}`)
+      const message = error instanceof FeedHttpError ? error.message : 'The social feed returned no usable profile image.'
+      console.warn(`Could not resolve the social avatar for ${new URL(feedUrl).origin}: ${message}`)
       this.cache.set(feedUrl, { url: fallback, expiresAt: Date.now() + FAILURE_TTL })
       return fallback
     }
@@ -36,7 +44,7 @@ export class SocialAvatarService {
 export function isRssHubXUserFeed(value: string, trustedOrigins: string[] = []): boolean {
   try {
     const url = new URL(value)
-    return url.protocol === 'https:'
+    return ['http:', 'https:'].includes(url.protocol)
       && trustedOrigins.includes(url.origin)
       && /^\/twitter\/user\/[^/]+\/?$/.test(url.pathname)
   } catch {
@@ -48,7 +56,7 @@ export function isTrustedSocialFeed(value: string, trustedOrigins: string[] = []
   try {
     const url = new URL(value)
     if (url.protocol === 'https:' && url.hostname === 'api.xgo.ing' && /^\/rss\/user\/[a-f\d]+\/?$/i.test(url.pathname)) return true
-    return url.protocol === 'https:'
+    return ['http:', 'https:'].includes(url.protocol)
       && trustedOrigins.includes(url.origin)
       && [
         /^\/twitter\/user\/[^/]+\/?$/,

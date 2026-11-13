@@ -16,18 +16,21 @@ export interface FullArticle extends ArticleCacheRecord {
 export class ReaderService {
   constructor(private readonly database: PaperDatabase, private readonly fallbackEnabled = false) {}
 
-  async fetch(urlInput: string, maxCacheAgeMs = CACHE_MAX_AGE_MS): Promise<FullArticle> {
+  async fetch(urlInput: string, maxCacheAgeMs = CACHE_MAX_AGE_MS, signal?: AbortSignal): Promise<FullArticle> {
+    signal?.throwIfAborted()
     const url = normalizeUrl(urlInput)
     const cached = this.database.getArticle(url.href)
     if (cached && Date.now() - Date.parse(cached.fetchedAt) < maxCacheAgeMs) return { ...cached, cached: true }
 
-    const { html, finalUrl } = await fetchHtml(url, this.fallbackEnabled)
+    const { html, finalUrl } = await fetchHtml(url, this.fallbackEnabled, signal)
+    signal?.throwIfAborted()
     let extracted: Omit<ArticleCacheRecord, 'url' | 'fetchedAt'>
     try {
       extracted = extractReadableArticle(html, finalUrl.href)
     } catch (error) {
       if (!this.fallbackEnabled) throw error
-      const fallback = await fetchReaderPage(finalUrl).catch(() => null)
+      const fallback = await fetchReaderPage(finalUrl, signal).catch(() => null)
+      signal?.throwIfAborted()
       if (!fallback) throw error
       extracted = extractReadableArticle(fallback.html, finalUrl.href)
     }
@@ -126,10 +129,11 @@ function normalizeUrl(input: string): URL {
   return url
 }
 
-export async function fetchHtml(startUrl: URL, fallbackEnabled = false): Promise<{ html: string; finalUrl: URL }> {
+export async function fetchHtml(startUrl: URL, fallbackEnabled = false, signal?: AbortSignal): Promise<{ html: string; finalUrl: URL }> {
   let response
   try {
     response = await boundedFetch(startUrl.href, {
+      signal,
       accept: 'text/html,application/xhtml+xml',
       userAgent: 'Mozilla/5.0 (compatible; PaperReader/1.0; +https://github.com/cliophate/paper-reader)',
       acceptLanguage: 'en-US,en;q=0.8',
@@ -147,16 +151,16 @@ export async function fetchHtml(startUrl: URL, fallbackEnabled = false): Promise
     throw error
   }
   const url = new URL(response.url)
-  if (fallbackEnabled && [401, 403, 406, 429].includes(response.status)) return fetchReaderPage(url)
+  if (fallbackEnabled && [401, 403, 406, 429].includes(response.status)) return fetchReaderPage(url, signal)
   if (response.status < 200 || response.status >= 300) throw new Error(`The article page returned status ${response.status}`)
   if (!response.contentType.includes('text/html') && !response.contentType.includes('application/xhtml+xml')) throw new Error('The article URL did not return an HTML page')
   return { html: response.text, finalUrl: url }
 }
 
-async function fetchReaderPage(url: URL): Promise<{ html: string; finalUrl: URL }> {
+async function fetchReaderPage(url: URL, signal?: AbortSignal): Promise<{ html: string; finalUrl: URL }> {
   const readerUrl = new URL(`${JINA_READER_ORIGIN}${url.href}`)
   const response = await fetch(readerUrl, {
-    signal: AbortSignal.timeout(45_000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000),
     headers: {
       Accept: 'application/json',
       DNT: '1',

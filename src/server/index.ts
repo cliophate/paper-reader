@@ -23,6 +23,7 @@ import { subscriptionToolsRoutes } from './subscription-tools-routes.js'
 import { freshRssImportStore } from './subscription-import-freshrss.js'
 import { discoveryTransport } from './discovery-transport.js'
 import { ReaderService } from './reader.js'
+import { fullTextRoute } from './fulltext-route.js'
 import { ReadwiseClient } from './readwise.js'
 import { SearchService, SearchUnavailableError } from './search-service.js'
 import { entryMatchesSearch } from './search.js'
@@ -538,9 +539,7 @@ app.post('/api/notes', asyncRoute(async (request, response) => {
   response.status(201).json({ ok: true, result: await kirby.createNote({ title, sourceUrl, quote }) })
 }))
 
-app.post('/api/fulltext', asyncRoute(async (request, response) => {
-  response.json(await reader.fetch(String(request.body?.url || ''), request.body?.refresh === true ? 0 : undefined))
-}))
+app.post('/api/fulltext', fullTextRoute(reader))
 
 app.post('/api/x/thread', asyncRoute(async (request, response) => {
   if (!config.rssHub.baseUrl) return response.status(503).json({ error: 'X threads need an RSSHub connection.' })
