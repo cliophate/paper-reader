@@ -7,6 +7,10 @@ import { ReaderService } from './reader.js'
 import { PulseService } from './pulse.js'
 import { TopicService } from './topics.js'
 
+const controller = new AbortController()
+const cancel = () => controller.abort()
+process.once('SIGINT', cancel)
+process.once('SIGTERM', cancel)
 warnUnsafeAi()
 const storage = await openRuntimeStorage()
 try {
@@ -21,7 +25,11 @@ const coverage = new TopicService(database, entries, () => pulse.list().collecti
 const service = new BriefingService(config, database, entries, reader, coverage)
 const kind = process.argv[2] === 'evening' ? 'evening' : 'morning'
 const force = process.argv.includes('--force')
-const result = await service.generate(kind, force)
+const result = await service.generate(kind, force, controller.signal)
 console.log(JSON.stringify({ id: result.id, subject: result.subject, status: result.status, cutoff: result.cutoff }))
 
-} finally { storage.close() }
+} finally {
+  storage.close()
+  process.off('SIGINT', cancel)
+  process.off('SIGTERM', cancel)
+}

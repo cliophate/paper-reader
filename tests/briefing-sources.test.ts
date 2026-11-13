@@ -23,6 +23,13 @@ const selection: BriefingSelection = {
 const decisions = { decisions: [...entries.keys()].map(id => ({ id, relevant: ['0', '2', '4'].includes(id) })) }
 
 describe('briefing source checks', () => {
+  it('propagates cancellation instead of saving a partially checked selection', async () => {
+    const controller = new AbortController()
+    const model = vi.fn(async () => { controller.abort(); throw new Error('cancelled') })
+    await expect(checkBriefingSources(selection, entries, model, new Map(), controller.signal)).rejects.toThrow()
+    expect(model).toHaveBeenCalledTimes(1)
+  })
+
   it('removes GOG and GTA from the maths story, rendered links, image and mark-read membership', async () => {
     const model = vi.fn().mockResolvedValueOnce(decisions).mockResolvedValueOnce({ supported: true })
     const checked = await checkBriefingSources(selection, entries, model)

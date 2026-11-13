@@ -20,6 +20,12 @@ http.createServer(async (request, response) => {
   let text = ''
   for await (const chunk of request) text += chunk
   const body = JSON.parse(text)
+  if (body.model === 'fixture-invalid-schema') {
+    response.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: {
+      message: "Invalid schema for response_format 'output': fixture schema failure", type: 'invalid_request_error', code: 'invalid_json_schema',
+    } }))
+    return
+  }
   records.push(body)
   const schema = body.text?.format?.schema
   const probe = JSON.stringify(body.input).includes('Isolation probe probe-')

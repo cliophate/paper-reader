@@ -20,9 +20,9 @@ export class AiError extends Error {
   }
 }
 
-// Inspect only a bounded diagnostic tail. Never retain it on an Error or log it.
-export function classifyModelFailure(stderr: string): AiFailure {
-  const tail = stderr.slice(-8192)
+// Accept only diagnostics extracted from CLI error events, never raw stderr.
+export function classifyModelFailure(diagnostic: string): AiFailure {
+  const tail = diagnostic.slice(-8192)
   if (/unauthorized|unauthenticated|authentication|invalid[_ -]?(?:api[_ -]?)?key|token.{0,30}(?:expired|invalid)|(?:login|log in|sign in).{0,30}(?:required|again)|\b401\b/i.test(tail)) return 'auth'
   if (/model.{0,80}(?:not found|does not exist|not supported|unsupported|access|permission)|(?:access|permission).{0,80}model|\bmodel_not_found\b|\b403\b/i.test(tail)) return 'model_access'
   if (/invalid.{0,30}schema|schema.{0,30}(?:invalid|validation|error)|invalid json/i.test(tail)) return 'schema'
@@ -30,15 +30,15 @@ export function classifyModelFailure(stderr: string): AiFailure {
   return 'unknown'
 }
 
-export function stderrTail() {
-  let tail = Buffer.alloc(0)
-  return {
-    append(chunk: Buffer) { tail = Buffer.concat([tail, chunk.subarray(-8192)]).subarray(-8192) },
-    failure(code: number | null = null, signal: NodeJS.Signals | null = null) {
-      const category = classifyModelFailure(tail.toString('utf8'))
-      tail = Buffer.alloc(0)
-      return new AiError(category, code, signal)
-    },
-    clear() { tail = Buffer.alloc(0) },
+// Only CLI error events are diagnostics. Message text and echoed inputs are not.
+export function codexEventFailure(output: string): AiFailure {
+  let category: AiFailure = 'unknown'
+  for (const line of output.split('\n')) {
+    try {
+      const event = JSON.parse(line)
+      const message = event?.type === 'turn.failed' ? event.error?.message : event?.type === 'error' ? event.message : undefined
+      if (typeof message === 'string') category = classifyModelFailure(message)
+    } catch { /* Non-event output cannot establish a provider failure. */ }
   }
+  return category
 }

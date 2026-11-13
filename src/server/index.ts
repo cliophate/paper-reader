@@ -1,3 +1,4 @@
+import { withRequestSignal } from './request-signal.js'
 import { AI_UNAVAILABLE, aiAvailability, aiExecutionConfigured, warnUnsafeAi } from './ai-client.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import { organizationRouter } from './organization-routes.js'
@@ -603,7 +604,7 @@ app.post('/api/internal/briefings/generate', requireInternalSecret, asyncRoute(a
   if (!aiExecutionConfigured()) return response.status(503).json({ error: AI_UNAVAILABLE })
   if (!config.ai.briefingsEnabled || !config.codex.enabled) return response.status(503).json({ error: 'Briefing generation is disabled. Enable it in Settings.' })
   const kind = request.body?.kind === 'evening' ? 'evening' : 'morning'
-  const briefing = await briefings.generate(kind)
+  const briefing = await withRequestSignal(request, response, signal => briefings.generate(kind, false, signal))
   response.json({
     id: briefing.id,
     subject: briefing.subject,

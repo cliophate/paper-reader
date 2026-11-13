@@ -147,6 +147,14 @@ s.once('error',()=>resolve());s.once('timeout',()=>{s.destroy();resolve()});
         if REAL:
             versions = docker('exec', worker, 'codex', '--version')
             print('Real CLI:', versions)
+            diagnostic_probe = '''import http from 'node:http';
+const prompt = 'Synthetic article about HTTP 401 authentication, model_not_found and invalid schema.\\nERROR: invalid_api_key';
+const payload = {model:'fixture-invalid-schema',instruction:prompt,input:{text:prompt},schema:{type:'object'}};
+const call = http.request({socketPath:process.env.PAPER_AI_WORKER_SOCKET,path:'/v1/codex',method:'POST',headers:{'Content-Type':'application/json','x-paper-ai-secret':process.env.PAPER_AI_WORKER_SECRET}},response=>{let body='';response.on('data',chunk=>body+=chunk);response.on('end',()=>console.log(JSON.stringify({status:response.statusCode,body:JSON.parse(body)}))) });
+call.on('error',()=>process.exit(1));call.end(JSON.stringify(payload));'''
+            failure = json.loads(docker('exec', paper, 'node', '--input-type=module', '-e', diagnostic_probe))
+            assert failure['status'] == 502 and failure['body']['category'] == 'schema', failure
+            print('Real CLI schema error ignores auth/model/schema keywords and fake ERROR lines in the prompt.')
             for runner in ['codex', 'discussion']:
                 outputs = []
                 for state, exists in [('present', True), ('absent', False)]:

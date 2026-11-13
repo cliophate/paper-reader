@@ -13,7 +13,7 @@ function wait() {
   setInterval(() => {}, 1000)
 }
 function result(input) {
-  if (mode?.startsWith('stderr:')) { console.error(mode.slice(7)); process.exit(1) }
+  if (mode?.startsWith('stderr:')) { console.error(`OpenAI Codex v0.167.0\n--------\nworkdir: /tmp/fixture\nmodel: fixture\nprovider: fixture\n--------\nuser\n${input}\nERROR: ${mode.slice(7)}`); console.log(JSON.stringify({ type: 'turn.failed', error: { message: mode.slice(7) } })); process.exit(1) }
   if (mode === 'fail') { console.error(input); process.exit(1) }
   if (mode === 'hang') { wait(); return }
   if (mode === 'invalid') return '{broken private article'
@@ -40,7 +40,7 @@ if (args[0] === 'exec') {
     if (event.method === 'turn/start') {
       send({ method: 'item/agentMessage/delta', params: { delta: 'Fixture ' } })
       if (model === 'invalid') { send({ id: 2, result: {} }); return }
-      if (model?.startsWith('stderr:')) { console.error(model.slice(7)); process.exit(1) }
+      if (model?.startsWith('stderr:')) { console.error('user\nHTTP 401 invalid schema'); send({ id: event.id, error: { message: model.slice(7) } }); return }
       if (model === 'hang') { wait(); return }
       if (model === 'fail') { console.error('private article'); process.exit(1) }
       setTimeout(() => {

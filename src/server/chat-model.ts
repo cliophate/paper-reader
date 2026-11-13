@@ -1,4 +1,4 @@
-import { AiError, classifyModelFailure, stderrTail } from './ai-errors.js'
+import { AiError, classifyModelFailure } from './ai-errors.js'
 import { requireLocalAi, workerChat } from './ai-client.js'
 import { killModel, modelEnvironment } from './model-process.js'
 import { spawn } from 'node:child_process'
@@ -33,7 +33,6 @@ export function createLocalChatModel(bin: string, model = 'gpt-5.6-sol'): ChatMo
           // Never pass Paper's service tokens into the model process environment.
           env: modelEnvironment(),
         })
-        const diagnostics = stderrTail()
         let buffer = '', text = '', settled = false, failure: AiError | undefined
         const finish = (error?: AiError) => {
           if (settled) return
@@ -50,12 +49,11 @@ export function createLocalChatModel(bin: string, model = 'gpt-5.6-sol'): ChatMo
         child.on('close', (code, exitSignal) => {
           clearTimeout(timeout)
           signal.removeEventListener('abort', cancel)
-          if (!settled) failure = diagnostics.failure(code, exitSignal)
-          diagnostics.clear()
+          if (!settled) failure = new AiError('unknown', code, exitSignal)
           if (failure) { failure.exitCode = code; failure.signal = exitSignal; reject(failure) }
           else resolve(text)
         })
-        child.stderr.on('data', chunk => diagnostics.append(chunk))
+        child.stderr.resume()
         child.stdout.on('data', chunk => {
           if (settled) return
           buffer += chunk.toString()

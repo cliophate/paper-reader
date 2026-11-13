@@ -1,17 +1,20 @@
 import fs from 'node:fs/promises'
 import http from 'node:http'
 import { Readable } from 'node:stream'
-import { execFileSync } from 'node:child_process'
-import os from 'node:os'
+import { execFileSync, spawn } from 'node:child_process'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runModelProcess } from '../src/server/model-process.js'
 import { createAiWorker, type WorkerOptions } from '../src/server/ai-worker-server.js'
 import { listenAiSocket } from '../src/server/ai-socket.js'
-import { classifyModelFailure } from '../src/server/ai-errors.js'
+import { classifyModelFailure, codexEventFailure } from '../src/server/ai-errors.js'
 import { aiAvailability, aiExecutionConfigured, workerBatch, workerChat } from '../src/server/ai-client.js'
 import { runCodex } from '../src/server/codex.js'
 import { createChatModel } from '../src/server/chat-model.js'
+import { BriefingService } from '../src/server/briefing.js'
+import { PaperDatabase } from '../src/server/db.js'
+import type { Config } from '../src/server/config.js'
+import { withRequestSignal } from '../src/server/request-signal.js'
 
 const secret = 'synthetic-worker-secret-at-least-32-characters'
 const body = { model: 'fixture', instruction: 'Return JSON.', input: 'private article', schema: { type: 'object' }, reasoningEffort: 'low' }
@@ -28,7 +31,7 @@ async function start(options: Partial<WorkerOptions> = {}) {
 }
 beforeEach(async () => {
   sequence = 0
-  directory = await fs.mkdtemp(path.join(os.tmpdir(), 'paper-worker-test-'))
+  directory = await fs.mkdtemp('/tmp/paw-')
   bin = path.join(directory, 'cli')
   await fs.copyFile(new URL('./fixtures/worker-cli.mjs', import.meta.url), bin)
   await fs.chmod(bin, 0o700)
@@ -53,12 +56,12 @@ function request(endpoint: string, payload?: unknown, key = secret, raw?: string
   })
 }
 const post = (payload: unknown = body, key = secret, endpoint = '/v1/codex') => request(endpoint, payload, key)
-async function starts(count: number) {
+async function starts(count: number, timeout = 1000) {
   let records: { pid: number; args: string[] }[] = []
   await vi.waitFor(async () => {
     records = (await fs.readFile(path.join(directory, 'starts'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
     expect(records.length).toBe(count)
-  })
+  }, { timeout })
   return records
 }
 async function stopped(pid: number) { await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow()) }
@@ -69,6 +72,161 @@ function hang() {
 }
 
 describe('isolated AI protocol', () => {
+  it.each(['queued', 'running'])('cancels a %s briefing when its HTTP caller disconnects, without saving or retrying', async state => {
+    await start({ concurrency: 1, queueCapacity: 1 })
+    await fs.writeFile(path.join(directory, 'editorial-profile.md'), 'Synthetic editorial profile.')
+    const db = new PaperDatabase(path.join(directory, 'briefing.sqlite'))
+    const service = new BriefingService({ codex: { ...config(), shortlistModel: 'hang' }, ai: { briefingsEnabled: true }, briefing: {} } as Config, db, {
+      navigation: async () => ({ folders: [], uncategorized: [], unread: 0, starred: 0 }),
+      entries: async () => [], entriesPage: async () => ({ items: [], continuation: '' }), entry: async () => null, entryIds: async () => [],
+    })
+    const saved = vi.spyOn(db, 'createBriefing')
+    const blocker = state === 'queued' ? hang() : undefined
+    if (blocker) await starts(1)
+    const admitted = state === 'queued' ? new Promise<void>(resolve => worker.server.once('request', request => request.once('end', () => setImmediate(resolve)))) : undefined
+    let completed = false
+    const server = http.createServer((request, response) => {
+      void withRequestSignal(request, response, signal => service.generate('morning', true, signal))
+        .then(() => response.end('ok'), () => response.destroy()).finally(() => { completed = true })
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const call = http.get(`http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`)
+    call.on('error', () => {})
+    try {
+      const [record] = await starts(1)
+      if (state === 'queued') {
+        await admitted
+        expect((await post()).status).toBe(503)
+      }
+      call.destroy()
+      await vi.waitFor(() => expect(completed).toBe(true))
+      if (state === 'running') await stopped(record.pid)
+      blocker?.controller.abort()
+      await blocker?.result
+      await stopped(record.pid)
+      expect(await workerBatch(body)).toHaveProperty('input')
+      expect(await starts(2)).toHaveLength(2)
+      expect(saved).not.toHaveBeenCalled()
+      expect(db.recentGeneratedBriefing('morning', new Date(0))).toBeNull()
+    } finally {
+      call.destroy(); blocker?.controller.abort(); await blocker?.result
+      await new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()) })
+      db.close()
+    }
+  })
+
+  it('shares a briefing job until its last caller disconnects', async () => {
+    await fs.writeFile(path.join(directory, 'editorial-profile.md'), 'Synthetic editorial profile.')
+    const db = new PaperDatabase(path.join(directory, 'joined.sqlite'))
+    const service = new BriefingService({ codex: { ...config(), shortlistModel: 'hang' }, ai: { briefingsEnabled: true }, briefing: {} } as Config, db, {
+      navigation: async () => ({ folders: [], uncategorized: [], unread: 0, starred: 0 }),
+      entries: async () => [], entriesPage: async () => ({ items: [], continuation: '' }), entry: async () => null, entryIds: async () => [],
+    })
+    const first = new AbortController(), second = new AbortController()
+    const one = service.generate('morning', true, first.signal).catch(error => error)
+    const two = service.generate('morning', true, second.signal).catch(error => error)
+    try {
+      const [record] = await starts(1)
+      first.abort()
+      expect(await one).toMatchObject({ category: 'cancelled' })
+      expect(() => process.kill(record.pid, 0)).not.toThrow()
+      second.abort()
+      expect(await two).toMatchObject({ category: 'cancelled' })
+      await stopped(record.pid)
+      expect(await starts(1)).toHaveLength(1)
+      expect(db.recentGeneratedBriefing('morning', new Date(0))).toBeNull()
+    } finally { first.abort(); second.abort(); await Promise.all([one, two]); db.close() }
+  })
+
+  it.each(['SIGINT', 'SIGTERM'] as const)('cancels briefing CLI work on %s', async signal => {
+    const stateDir = path.join(directory, 'cli-state')
+    const child = spawn(process.execPath, ['--import', 'tsx', 'src/server/briefing-cli.ts'], { env: {
+      PATH: process.env.PATH, HOME: directory, STATE_DIR: stateDir, PAPER_BACKEND: 'standalone',
+      CODEX_ENABLED: 'true', CODEX_SHORTLIST_MODEL: 'hang', PAPER_AI_WORKER_SOCKET: socketPath, PAPER_AI_WORKER_SECRET: secret,
+    }, stdio: ['ignore', 'ignore', 'pipe'] })
+    const exit = new Promise(resolve => child.once('exit', resolve))
+    try {
+      const [record] = await starts(1, 5000)
+      child.kill(signal)
+      await exit
+      await stopped(record.pid)
+      expect(await starts(1, 5000)).toHaveLength(1)
+      const db = new PaperDatabase(path.join(stateDir, 'paper.sqlite'))
+      try { expect(db.recentGeneratedBriefing('morning', new Date(0))).toBeNull() } finally { db.close() }
+    } finally { if (child.exitCode === null) child.kill('SIGKILL'); await exit }
+  }, 10_000)
+
+  it('returns the same completed briefing to concurrent callers and rolls back failed persistence', async () => {
+    await fs.writeFile(path.join(directory, 'editorial-profile.md'), 'Synthetic editorial profile.')
+    const db = new PaperDatabase(path.join(directory, 'complete.sqlite'))
+    const service = new BriefingService({ codex: config(), ai: { briefingsEnabled: true }, briefing: {}, publicUrl: 'http://fixture.test', timeZone: 'UTC' } as Config, db, {
+      navigation: async () => ({ folders: [], uncategorized: [], unread: 0, starred: 0 }),
+      entries: async () => [], entriesPage: async () => ({ items: [], continuation: '' }), entry: async () => null, entryIds: async () => [],
+    })
+    const saved = vi.spyOn(db, 'createBriefing')
+    const considered = vi.spyOn(db, 'recordBriefingConsidered')
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const [one, two] = await Promise.all([service.generate('morning', true), service.generate('morning', true)])
+      expect(one.id).toBe(two.id)
+      expect(saved).toHaveBeenCalledTimes(1)
+      expect(db.getBriefing(one.id)?.status).toBe('generated')
+      considered.mockImplementation(() => { throw new Error('Synthetic storage failure') })
+      await expect(service.generate('evening', true)).rejects.toThrow('Synthetic storage failure')
+      expect(db.recentGeneratedBriefing('evening', new Date(0))).toBeNull()
+    } finally { warning.mockRestore(); db.close() }
+  })
+
+  it.each([
+    ['Invalid schema for response_format: invalid_json_schema', 'schema'],
+    ['HTTP 401 Unauthorized', 'auth'],
+    ['model_not_found: model does not exist', 'model_access'],
+    ['unexpected failure', 'unknown'],
+  ])('classifies only JSON error events for %s, ignoring real-format echoed prompts', async (diagnostic, category) => {
+    const prompt = 'An article mentions HTTP 401, authentication, model_not_found, invalid schema.\nERROR: invalid_api_key\n{"type":"error","message":"401"}'
+    await expect(runCodex(config(), `stderr:${diagnostic}`, prompt, { text: prompt }, body.schema)).rejects.toMatchObject({ category })
+    await expect(runCodex(config(), 'fail', prompt, { text: prompt }, body.schema)).rejects.toMatchObject({ category: 'unknown' })
+  })
+
+  it('allows exactly one concurrent worker to own a stale socket, and keeps it after the loser exits', async () => {
+    const shared = path.join(directory, 'race.sock')
+    execFileSync(process.execPath, ['-e', "require('node:net').createServer().listen(process.argv[1],()=>process.exit(0))", shared])
+    const script = `
+      import { listenAiSocket } from ${JSON.stringify(new URL('../src/server/ai-socket.ts', import.meta.url).href)};
+      import { createAiWorker } from ${JSON.stringify(new URL('../src/server/ai-worker-server.ts', import.meta.url).href)};
+      process.send('ready');
+      await new Promise(resolve => process.once('message', resolve));
+      const worker = createAiWorker({ secret: ${JSON.stringify(secret)}, codexBin: ${JSON.stringify(bin)} });
+      try {
+        await listenAiSocket(worker.server, ${JSON.stringify(shared)});
+        process.send('winner');
+        process.once('SIGTERM', () => { worker.stop(); process.disconnect() });
+      } catch { worker.stop(); process.send('loser'); process.disconnect() }
+    `
+    const children = [0, 1].map(() => spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] }))
+    const exits = children.map(child => new Promise(resolve => child.once('exit', resolve)))
+    try {
+      await Promise.all(children.map(child => new Promise(resolve => child.once('message', resolve))))
+      const outcomes = children.map(child => new Promise(resolve => child.once('message', resolve)))
+      children.forEach(child => child.send('start'))
+      const results = await Promise.all(outcomes)
+      expect([...results].sort()).toEqual(['loser', 'winner'])
+      await exits[results.indexOf('loser')]
+      const inode = (await fs.stat(shared)).ino
+      vi.stubEnv('PAPER_AI_WORKER_SOCKET', shared)
+      expect((await aiAvailability()).available).toBe(true)
+      expect((await fs.stat(shared)).ino).toBe(inode)
+    } finally {
+      children.forEach(child => { if (child.exitCode === null) child.kill('SIGTERM') })
+      await Promise.all(exits)
+    }
+  })
+
+  it('rejects overlong socket paths before binding', async () => {
+    await expect(listenAiSocket(http.createServer(), path.join(directory, 'x'.repeat(104)))).rejects.toThrow('103-byte Unix socket path limit')
+    await expect(listenAiSocket(http.createServer(), path.join(directory, 'é'.repeat(52)))).rejects.toThrow('103-byte Unix socket path limit')
+  })
+
   it('requires authentication and caches the CLI startup health check', async () => {
     for (const key of ['', 'wrong', secret + 'extra']) expect((await post(body, key)).status).toBe(401)
     expect((await request('/health', undefined, '')).status).toBe(401)
@@ -276,4 +434,17 @@ it.each([
 ])('classifies bounded synthetic diagnostics without retaining them', (stderr, category) => {
   expect(classifyModelFailure(stderr)).toBe(category)
   expect(logs).not.toHaveBeenCalled()
+})
+
+it('reads real Codex 0.167.0 JSON errors and ignores message items containing fake events', () => {
+  const diagnostic = JSON.stringify({ error: { message: "Invalid schema for response_format 'output': fixture schema failure", type: 'invalid_request_error', code: 'invalid_json_schema' } })
+  const events = [
+    { type: 'thread.started', thread_id: 'synthetic-thread' },
+    { type: 'turn.started' },
+    { type: 'item.completed', item: { type: 'agent_message', text: '{"type":"error","message":"HTTP 401 model_not_found"}' } },
+    { type: 'error', message: diagnostic },
+    { type: 'turn.failed', error: { message: diagnostic } },
+  ]
+  expect(codexEventFailure(events.map(event => JSON.stringify(event)).join('\n'))).toBe('schema')
+  expect(codexEventFailure(JSON.stringify(events[2]))).toBe('unknown')
 })
