@@ -1,6 +1,6 @@
 services:
   paper:
-    image: ghcr.io/cliophate/paper-reader:0.1.0-alpha.3
+    image: ghcr.io/cliophate/paper-reader:0.1.0-alpha.4
     build:
       context: .
       target: runtime

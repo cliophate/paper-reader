@@ -1,23 +1,129 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-alpha.4
 
-AI runs now use a separate Codex worker container without Paper data or service
-secrets. Existing AI installations must add a shared secret and recreate both
-services. See the [AI upgrade steps](docs/integrations.md#upgrade-an-existing-ai-installation).
-Without the worker, AI is unavailable. Local CLI execution requires the explicit
-unsafe development opt-in.
+Changes since [0.1.0-alpha.3](https://github.com/cliophate/paper-reader/releases/tag/v0.1.0-alpha.3).
+
+### Reader links and layout
+
+Reader links now use short paths such as `/feed/12/the-verge/a/48213`.
+Old query-string links still work and update to the new form. Feed and folder
+renames correct the visible slug without changing standalone link numbers.
+Direct navigation, refresh and saved offline articles support the new paths.
+See [reader routes](docs/reader-routes.md).
+
+On phones and tablets, hiding the reader controls no longer changes the article
+layout or makes it jump. Saved reading positions adjust while fonts load, until
+you start scrolling. Reader actions stay visible in narrow panes, and story
+options have a separate keyboard-accessible button. Feed names have more room
+in sidebar edit mode. Excerpts keep spaces between paragraphs, and unread
+loaded counts use the matching total.
+
+### Feed recovery and reading state
+
+Feed management lists failing feeds under Needs attention. Unread-only mode
+hides feeds and folders with nothing unread, including feeds whose last update
+failed. Failed collection passes retry with backoff instead of stopping collection.
+
+Paper accepts JSON Feed and repairs specific publisher XML mistakes within
+bounded limits. Unfinished XML sections fail without repeated scans of the
+remaining input. Feed URL repair preserves the subscription and its reading
+history. FreshRSS repair uses the optional helper described in
+[integrations](docs/integrations.md#freshrss-helpers).
+
+Reused publisher GUIDs no longer cause distinct articles to overwrite each other.
+Atom entries can use their updated date when the published date is absent.
+Undated articles sort by first fetch, and feed titles replace URL placeholders
+without overwriting custom names. Newsletter and MacRumors cleanup improved,
+and untitled image posts get readable titles.
+
+FreshRSS searches limit upstream pages per request and return a continuation.
+Reading an existing FreshRSS article no longer overwrites its saved body with
+an empty remote response. OPML creates a subscription and its folders together.
+Concurrent database writers wait briefly instead of failing immediately with
+"database is locked".
+
+### Security and request limits
+
+Paper validates the Host header to block DNS rebinding and prevents other sites
+from framing it. Proxies must preserve the original Host header. Set `PUBLIC_URL`
+to the URL you use, including its hostname and port. A mismatch returns HTTP 421;
+`X-Forwarded-Host` is not trusted. Loopback hosts remain allowed. See
+[remote access](docs/access.md).
+
+Article, social avatar and X-thread fetches check destinations and redirects,
+limit response sizes, and block private network access except for explicitly
+trusted origins where supported. Avatar warnings no longer log full feed URLs.
+Full-text extraction allows four active requests; excess requests return a
+retryable HTTP 503. Disconnected requests cancel their fetches. The Docker
+runtime uses Node 24.22.3, and the optional Caddy proxy image is pinned by digest.
+
+### Isolated AI worker
+
+AI runs in a second container, `paper-ai`, reached through an authenticated Unix
+socket. The worker has no Paper data mount or Paper environment file and shares
+no network with Paper. It runs without root privileges, with a read-only root
+filesystem. Batch runs disable the same tools as discussions. The worker provides
+filesystem isolation for CLI tools that configuration alone cannot remove.
+
+Two model runs execute at once, with up to 16 requests waiting. Busy requests
+return a retry message. Logs contain failure categories and request IDs without
+prompts or model output. Concurrent requests for the same briefing share one
+run within a Paper process. Cancellation reaches queued and running work, and
+briefing generation has a ten-minute overall deadline.
 
 OpenCode support was removed. Briefings and collections now use Codex only.
-Old OPENCODE_* variables are ignored with a startup notice. Existing saved
-OpenCode-only settings stay off until Codex is enabled in Settings.
+Old `OPENCODE_*` variables are ignored with a startup notice. Saved OpenCode-only
+settings stay off until you configure and enable Codex.
 
-The offline FreshRSS migration command was removed. FreshRSS mode remains
-available. Start new installations as standalone.
+### Upgrade actions
 
-With unread-only on, the sidebar now hides feeds and folders that have nothing
-unread, even when a feed's last update failed. Failing feeds are listed under
-Needs attention in feed management.
+- Stop Paper and every briefing command. Back up the full data directory,
+  private configuration and AI login directory. Back up FreshRSS separately
+  when used. Alpha.4 uses schema v12, which adds `link_numbers`. Startup creates
+  and validates `paper.sqlite.before-link-numbers-v12` before migrating an
+  existing database. An image rollback does not undo this migration. Restore
+  the matching pre-upgrade database backup for a downgrade. See
+  [backup and restore](docs/recovery.md).
+- For AI installs, run `sh scripts/setup.sh --ai-worker-secret` to add
+  `PAPER_AI_WORKER_SECRET`. Keep the Codex login in `ai-auth/codex` and match
+  `PAPER_UID:PAPER_GID` to its non-root owner. Use the updated AI Compose override
+  to pull and recreate both `paper` and `paper-ai`. Remove old Paper-side AI
+  image overrides, auth mounts and local CLI settings. Follow the full
+  [AI upgrade steps](docs/integrations.md#upgrade-an-existing-ai-installation).
+  Without the worker, AI stays unavailable; reading and saved AI results remain.
+- OpenCode-only installs must configure Codex and enable it in Settings. The
+  old OpenCode auth directory is no longer mounted, but Paper does not delete it.
+- Preserve the Host header in your proxy and match `PUBLIC_URL` to the hostname
+  and port you use before restarting.
+- Set briefing automation timeouts to at least 660 seconds, including n8n HTTP
+  requests, to allow the ten-minute generation deadline to finish.
+
+The offline FreshRSS migration tool was removed. FreshRSS mode remains available.
+Keep the backend and account that own your database. Changing configuration alone
+cannot transfer it. Start new installations as standalone.
+
+### Installation and limits
+
+The [quick start](README.md#quick-start) uses the alpha.4 runtime image. Runtime
+and AI images target Linux amd64. The release workflow publishes both images
+and a runtime archive with a SHA-256 checksum for the pull helper's fallback.
+The archive does not contain the AI worker image.
+
+Paper remains an early single-user alpha with no built-in login. Keep its port
+on loopback or use an [authenticated HTTPS proxy](docs/access.md). AI, Readwise
+Reader and Kirby remain optional. Folders are flat, and OPML transfers
+subscriptions, not article history or settings. Offline browser copies are not
+server backups. Identity conflicts still have no dedicated resolution UI.
+
+### Known alpha issues
+
+These follow-ups remain open:
+
+- [#33](https://github.com/cliophate/paper-reader/issues/33): clearer refresh controls.
+- [#34](https://github.com/cliophate/paper-reader/issues/34): iPad bottom padding.
+- [#35](https://github.com/cliophate/paper-reader/issues/35): header blur report, unconfirmed.
+- [#36](https://github.com/cliophate/paper-reader/issues/36): article-transition flicker.
 
 ## 0.1.0-alpha.3
 
