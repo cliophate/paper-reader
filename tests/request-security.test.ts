@@ -6,6 +6,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, expect, it } from 'vitest'
+import { preventFraming } from '../src/server/response-headers.js'
 
 let directory: string
 let child: ChildProcess | undefined
@@ -13,7 +14,7 @@ afterEach(async () => {
   if (child && child.exitCode === null && child.signalCode === null) {
     const exited = once(child, 'exit'); child.kill('SIGKILL'); await exited
   }
-  fs.rmSync(directory, { recursive: true, force: true })
+  if (directory) fs.rmSync(directory, { recursive: true, force: true })
 })
 
 function request(port: number, route: string, host?: string, method = 'GET', headers = {}) {
@@ -98,7 +99,21 @@ it('lets internal automation reach secret-protected routes by container name', a
   const port = await start('https://paper.example.test')
   const response = await request(port, '/api/internal/briefings/generate', 'paper:8080', 'POST', { 'Content-Type': 'application/json' })
   expect(response.status).toBe(401)
-  expect((await request(port, '/api/internal', 'paper:8080')).status).toBe(421)
+  expect((await request(port, '/api/internal/briefings/synthetic/render', 'paper:8080', 'POST')).status).toBe(401)
+  for (const [route, method] of [['/api/internal', 'GET'], ['/api/internal/missing', 'GET'], ['/api/internal/..%2f..%2fsw.js', 'GET'],
+    ['/api/internal/missing', 'POST'], ['/api/internal/briefings/generate', 'GET']] as const) {
+    expect((await request(port, route, 'evil.test', method)).status, `${method} ${route}`).toBe(421)
+  }
+}, 15000)
+
+it('compares equivalent IPv6 hosts', async () => {
+  const port = await start('https://[2001:0db8:0000:0000:0000:0000:0000:0001]:8443')
+  for (const host of ['[2001:0db8:0000:0000:0000:0000:0000:0001]:8443', '[2001:DB8::1]:8443', '[0:0:0:0:0:0:0:1]']) {
+    expect((await request(port, '/api/status', host)).status, host).toBe(200)
+  }
+  for (const host of ['[2001:db8::2]:8443', '[2001:db8::1]', '[2001:db8:::1]:8443']) {
+    expect((await request(port, '/api/status', host)).status, host).toBe(421)
+  }
 }, 15000)
 
 it('blocks framing on SPA HTML, API, health, errors and rejected hosts', async () => {
@@ -114,10 +129,26 @@ it('blocks framing on SPA HTML, API, health, errors and rejected hosts', async (
   ] as const) {
     const response = await request(port, route, host, method, { Origin: method === 'POST' ? 'https://evil.test' : 'https://paper.example.test' })
     expect(response.headers['content-security-policy'], route).toBe(
-      status === 301 || status === 404 ? "default-src 'none'; frame-ancestors 'none'" : "frame-ancestors 'none'",
+      status === 301 || status === 404 ? "default-src 'none', frame-ancestors 'none'" : "frame-ancestors 'none'",
     )
     expect(response.headers['x-frame-options'], route).toBe('DENY')
     expect(response.status, route).toBe(status)
     if (route === '/' || route === '/reading') expect(response.body).toContain('<title>Synthetic Paper</title>')
   }
 }, 15000)
+
+it('keeps existing CSP policies intact and adds framing as a separate policy', () => {
+  const headers = new Map<string, unknown>()
+  const response = {
+    setHeader(name: string, value: unknown) { headers.set(name.toLowerCase(), value); return this },
+    set(name: string, value: unknown) { return this.setHeader(name, value) },
+  }
+  preventFraming({} as never, response as never, () => {})
+  expect(headers.get('content-security-policy')).toBe("frame-ancestors 'none'")
+  response.setHeader('Content-Security-Policy', "img-src https://images.example; frame-ancestors 'self', script-src 'none'")
+  expect(headers.get('content-security-policy')).toBe("img-src https://images.example; frame-ancestors 'self', script-src 'none', frame-ancestors 'none'")
+  response.setHeader('Content-Security-Policy', ["default-src 'self'", 'frame-ancestors *'])
+  expect(headers.get('content-security-policy')).toBe("default-src 'self', frame-ancestors *, frame-ancestors 'none'")
+  response.setHeader('Content-Security-Policy', "default-src 'none', frame-ancestors 'none'")
+  expect(headers.get('content-security-policy')).toBe("default-src 'none', frame-ancestors 'none'")
+})

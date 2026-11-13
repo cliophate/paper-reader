@@ -10,8 +10,8 @@ case-insensitive; an omitted port means the public URL's default HTTP or HTTPS
 port. Without `PUBLIC_URL`, only those loopback names are accepted. Other hosts
 receive HTTP 421, including on `/health`; the Compose healthcheck uses loopback.
 Proxies must preserve the original `Host` header. Paper ignores `X-Forwarded-Host`.
-The secret-protected `/api/internal/` routes accept any host, so automation can
-call Paper by its container name.
+The secret-protected `POST /api/internal/briefings/...` routes accept any host,
+so automation can call Paper by its container name.
 Paper blocks embedding in frames.
 
 ## Authenticated Caddy example
