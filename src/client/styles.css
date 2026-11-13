@@ -121,9 +121,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, [tabindex]:focus-vis
 .organization-drag-preview small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.4; white-space: normal; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
+/* iOS 26 home-screen apps blur the top ~40pt of the page, and no CSS or meta tag turns that off.
+   Top bars paint the extra band in their own color and keep their controls below it, in a shorter row. */
+:root { --top-inset: env(safe-area-inset-top); --topbar-row: 56px; }
+@media (max-width: 1040px) { :root { --topbar-row: 52px; } }
+@supports (-webkit-touch-callout: none) {
+  @media (display-mode: standalone) and (min-height: 500px) { :root { --top-inset: calc(env(safe-area-inset-top) + 40px); --topbar-row: 44px; } }
+}
+
 .app {
   display: grid;
-  grid-template: 56px minmax(0, 1fr) / 252px 410px minmax(480px, 1fr);
+  grid-template: calc(var(--topbar-row) + var(--top-inset)) minmax(0, 1fr) / 252px 410px minmax(480px, 1fr);
   grid-template-areas: 'top top top' 'side stories reader';
   width: 100%;
   height: 100%;
@@ -140,8 +148,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, [tabindex]:focus-vis
   align-items: center;
   gap: 18px;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
-  padding: 0 20px 0 24px;
+  background: var(--panel);
+  padding: var(--top-inset) 20px 0 24px;
   z-index: 20;
 }
 
@@ -354,13 +362,6 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .article-document { min-height: 100%; }
 .article-edge-zone { display: none; }
 .article-navigation-status { position: absolute; z-index: 2; top: 62px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-strong); color: var(--ink); font-size: 13px; pointer-events: none; }
-.article-transition-next-in { animation: article-next-in 180ms ease-out; }
-.article-transition-previous-in { animation: article-previous-in 180ms ease-out; }
-@keyframes article-next-in { from { opacity: 0; transform: translateY(28px); } }
-@keyframes article-previous-in { from { opacity: 0; transform: translateY(-28px); } }
-@media (prefers-reduced-motion: reduce) {
-  .article-transition-next-in, .article-transition-previous-in { animation: none; }
-}
 .article-column { width: min(var(--reader-width), calc(100% - 72px)); margin: 0 auto; padding: 72px 0 120px; }
 .article-header { margin-bottom: 44px; }
 .original-headline { margin: -8px 0 24px; color: var(--muted); font-size: 13px; }
@@ -688,13 +689,14 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 @media (max-width: 1040px) {
   html, body, #root { overflow: hidden; }
   .app, .app.sidebar-hidden {
-    --mobile-topbar-height: calc(52px + env(safe-area-inset-top));
-    --mobile-tabs-height: calc(58px + env(safe-area-inset-bottom));
+    --mobile-topbar-height: calc(var(--topbar-row) + var(--top-inset));
+    --mobile-tabs-height: calc(66px + env(safe-area-inset-bottom));
+    height: 100dvh;
     display: grid;
     grid-template: var(--mobile-topbar-height) minmax(0, 1fr) var(--mobile-tabs-height) / 100%;
     grid-template-areas: 'top' 'content' 'tabs';
   }
-  .topbar, .mobile-tabs, .reader-chrome { transition: transform 170ms ease, opacity 120ms ease; }
+  /* Reveal controls at their final position, without fading text over content. */
   .app.mobile-reader-chrome-hidden[data-view='reader'][data-mobile-pane='article'] .topbar {
     transform: translateY(-100%);
     opacity: 0;
@@ -716,7 +718,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
     opacity: 0;
     pointer-events: none;
   }
-  .topbar { grid-area: top; grid-template-columns: auto minmax(0, 1fr); gap: 14px; padding: env(safe-area-inset-top) 14px 0; }
+  .topbar { grid-area: top; grid-template-columns: auto minmax(0, 1fr); gap: 14px; padding: var(--top-inset) 14px 0; }
   .wordmark, .brand-logo { width: 91px; height: 35px; }
   .search-box { justify-self: end; width: min(260px, 66vw); }
   .search-box kbd, .command-button { display: none; }
@@ -845,8 +847,8 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
   .network-youtube .social-original { margin: 18px 18px 0; }
   .x-post-body { font-size: 19px; }
   .x-quoted-post { padding: 15px; }
-  .mobile-tabs { grid-area: tabs; z-index: 20; display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 95%, transparent); padding-bottom: env(safe-area-inset-bottom); }
-  .mobile-tabs button { border: 0; background: transparent; color: var(--faint); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10px; cursor: pointer; }
+  .mobile-tabs { grid-area: tabs; z-index: 20; display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); background: var(--panel); padding: 8px 0 calc(6px + env(safe-area-inset-bottom)); }
+  .mobile-tabs button { min-height: 44px; border: 0; background: transparent; color: var(--faint); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10px; cursor: pointer; }
   .mobile-tabs button.active { color: var(--ink); }
   .mobile-tabs button:disabled { opacity: .35; }
   .mobile-tabs svg { width: 18px; height: 18px; }
@@ -865,7 +867,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
   .font-choices { grid-template-columns: 1fr; }
   .appearance-popover { top: auto; right: 10px; bottom: calc(68px + env(safe-area-inset-bottom)); left: 10px; width: auto; max-height: calc(100vh - 90px); }
   .settings-modal-backdrop { place-items: stretch; padding: 0; background: var(--panel-strong); backdrop-filter: none; }
-  .settings-modal { width: 100%; height: 100dvh; max-height: none; border: 0; border-radius: 0; box-shadow: none; padding: 16px; }
+  .settings-modal { width: 100%; height: 100dvh; max-height: none; border: 0; border-radius: 0; box-shadow: none; padding: calc(16px + var(--top-inset)) 16px 16px; }
   .settings-modal > header { flex: 0 0 auto; margin-bottom: 16px; }
   .settings-layout { grid-template: auto minmax(0, 1fr) / 1fr; margin: 0 -16px -16px; }
   .settings-nav { display: flex; gap: 4px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 7px 10px; scrollbar-width: none; }
@@ -917,7 +919,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
 
-.discussion-panel { position: fixed; z-index: 150; inset: 0; background: var(--panel); color: var(--ink); display: flex; flex-direction: column; min-height: 0; overscroll-behavior: contain; padding-top: env(safe-area-inset-top); }
+.discussion-panel { position: fixed; z-index: 150; inset: 0; background: var(--panel); color: var(--ink); display: flex; flex-direction: column; min-height: 0; overscroll-behavior: contain; padding-top: var(--top-inset); }
 .discussion-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--line); gap: 12px; }
 .discussion-header div { display: flex; align-items: baseline; gap: 12px; }
 .discussion-header span, .discussion-source small { color: var(--muted); font-size: 12px; }

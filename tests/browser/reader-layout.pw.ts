@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES } from '../../src/server/organization'
 import type { Entry } from '../../src/client/types'
 
-const entry = (id: string, paragraphs = 24): Entry => ({
+const entry = (id: string, paragraphs = 40): Entry => ({
   id, feedId: 'fixture', feedTitle: 'Synthetic feed', feedUrl: 'https://example.test/feed',
   title: `Synthetic article ${id}`, author: 'Fixture writer', url: `https://example.test/${id}`,
   contentHtml: Array.from({ length: paragraphs }, (_, i) => `<p id="paragraph-${i}">Paragraph ${i}. This synthetic article exercises scrolling, controls, and navigation without an account.</p>`).join(''),
@@ -10,9 +10,10 @@ const entry = (id: string, paragraphs = 24): Entry => ({
   read: true, starred: false, readingMinutes: 5, thumbnailUrl: '', kind: 'article',
 })
 
-async function openReader(page: Page, short = false) {
-  const items = [entry('a', short ? 1 : 24), entry('b')]
+async function openReader(page: Page, short = false, crossFeeds = false) {
+  const items = [entry('a', short ? 1 : 40), entry('b')]
   const navigation = { unread: 0, starred: 0, uncategorized: [{ id: 'fixture', title: 'Synthetic feed', url: 'https://example.test/feed', unread: 0 }], folders: [] }
+  if (crossFeeds) navigation.uncategorized.push({ id: 'second', title: 'Second synthetic feed', url: 'https://example.test/second', unread: 0 })
   await page.route('**/api/**', async route => {
     const pathname = new URL(route.request().url()).pathname
     const json = pathname === '/api/organization' ? { backend: 'freshrss', revision: null, capabilities: FRESHRSS_ORGANIZATION_CAPABILITIES, navigation }
@@ -23,7 +24,7 @@ async function openReader(page: Page, short = false) {
     if (pathname === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': fixture\n\n' })
     await route.fulfill({ json })
   })
-  await page.goto('/?kind=all&id=all&entry=a&pane=article&unread=0')
+  await page.goto(`/?kind=${crossFeeds ? 'feed' : 'all'}&id=${crossFeeds ? 'fixture' : 'all'}&entry=a&pane=article&unread=0`)
   await expect(page.locator('.article-header h1')).toHaveText('Synthetic article a')
   await page.evaluate(async () => {
     await document.fonts.ready
@@ -58,7 +59,7 @@ async function scrollTo(page: Page, top: number | 'end') {
 
 const hidden = (page: Page) => page.locator('.app.mobile-reader-chrome-hidden')
 
-for (const viewport of [{ width: 393, height: 875 }, { width: 820, height: 1180 }, { width: 1024, height: 768 }]) {
+for (const viewport of [{ width: 393, height: 875 }, { width: 820, height: 1180 }, { width: 1024, height: 768 }, { width: 1024, height: 1366 }]) {
   test.describe(`${viewport.width}x${viewport.height}`, () => {
     test.use({ viewport })
 
@@ -221,3 +222,173 @@ test('keeps the desktop toolbar in the normal layout', async ({ page }) => {
   await scrollTo(page, 240)
   await expect(hidden(page)).toHaveCount(0)
 })
+
+for (const viewport of [{ width: 820, height: 1180 }, { width: 1024, height: 1366 }, { width: 1180, height: 820 }]) {
+  test.describe(`iPad ${viewport.width}x${viewport.height}`, () => {
+    test.use({ viewport })
+
+    test('keeps the header opaque and tabs padded inside the visible viewport', async ({ page }, testInfo) => {
+      await openReader(page)
+      const inspect = () => page.evaluate(() => {
+        const header = document.querySelector<HTMLElement>('.topbar')!
+        const tabs = document.querySelector<HTMLElement>('.mobile-tabs')!
+        const button = tabs.querySelector('button')!
+        return {
+          headerBackground: getComputedStyle(header).backgroundColor,
+          panel: getComputedStyle(document.documentElement).getPropertyValue('--panel').trim(),
+          headerFilter: getComputedStyle(header).filter,
+          headerBackdrop: getComputedStyle(header).backdropFilter,
+          headerTransform: getComputedStyle(header).transform,
+          overlayCount: document.querySelectorAll('.modal-backdrop, .settings-modal-backdrop').length,
+          tabPadding: parseFloat(getComputedStyle(tabs).paddingTop),
+          buttonHeight: button.getBoundingClientRect().height,
+          tabBottom: tabs.getBoundingClientRect().bottom,
+          appHeight: document.querySelector('.app')!.getBoundingClientRect().height,
+          viewportHeight: innerHeight,
+        }
+      })
+      const before = await inspect()
+      await testInfo.attach('header-and-tabs-before-scroll', { body: JSON.stringify(before, null, 2), contentType: 'application/json' })
+      const expectedColor = await page.evaluate(panel => {
+        const el = document.createElement('div')
+        el.style.backgroundColor = panel
+        document.body.append(el)
+        const color = getComputedStyle(el).backgroundColor
+        el.remove()
+        return color
+      }, before.panel)
+      expect(before.headerBackground).toBe(expectedColor)
+      expect(before.headerFilter).toBe('none')
+      expect(before.headerBackdrop).toBe('none')
+      expect(before.headerTransform).toBe('none')
+      expect(before.overlayCount).toBe(0)
+      if (viewport.width <= 1040) {
+        expect(before.tabPadding).toBeGreaterThanOrEqual(8)
+        expect(before.buttonHeight).toBeGreaterThanOrEqual(44)
+        expect(before.tabBottom).toBe(viewport.height)
+        // A changing viewport approximates toolbar expansion, not Safari chrome.
+        await page.setViewportSize({ ...viewport, height: viewport.height - 120 })
+        const smaller = await inspect()
+        expect(smaller.appHeight).toBe(smaller.viewportHeight)
+        expect(smaller.tabBottom).toBe(smaller.viewportHeight)
+        expect(smaller.buttonHeight).toBeGreaterThanOrEqual(44)
+        // Model safe areas because desktop WebKit does not expose iPad insets.
+        await page.addStyleTag({ content: '.app { --mobile-topbar-height: 76px; --mobile-tabs-height: 100px; } .topbar { padding-top: 24px; } .mobile-tabs { padding-bottom: 42px; }' })
+        expect((await inspect()).buttonHeight).toBeGreaterThanOrEqual(44)
+      } else {
+        await expect(page.locator('.mobile-tabs')).toBeHidden()
+        const controls = await page.locator('.reader-chrome').boundingBox()
+        const scroll = await page.locator('.article-scroll').boundingBox()
+        expect(scroll!.y).toBeCloseTo(controls!.y + controls!.height, 0)
+      }
+      await scrollTo(page, 240)
+      await page.locator('.article-view').focus()
+      await expect(page.locator('.topbar')).toHaveCSS('transform', 'none')
+      await page.getByRole('textbox', { name: 'Search articles' }).tap()
+      await expect(page.getByRole('textbox', { name: 'Search articles' })).toBeFocused()
+    })
+
+    test('changes articles without a transparent document or a moving header', async ({ page }) => {
+      await openReader(page)
+      await page.evaluate(() => {
+        const samples: { title: string | null; opacity: string; animation: string; top: number; chromeAnimations: number }[] = []
+        Object.assign(window, { navigationSamples: samples })
+        const sample = () => {
+          const doc = document.querySelector('.article-document')!
+          const style = getComputedStyle(doc)
+          samples.push({ title: doc.querySelector('h1')?.textContent || null, opacity: style.opacity,
+            animation: style.animationName, top: document.querySelector('.article-scroll')!.scrollTop,
+            chromeAnimations: [...document.querySelectorAll('.topbar, .reader-chrome, .mobile-tabs')].flatMap(el => el.getAnimations()).length })
+          if (samples.length < 90) requestAnimationFrame(sample)
+        }
+        requestAnimationFrame(sample)
+      })
+      if (viewport.width <= 1040) {
+        await page.locator('.article-scroll').evaluate(el => { el.scrollTop = el.scrollHeight })
+        await expect(page.locator('.article-edge-zone.next.ready')).toHaveCount(1)
+        await page.locator('.article-scroll').dispatchEvent('touchend')
+      } else await page.getByRole('button', { name: 'Next', exact: true }).click()
+      await expect(page.locator('.article-header h1')).toHaveText('Synthetic article b')
+      await page.evaluate(async () => { for (let i = 0; i < 15; i++) await new Promise(requestAnimationFrame) })
+      const samples = await page.evaluate(() => (window as unknown as { navigationSamples: { title: string | null; opacity: string; animation: string; top: number; chromeAnimations: number }[] }).navigationSamples)
+      const destination = samples.filter(sample => sample.title === 'Synthetic article b')
+      expect(destination.length).toBeGreaterThan(0)
+      expect(destination.every(sample => sample.opacity === '1' && sample.animation === 'none')).toBe(true)
+      expect(destination.every(sample => sample.chromeAnimations === 0)).toBe(true)
+      expect(destination.every(sample => sample.top === (viewport.width <= 1040 ? 96 : 0))).toBe(true)
+      expect(samples.every(sample => sample.title === 'Synthetic article a' || sample.title === 'Synthetic article b')).toBe(true)
+      await page.getByRole('button', { name: 'Previous', exact: true }).click()
+      await expect(page.locator('.article-header h1')).toHaveText('Synthetic article a')
+      await expect(page.locator('.article-document')).toHaveCSS('animation-name', 'none')
+    })
+
+    for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+      test(`retains content across slow feed navigation and late images, motion=${reducedMotion}`, async ({ page }) => {
+        await page.emulateMedia({ reducedMotion })
+        await openReader(page, false, true)
+        const scroll = await page.locator('.article-scroll').elementHandle()
+        await page.getByRole('button', { name: 'Next', exact: true }).click()
+        await expect(page.locator('.article-header h1')).toHaveText('Synthetic article b')
+        let release!: () => void
+        const response = new Promise<void>(resolve => { release = resolve })
+        let requests = 0
+        const c = { ...entry('c'), feedId: 'second', contentHtml: '<img src="/fixture-tall.svg" width="600" height="900" alt="Tall fixture">' + entry('c').contentHtml }
+        let releaseImage!: () => void
+        const imageResponse = new Promise<void>(resolve => { releaseImage = resolve })
+        await page.route('**/fixture-tall.svg', async route => {
+          await imageResponse
+          await route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900"><rect width="600" height="900" fill="teal"/></svg>' })
+        })
+        await page.route('**/api/entries?**', async route => {
+          if (new URL(route.request().url()).searchParams.get('id') !== 'second') return route.fallback()
+          requests++
+          await response
+          await route.fulfill({ json: { items: [c, { ...entry('d'), feedId: 'second', contentHtml: '<img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22600%22 height=%22100%22/%3E" width="600" height="100" alt="Short fixture">' + entry('d').contentHtml }], continuation: '' } })
+        })
+        await page.getByRole('button', { name: 'Next', exact: true }).click()
+        await expect.poll(() => requests).toBe(1)
+        await expect(page.locator('.article-navigation-status')).toBeVisible()
+        await expect(page.locator('.article-header h1')).toHaveText('Synthetic article b')
+        // Repeated keyboard and touch releases must not start another request.
+        await page.keyboard.press('j')
+        await page.keyboard.press('j')
+        await page.locator('.article-scroll').dispatchEvent('touchend')
+        expect(requests).toBe(1)
+        release()
+        await expect(page.locator('.article-header h1')).toHaveText('Synthetic article c')
+        await expect(page.locator('.article-navigation-status')).toHaveCount(0)
+        expect(await scroll!.evaluate(el => el === document.querySelector('.article-scroll'))).toBe(true)
+        const beforeImage = await geometry(page)
+        releaseImage()
+        await expect.poll(() => page.getByAltText('Tall fixture').evaluate((el: HTMLImageElement) => el.naturalHeight)).toBe(900)
+        expect(await geometry(page)).toEqual(beforeImage)
+        await page.getByRole('button', { name: 'Next', exact: true }).click()
+        await expect(page.locator('.article-header h1')).toHaveText('Synthetic article d')
+        await page.getByRole('button', { name: 'Previous', exact: true }).click()
+        await expect(page.locator('.article-header h1')).toHaveText('Synthetic article c')
+        await page.getByRole('button', { name: 'Previous', exact: true }).click()
+        await expect(page.locator('.article-header h1')).toHaveText('Synthetic article b')
+        await expect(page.locator('.article-document')).toHaveCSS('animation-name', 'none')
+      })
+    }
+  })
+}
+
+for (const viewport of [{ width: 820, height: 1180 }, { width: 1180, height: 820 }]) {
+  test(`keeps header controls below the home-screen edge blur at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport)
+    await openReader(page)
+    // Browsers can't emulate an iOS home-screen app, so set the band it would add.
+    await page.addStyleTag({ content: ':root { --top-inset: 40px; --topbar-row: 44px; }' })
+    const header = await page.locator('.topbar').boundingBox()
+    expect(header!.y).toBe(0)
+    expect(header!.height).toBe(84)
+    for (const control of [page.locator('.wordmark'), page.getByRole('textbox', { name: 'Search articles' })]) {
+      const box = (await control.boundingBox())!
+      expect(box.y).toBeGreaterThanOrEqual(40)
+      expect(box.y + box.height).toBeLessThanOrEqual(84)
+    }
+    const chrome = await page.locator('.reader-chrome').boundingBox()
+    expect(chrome!.y).toBeGreaterThanOrEqual(header!.y + header!.height - 1)
+  })
+}
