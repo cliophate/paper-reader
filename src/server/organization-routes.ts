@@ -56,7 +56,7 @@ export function organizationRouter({ database, backend, synchronizer, navigation
     capabilities: backend.organizationCapabilities,
     ...(backend.identity.kind === 'standalone'
       ? database.organization.snapshot(backend.identity.id)
-      : { revision: null, navigation: await (cached && navigation ? navigation() : backend.navigation()) }),
+      : { revision: null, navigation: database.numberNavigation(await (cached && navigation ? navigation() : backend.navigation())) }),
   })
   router.use((_request, response, next) => { response.set('Cache-Control', 'no-store'); next() })
   router.get('/', asyncRoute(async (request, response) => {

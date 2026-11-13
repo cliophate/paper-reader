@@ -1,12 +1,14 @@
 export type StreamKind = 'all' | 'starred' | 'category' | 'feed'
 
 export interface StreamRef {
+  linkNumber?: number
   kind: StreamKind
   id: string
   title: string
 }
 
 export interface Feed {
+  linkNumber?: number
   id: string
   title: string
   url: string
@@ -21,6 +23,7 @@ export interface Feed {
 }
 
 export interface Folder {
+  linkNumber?: number
   id: string
   title: string
   unread: number
@@ -30,6 +33,7 @@ export interface Folder {
 export type EntryKind = 'article' | 'x' | 'instagram' | 'threads' | 'bluesky' | 'mastodon' | 'youtube'
 
 export interface Entry {
+  linkNumber?: number
   stateRevision?: number
   searchExcerpt?: string
   readingPosition?: number

@@ -17,7 +17,7 @@ vi.mock('../src/client/api', async () => ({ ...await vi.importActual('../src/cli
 vi.mock('../src/client/offline', () => ({ offlineArticles: vi.fn(), saveOffline: vi.fn(), removeOffline: vi.fn() }))
 
 const post = (id: string): Entry => ({
-  id, feedId: id, feedTitle: `Instagram ${id}`, feedUrl: 'https://example.com/feed',
+  id, linkNumber: [...id].reduce((n, char) => n * 31 + char.charCodeAt(0), 1), feedId: id, feedTitle: `Instagram ${id}`, feedUrl: 'https://example.com/feed',
   title: `Post ${id}`, author: 'Photographer', url: `https://example.com/${id}`,
   contentHtml: '<p>A photo and a video.</p><img src="/photo.jpg"><video controls src="/video.mp4"></video><a href="https://example.com">Last link</a>',
   excerpt: '', publishedAt: '2026-09-07T12:00:00Z', timestamp: 1, read: true, starred: false,
@@ -51,6 +51,7 @@ beforeEach(() => {
   vi.mocked(api.organization).mockImplementation(async () => ({ backend: 'freshrss', capabilities: FRESHRSS_ORGANIZATION_CAPABILITIES, revision: null, navigation: await api.navigation() }))
   vi.mocked(api.editState).mockResolvedValue({ ok: true })
   vi.mocked(api.status).mockResolvedValue({ backend: 'freshrss', backendInstance: 'freshrss:fixture', discussionConfigured: false, readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } })
+  vi.mocked(offlineArticles).mockResolvedValue([])
   vi.mocked(api.entry).mockResolvedValue({ entry: post('a') })
   container = document.createElement('div')
   document.body.append(container)
@@ -126,12 +127,12 @@ describe('mobile reader switching', () => {
     open.focus()
     expect(document.activeElement).toBe(open)
     await act(async () => { open.click() })
-    expect(location.search).toContain('entry=b')
+    expect(history.state.selectedId).toBe('b')
     const options = row.querySelector<HTMLButtonElement>('.row-options')!
     options.focus()
     await act(async () => { options.click() })
     expect(container.querySelector('[role="menu"]')).not.toBeNull()
-    expect(location.search).toContain('entry=b')
+    expect(history.state.selectedId).toBe('b')
   })
 
   it.each(['.story-open', '.row-options'])('leaves native Enter and Space activation on %s to the button', async selector => {
@@ -141,7 +142,7 @@ describe('mobile reader switching', () => {
       const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
       await act(async () => { control.dispatchEvent(event) })
       expect(event.defaultPrevented).toBe(false)
-      expect(location.search).toContain('entry=a')
+      expect(history.state.selectedId).toBe('a')
     }
   })
 
@@ -153,9 +154,9 @@ describe('mobile reader switching', () => {
     await act(async () => { open.dispatchEvent(press); await vi.advanceTimersByTimeAsync(450) })
     expect(container.querySelector('[role="menu"]')).not.toBeNull()
     await act(async () => { open.dispatchEvent(new Event('pointerup', { bubbles: true })); open.click() })
-    expect(location.search).toContain('entry=a')
+    expect(history.state.selectedId).toBe('a')
     await act(async () => { open.click() })
-    expect(location.search).toContain('entry=b')
+    expect(history.state.selectedId).toBe('b')
   })
 
   it.each(['pointermove', 'pointercancel'])('cancels a touch context menu on %s', async type => {
@@ -199,8 +200,8 @@ describe('mobile reader switching', () => {
     expect(container.querySelector('.load-more-marker')?.textContent).toBe('End')
     vi.mocked(api.entries).mockClear()
     await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key })) })
-    expect(location.search).toContain(`id=${key === 'j' ? 'tech' : 'before'}`)
-    expect(location.search).toContain('entry=c')
+    expect(history.state.stream.id).toBe(key === 'j' ? 'tech' : 'before')
+    expect(history.state.selectedId).toBe('c')
     expect(api.entries).toHaveBeenCalledTimes(1)
     expect(vi.mocked(api.entries).mock.calls[0][3]).toBe('')
   })
@@ -246,17 +247,18 @@ describe('mobile reader switching', () => {
       { id: 'one', title: 'One', unread: 2, feeds: [feed('first'), feed('empty', 0), feed('stale'), feed('next')] },
       { id: 'two', title: 'Two', unread: 1, feeds: [feed('first')] },
     ] })
+    vi.mocked(api.entry).mockResolvedValue({ entry: { ...post('a'), feedId: 'first' } })
     vi.mocked(api.entries).mockImplementation(async target => ({ items: target.id === 'stale' ? [] : [post(target.id === 'first' ? 'a' : target.id)], continuation: '' }))
     await mount()
     vi.mocked(api.entries).mockClear()
     const key = async (key: string) => { await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key })) }) }
     await key('j')
-    expect(location.search).toContain('id=next')
+    expect(history.state.stream.id).toBe('next')
     expect(vi.mocked(api.entries).mock.calls.map(call => call[0].id)).toEqual(['stale', 'next'])
     await key('j')
-    expect(location.search).toContain('id=last')
+    expect(history.state.stream.id).toBe('last')
     await key('k')
-    expect(location.search).toContain('id=next')
+    expect(history.state.stream.id).toBe('next')
   })
 
   it('does not navigate articles from a select or editable descendant', async () => {
@@ -271,7 +273,7 @@ describe('mobile reader switching', () => {
       select.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'j' }))
       editable.firstElementChild!.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'j' }))
     })
-    expect(location.search).toContain('entry=a')
+    expect(history.state.selectedId).toBe('a')
     editable.remove()
   })
 
@@ -340,11 +342,11 @@ describe('mobile reader switching', () => {
     vi.mocked(HTMLElement.prototype.scrollIntoView).mockClear()
     await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'j' })) })
     const marker = container.querySelector('.load-more-marker')!
-    expect(location.search).toContain('entry=b')
+    expect(history.state.selectedId).toBe('b')
     expect(marker.textContent).toBe('End')
     expect(vi.mocked(HTMLElement.prototype.scrollIntoView).mock.contexts.at(-1)).toBe(marker)
     await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'j' })) })
-    expect(location.search).toContain('id=tech')
+    expect(history.state.stream.id).toBe('tech')
     expect(container.querySelector('.stream-title h1')?.textContent).toBe('Tech')
     expect(container.querySelector('.stream-boundary')?.textContent).toBe('Beginning')
   })
@@ -356,7 +358,7 @@ describe('mobile reader switching', () => {
     await mount()
     vi.mocked(HTMLElement.prototype.scrollIntoView).mockClear()
     await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'k' })) })
-    expect(location.search).toContain('entry=a')
+    expect(history.state.selectedId).toBe('a')
     const marker = container.querySelector('.stream-boundary')!
     expect(marker.textContent).toBe('Beginning')
     expect(vi.mocked(HTMLElement.prototype.scrollIntoView).mock.contexts.at(-1)).toBe(marker)
@@ -390,7 +392,7 @@ describe('mobile reader switching', () => {
     Object.defineProperties(scroll, { scrollHeight: { configurable: true, value: 892 }, clientHeight: { configurable: true, value: 700 } })
     await act(async () => { scroll.scrollTop = 0; scroll.dispatchEvent(new Event('scroll', { bubbles: true })) })
     await act(async () => { scroll.querySelector('video')!.dispatchEvent(new Event('touchend', { bubbles: true })) })
-    expect(location.search).toContain('entry=b')
+    expect(history.state.selectedId).toBe('b')
     expect(api.editState).not.toHaveBeenCalled()
   })
 
@@ -413,6 +415,7 @@ describe('mobile reader switching', () => {
   it('allows opaque standalone subscription IDs and disables historical unsubscribed sources', async () => {
     history.replaceState(null, '', '/?kind=category&id=instagram&title=Instagram&pane=list&unread=0')
     initialPage = { items: [{ ...post('one'), feedId: 'paper:subscription:opaque' }, { ...post('two'), feedId: 'feed/historical' }], continuation: '' }
+    vi.mocked(api.entries).mockImplementation(async () => initialPage)
     const navigation = { unread: 0, starred: 0, folders: [], uncategorized: [{ id: 'paper:subscription:opaque', title: 'Standalone feed', url: 'https://example.test/feed', siteUrl: '', iconUrl: '', categories: [], unread: 0, broken: false, lastCheckedAt: null, lastErrorAt: null, lastPublishedAt: null }] }
     vi.mocked(api.navigation).mockResolvedValue(navigation)
     vi.mocked(api.organization).mockResolvedValue({ backend: 'standalone', capabilities: LOCAL_ORGANIZATION_CAPABILITIES, revision: 0, navigation })
@@ -443,8 +446,8 @@ describe('mobile reader switching', () => {
     await act(async () => { remove.click() })
     expect(api.removeFeed).toHaveBeenCalledWith('feed/remove')
     expect([...container.querySelectorAll('.story-row h2')].map(node => node.textContent)).toEqual(['Post 3'])
-    expect(location.search).toContain('id=instagram')
-    expect(location.search).toContain('entry=3')
+    expect(history.state.stream.id).toBe('instagram')
+    expect(history.state.selectedId).toBe('3')
     expect(container.textContent).toContain('Unwanted feed unsubscribed')
     expect(api.editState).not.toHaveBeenCalled()
   })
@@ -536,18 +539,18 @@ describe('mobile reader switching', () => {
     await edge('video', false, false)
     expect(container.querySelector('video')).toBe(video)
     await act(async () => { video!.dispatchEvent(new Event('touchend', { bubbles: true })) })
-    expect(location.search).toContain('entry=b')
+    expect(history.state.selectedId).toBe('b')
     expect(container.querySelector('.article-transition-next-in')).not.toBeNull()
     expect(document.startViewTransition).not.toHaveBeenCalled()
     await edge('a')
-    expect(location.search).toContain('entry=c')
+    expect(history.state.selectedId).toBe('c')
     expect(vi.mocked(api.entries).mock.calls.filter(([target]) => target.id === 'tech')).toHaveLength(1)
   })
 
   it('does not switch after touch cancellation', async () => {
     await mount()
     await edge('video', true)
-    expect(location.search).toContain('entry=a')
+    expect(history.state.selectedId).toBe('a')
   })
 
   it('updates edge progress without rerendering the main app or replacing media', async () => {
@@ -575,11 +578,11 @@ describe('mobile reader switching', () => {
     expect(container.textContent).toContain('too long')
     expect(container.querySelector('.article-navigation-status')).toBeNull()
     await act(async () => { resolve({ items: [post('late')], continuation: '' }) })
-    expect(location.search).toContain('entry=a')
+    expect(history.state.selectedId).toBe('a')
     expect(container.textContent).not.toContain('Post late')
     vi.mocked(api.entries).mockResolvedValueOnce({ items: [post('b')], continuation: '' })
     await edge()
-    expect(location.search).toContain('entry=b')
+    expect(history.state.selectedId).toBe('b')
   })
 
   it('also switches backwards without blocking on frames', async () => {
@@ -589,7 +592,7 @@ describe('mobile reader switching', () => {
     await act(async () => { scroll.scrollTop = 20; scroll.dispatchEvent(new Event('scroll', { bubbles: true })) })
     expect(container.querySelector('.article-edge-zone.previous')?.textContent).toContain('Release to open')
     await act(async () => { scroll.querySelector('img')!.dispatchEvent(new Event('touchend', { bubbles: true })) })
-    expect(location.search).toContain('entry=a')
+    expect(history.state.selectedId).toBe('a')
     expect(container.querySelector('.article-transition-previous-in')).not.toBeNull()
   })
 
@@ -604,7 +607,7 @@ describe('mobile reader switching', () => {
     expect(container.querySelector('.article-transition-next-in')).toBeNull()
     await act(async () => { (container.querySelector('[aria-label="Back to stories"]') as HTMLButtonElement).click() })
     await act(async () => { resolve({ items: [post('c')], continuation: '' }) })
-    expect(location.search).not.toContain('entry=c')
+    expect(history.state.selectedId).not.toBe('c')
     expect(container.querySelector('.article-navigation-status')).toBeNull()
   })
 
@@ -614,10 +617,10 @@ describe('mobile reader switching', () => {
     vi.mocked(api.entries).mockRejectedValueOnce(new Error('Offline'))
     await edge()
     expect(container.textContent).toContain('Offline')
-    expect(location.search).toContain('entry=a')
+    expect(history.state.selectedId).toBe('a')
     expect(container.querySelector('.article-navigation-status')).toBeNull()
     await edge()
-    expect(location.search).toContain('entry=c')
+    expect(history.state.selectedId).toBe('c')
   })
 })
 
@@ -761,8 +764,9 @@ describe('Sources read filter', () => {
     vi.mocked(api.editState).mockResolvedValue({ ok: true })
     await mount()
     await click(container.querySelector('[aria-label="Mark read"]'))
-    expect(location.search).toContain('entry=a')
-    expect(location.search).toContain('pane=article')
+    expect(history.state.selectedId).toBe('a')
+    expect(location.pathname).toMatch(/\/a\/\d+$/)
+    expect(location.search).not.toContain('pane=article')
     expect(container.querySelector('.article-document')).not.toBeNull()
     expect(container.querySelector('.source-nav .folder')).toBeNull()
     expect(container.querySelector('.sources-empty')?.textContent).toContain('All caught up')
@@ -863,11 +867,11 @@ describe('saved reading navigation', () => {
     expect(container.querySelector('[data-mobile-pane]')?.getAttribute('data-mobile-pane')).toBe('stories')
     expect(container.querySelector('.article-document')).toBeNull()
     expect(container.querySelector('.story-row')?.textContent).toContain('Post saved')
-    expect(new URLSearchParams(location.search).get('library')).toBe(mode)
+    expect(history.state.library).toBe(mode)
     expect(mode === 'recent' ? api.recentReading : offlineArticles).toHaveBeenCalled()
     await click([...container.querySelectorAll<HTMLButtonElement>('.source-nav button')].find(item => item.textContent?.startsWith('All articles'))!)
     expect(container.querySelector('.stream-title h1')?.textContent).toBe('All articles')
-    expect(new URLSearchParams(location.search).get('library')).not.toBe(mode)
+    expect(history.state.library).not.toBe(mode)
   })
 })
 
@@ -895,7 +899,7 @@ describe('organization keeps the reading session', () => {
     const missingEntryRequests = vi.mocked(api.entry).mock.calls.length
     const rows = [...container.querySelectorAll('.story-row')]
     const historyLength = history.length
-    const originalEntry = new URLSearchParams(location.search).get('entry')
+    const originalEntry = history.state.selectedId
     await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Edit feeds"]')!.click())
     const options = container.querySelector<HTMLButtonElement>('button[aria-label="Options for Instagram"]')!
     await act(async () => { options.focus(); options.click() })
@@ -909,8 +913,8 @@ describe('organization keeps the reading session', () => {
     vi.mocked(api.organize).mockResolvedValue({ results: [{ index: 0, status: 'applied', changed: true }], snapshot: { backend: 'standalone', revision: 2, capabilities: LOCAL_ORGANIZATION_CAPABILITIES, navigation: { ...navigation, folders: [{ ...navigation.folders[0], title: 'Photos' }] } } })
     await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
-    expect(new URLSearchParams(location.search).get('entry')).toBe(originalEntry)
-    expect(new URLSearchParams(location.search).get('title')).toBe('Photos')
+    expect(history.state.selectedId).toBe(originalEntry)
+    expect(history.state.stream.title).toBe('Photos')
     expect(history.length).toBe(historyLength)
     expect(container.querySelector('.social-author')?.textContent).toContain(`Instagram ${mode === 'later-page' ? 'b' : 'a'}`)
     expect(api.entries).toHaveBeenCalledTimes(entryRequests)

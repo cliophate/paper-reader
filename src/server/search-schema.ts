@@ -1,8 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { transaction } from './transaction.js'
 
-export const DATABASE_VERSION = 11
-
 // FTS5's UNINDEXED entry_id column cannot support point lookups. Keep a normal
 // unique index beside FTS and use its explicit integer key as the search rowid.
 // Neither old FTS rowids nor entries' implicit rowids are stable identifiers.

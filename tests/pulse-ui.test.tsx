@@ -44,7 +44,7 @@ describe('Pulse visit and update interface', () => {
     const markRead = vi.fn().mockResolvedValue(true)
     const notify = vi.fn()
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-    const render = (refreshKey: number) => <TopicsLibrary feedIcons={new Map()} refreshKey={refreshKey} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={notify} />
+    const render = (refreshKey: number) => <TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={refreshKey} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={notify} />
     await act(async () => root!.render(render(0)))
     expect(container.textContent).toContain('2 unread')
     await act(async () => button(container, 'View 3 new articles').click())
@@ -76,7 +76,7 @@ describe('Pulse visit and update interface', () => {
     const visit = vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
     const markRead = vi.fn()
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-    await act(async () => root!.render(<TopicsLibrary feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={() => {}} />))
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={() => {}} />))
     await act(async () => button(container, 'View collection').click())
     await act(async () => root!.unmount()); root = undefined
     expect(visit).toHaveBeenCalledWith('one', 3)
@@ -93,7 +93,7 @@ describe('Pulse visit and update interface', () => {
     const visit = vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
     const markRead = vi.fn().mockResolvedValue(true)
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-    await act(async () => root!.render(<TopicsLibrary feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={() => {}} />))
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={() => {}} />))
     const toolbar = container.querySelector('.pulse-toolbar') as HTMLElement
     await act(async () => button(toolbar, 'Unread 2').click())
     expect([...container.querySelectorAll('h2')].map(node => node.textContent)).toEqual(['Collection active', 'Collection quiet'])
@@ -121,7 +121,7 @@ describe('Pulse visit and update interface', () => {
     const markRead = vi.fn()
     const onOpenEntry = vi.fn()
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-    await act(async () => root!.render(<TopicsLibrary feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={onOpenEntry} onMarkRead={markRead} notify={() => {}} />))
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={onOpenEntry} onMarkRead={markRead} notify={() => {}} />))
     const card = container.querySelector('.pulse-card') as HTMLElement
     const titles = () => [...card.querySelectorAll('.topic-source-copy > span:last-child')].map(node => node.textContent)
     await act(async () => button(card, 'Read 1').click())
@@ -142,7 +142,7 @@ describe('Pulse collection size and catch-up', () => {
     vi.spyOn(api, 'pulse').mockResolvedValue(payload([collection('small', [source('solo', 1)]), collection('full', [source('1', 2), source('2', 3, true), source('3', 4, true)])]))
     vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-    await act(async () => root!.render(<TopicsLibrary feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
     expect(container.textContent).not.toContain('Collection small')
     expect(container.textContent).toContain('1 unread of 3 articles')
     await act(async () => button(container.querySelector('.pulse-toolbar') as HTMLElement, 'Small 1').click())
@@ -157,7 +157,7 @@ describe('Pulse collection size and catch-up', () => {
     vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
     const open = vi.fn()
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-    await act(async () => root!.render(<TopicsLibrary initialCollection="linked" feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={open} onMarkRead={vi.fn()} notify={() => {}} />))
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} initialCollection="linked" feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={open} onMarkRead={vi.fn()} notify={() => {}} />))
     expect(container.querySelector('.pulse-title')?.getAttribute('aria-expanded')).toBe('true')
     expect(container.querySelector('.pulse-catchup blockquote')?.textContent).toBe('The new release adds offline maps.')
     await act(async () => button(container.querySelector('.pulse-card') as HTMLElement, 'Unread 1').click())

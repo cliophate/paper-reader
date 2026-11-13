@@ -22,7 +22,7 @@ import { TopicsLibrary } from './components/TopicsLibrary'
 import { feedMatchesFilter, type FeedFilter } from './feedFilters'
 import { automaticFullTextFeeds, recordFullTextSuccess } from './fullTextPreferences'
 import { movementDirection } from './keyboard'
-import { readReaderLocation, readerLocationUrl, type MobilePane, type ReaderLocation } from './location'
+import { readReaderLocation, readerLocationUrl, resolveReaderLocation, type ReaderLinks, type MobilePane, type ReaderLocation } from './location'
 import { articleEdgeState, swipeDirection, type GesturePoint } from './mobileGestures'
 import { initialReaderChromeScrollState, readerChromeCanAutoHide, updateReaderChromeScroll } from './readerChrome'
 import { authorLine, resistedPullDistance, shouldAutoMarkRead, shouldAutomaticallyFetchFullArticle, shouldFetchFullArticle, shouldReleaseToRefresh } from './reading'
@@ -80,11 +80,18 @@ interface SelectionContextState {
 
 export default function App() {
   const [initialLocation] = useState(() => readReaderLocation())
+  const [pendingLocation, setPendingLocation] = useState<ReaderLocation | null>(initialLocation)
+  const resolvingLocation = useRef(true)
+  const routeEntries = useRef(new Map<string, Entry>())
+  const routeCollections = useRef<NonNullable<ReaderLinks['collections']>>([])
   const [view, setView] = useState(initialLocation.view)
   const [organization, setOrganization] = useState<OrganizationView | null>(null)
   const [navigation, setNavigation] = useState<NavigationPayload | null>(null)
   const [stream, setStream] = useState<StreamRef>(initialLocation.stream)
   const [entries, setEntries] = useState<Entry[]>([])
+  for (const entry of entries) routeEntries.current.set(entry.id, entry)
+  const readerLinks = useRef<ReaderLinks>({})
+  readerLinks.current = { navigation, entries: [...routeEntries.current.values()], collections: routeCollections.current }
   const [selectedId, setSelectedId] = useState(initialLocation.selectedId)
   const [unreadOnly, setUnreadOnly] = useState(initialLocation.unreadOnly)
   const [query, setQuery] = useState(initialLocation.query)
@@ -574,18 +581,19 @@ export default function App() {
       preparedStreamLoad.current = null
       return
     }
+    if (pendingLocation) return
     const timer = window.setTimeout(() => void loadEntries(stream), query ? 260 : 0)
     return () => window.clearTimeout(timer)
-  }, [stream.kind, stream.id, unreadOnly, query, loadEntries])
+  }, [stream.kind, stream.id, unreadOnly, query, loadEntries, pendingLocation])
 
   useEffect(() => {
-    if (libraryMode === 'offline' || !online || !selectedId || entries.some(entry => entry.id === selectedId)) return
+    if (pendingLocation || libraryMode === 'offline' || !online || !selectedId || entries.some(entry => entry.id === selectedId)) return
     let cancelled = false
     api.entry(selectedId).then(result => {
       if (!cancelled && result.entry) setEntries(current => current.some(entry => entry.id === result.entry!.id) ? current : [result.entry!, ...current])
     }).catch(error => !cancelled && notify(error instanceof Error ? error.message : 'Paper could not open that article'))
     return () => { cancelled = true }
-  }, [entries, notify, selectedId, libraryMode, online])
+  }, [entries, notify, selectedId, libraryMode, online, pendingLocation])
 
   useEffect(() => {
     const marker = loadMoreRef.current
@@ -599,24 +607,54 @@ export default function App() {
   }, [continuation, loadMore])
 
   useEffect(() => {
-    const location: ReaderLocation = { view, stream, selectedId, unreadOnly, query, mobilePane, searchStream, searchUnread, after, before, library: libraryMode, collection: view === 'pulse' ? linkedCollection : pulseContext?.id }
-    history.replaceState(location, '', readerLocationUrl(location))
-  }, [mobilePane, query, selectedId, stream, unreadOnly, view, searchStream, searchUnread, after, before, libraryMode, pulseContext, linkedCollection])
-
-  useEffect(() => {
-    const onPopState = () => {
-      readerGeneration.current += 1
-      const location = readReaderLocation()
+    if (!pendingLocation) return
+    const needsNavigation = [pendingLocation.stream, pendingLocation.searchStream].some(source => source?.kind === 'feed' || source?.kind === 'category')
+    if (needsNavigation && !navigation) return
+    const generation = readerGeneration.current
+    let cancelled = false
+    const resolve = async () => {
+      const offline = pendingLocation.library === 'offline' || !online ? await offlineArticles() : []
+      const collections = pendingLocation.collection || pendingLocation.collectionNumber ? (await api.pulse()).collections : routeCollections.current
+      const missing = async (load: () => Promise<{ entry: Entry | null }>) => {
+        try { return (await load()).entry }
+        catch (error) { if (error instanceof ApiError && error.status === 404) return null; throw error }
+      }
+      const result = await resolveReaderLocation(pendingLocation, { navigation, entries: [...routeEntries.current.values(), ...offline], collections },
+        value => online ? missing(() => api.entryByNumber(value)) : Promise.resolve(null),
+        id => online ? missing(() => api.entry(id)) : Promise.resolve(null))
+      if (cancelled || generation !== readerGeneration.current) return
+      const { location, entry, collection, notice } = result
+      routeCollections.current = collections
+      if (entry) { routeEntries.current.set(entry.id, entry); setEntries(current => [entry, ...current.filter(item => item.id !== entry.id)]) }
       setView(location.view)
       setLinkedCollection(location.view === 'pulse' ? location.collection : undefined)
       setLibraryMode(location.library || 'stream')
-      setPulseContext(savedPulseContext(location.collection))
+      setPulseContext(location.view === 'reader' && collection ? { id: collection.id, title: collection.headline, ids: collection.sources.map(item => item.id) } : null)
       setStream(location.stream)
       setSelectedId(location.selectedId)
       setUnreadOnly(location.unreadOnly)
       setQuery(location.query)
       setSearchStream(location.searchStream || allStream); setSearchUnread(location.searchUnread || false); setAfter(location.after || ''); setBefore(location.before || '')
       setMobilePane(location.mobilePane)
+      setPendingLocation(null)
+      resolvingLocation.current = false
+      if (notice) notify(notice)
+    }
+    void resolve().catch(error => { if (!cancelled) notify(error instanceof Error ? error.message : 'Could not open this link') })
+    return () => { cancelled = true }
+  }, [pendingLocation, navigation, online, notify])
+
+  useEffect(() => {
+    if (pendingLocation || resolvingLocation.current || selectedId && !routeEntries.current.get(selectedId)?.linkNumber) return
+    const location: ReaderLocation = { view, stream, selectedId, unreadOnly, query, mobilePane, searchStream, searchUnread, after, before, library: libraryMode, collection: view === 'pulse' ? linkedCollection : pulseContext?.id }
+    history.replaceState(location, '', readerLocationUrl(location, readerLinks.current))
+  }, [mobilePane, query, selectedId, stream, unreadOnly, view, searchStream, searchUnread, after, before, libraryMode, pulseContext, linkedCollection, pendingLocation, navigation, entries])
+
+  useEffect(() => {
+    const onPopState = () => {
+      readerGeneration.current += 1
+      resolvingLocation.current = true
+      setPendingLocation(readReaderLocation())
     }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
@@ -667,7 +705,9 @@ export default function App() {
   const pushLocation = useCallback((next: Partial<ReaderLocation>) => {
     readerGeneration.current += 1
     const location: ReaderLocation = { view, stream, selectedId, unreadOnly, query, mobilePane, searchStream, searchUnread, after, before, library: libraryMode, collection: view === 'pulse' ? linkedCollection : pulseContext?.id, ...next }
-    history.pushState(location, '', readerLocationUrl(location))
+    resolvingLocation.current = false
+    setPendingLocation(null)
+    history.pushState(location, '', readerLocationUrl(location, readerLinks.current))
   }, [mobilePane, query, selectedId, stream, unreadOnly, view, searchStream, searchUnread, after, before, libraryMode, pulseContext, linkedCollection])
 
   const openStream = useCallback((target: StreamRef) => {
@@ -777,7 +817,7 @@ export default function App() {
   }, [loadNavigation, notify, openStream, pushLocation])
 
   const openBriefings = useCallback(() => {
-    pushLocation({ view: 'briefings', selectedId: '', query: '', mobilePane: 'stories' })
+    pushLocation({ view: 'briefings', selectedId: '', query: '', mobilePane: 'stories', collection: undefined })
     setView('briefings')
     setSelectedId('')
     setQuery('')
@@ -785,7 +825,8 @@ export default function App() {
   }, [pushLocation])
 
   const openTopics = useCallback(() => {
-    pushLocation({ view: 'pulse', selectedId: '', query: '', mobilePane: 'stories' })
+    pushLocation({ view: 'pulse', selectedId: '', query: '', mobilePane: 'stories', collection: pulseContext?.id })
+    setLinkedCollection(pulseContext?.id)
     setView('pulse')
     setSelectedId('')
     setQuery('')
@@ -794,7 +835,7 @@ export default function App() {
 
   const openSources = useCallback(() => {
     setPulseContext(null)
-    pushLocation({ view: 'reader', selectedId: '', query: '', mobilePane: 'sources' })
+    pushLocation({ view: 'reader', selectedId: '', query: '', mobilePane: 'sources', collection: undefined })
     setView('reader')
     setSelectedId('')
     setQuery('')
@@ -809,7 +850,7 @@ export default function App() {
     requestAnimationFrame(() => articleRef.current?.focus())
   }, [pushLocation])
 
-  const openTopicEntry = useCallback(async (id: string, context?: { id: string; title: string; ids: string[] }) => {
+  const openTopicEntry = useCallback(async (id: string, context?: { id: string; title: string; ids: string[]; linkNumber?: number }) => {
     try {
       const result = await api.entry(id)
       if (!result.entry) throw new Error('Paper could not find this article')
@@ -817,6 +858,13 @@ export default function App() {
       setLibraryMode('stream'); setPulseContext(context || null); setLinkedCollection(context?.id)
       if (context) sessionStorage.setItem(`paper-collection:${context.id}`, JSON.stringify(context))
       setEntries(current => current.some(item => item.id === entry.id) ? current.map(item => item.id === entry.id ? entry : item) : [entry, ...current])
+      if (context) {
+        routeCollections.current = [...routeCollections.current.filter(item => item.id !== context.id),
+          { id: context.id, linkNumber: context.linkNumber, headline: context.title, sources: context.ids.map(id => ({ id })) }]
+        readerLinks.current.collections = routeCollections.current
+      }
+      routeEntries.current.set(entry.id, entry)
+      readerLinks.current.entries = [...routeEntries.current.values()]
       pushLocation({ view: 'reader', stream: allStream, selectedId: entry.id, unreadOnly: false, query: '', mobilePane: 'article', library: 'stream', collection: context?.id })
       setView('reader')
       setStream(allStream)
@@ -1518,7 +1566,13 @@ export default function App() {
         /> : <ReaderEmpty onCommand={() => setOverlays({ ...closedOverlays, command: true })} />}
       </main></> : view === 'briefings'
         ? <BriefingLibrary onBack={openSources} />
-        : <TopicsLibrary initialCollection={linkedCollection} feedIcons={feedIcons} refreshKey={topicsRefreshKey} onBack={openSources} onOpenEntry={(id, context) => void openTopicEntry(id, context)} onMarkRead={markTopicRead} notify={notify} />}
+        : <TopicsLibrary initialCollection={linkedCollection} onCollectionChange={collection => {
+          if (collection) routeCollections.current = [...routeCollections.current.filter(item => item.id !== collection.id), collection]
+          readerLinks.current.collections = routeCollections.current
+          if (collection?.id === linkedCollection) return
+          pushLocation({ view: 'pulse', selectedId: '', collection: collection?.id })
+          setLinkedCollection(collection?.id)
+        }} feedIcons={feedIcons} refreshKey={topicsRefreshKey} onBack={openSources} onOpenEntry={(id, context) => void openTopicEntry(id, context)} onMarkRead={markTopicRead} notify={notify} />}
 
       <MobileTabs boundaryStore={articleBoundaryStore}>
         <button className={view === 'reader' && mobilePane === 'sources' ? 'active' : ''} onClick={openSources}><Icon name="folder" /><span>Sources</span></button>

@@ -23,21 +23,22 @@ function rememberPulseReturn(value: PulseReturn | null) {
 
 interface TopicsLibraryProps {
   initialCollection?: string
+  onCollectionChange: (collection: PulseCollection | null) => void
   feedIcons: Map<string, string>
   refreshKey: number
   onBack: () => void
-  onOpenEntry: (id: string, context?: { id: string; title: string; ids: string[] }) => void
+  onOpenEntry: (id: string, context?: { id: string; title: string; ids: string[]; linkNumber?: number }) => void
   onMarkRead: (ids: string[], expectedRevisions?: Record<string, number>) => Promise<boolean>
   notify: (message: string, action?: { label: string; run: () => void }) => void
 }
 
-export function TopicsLibrary({ initialCollection, feedIcons, refreshKey, onBack, onOpenEntry, onMarkRead, notify }: TopicsLibraryProps) {
+export function TopicsLibrary({ initialCollection, onCollectionChange, feedIcons, refreshKey, onBack, onOpenEntry, onMarkRead, notify }: TopicsLibraryProps) {
   const directLink = initialCollection && initialCollection !== returnToPulse?.id ? initialCollection : undefined
   const [payload, setPayload] = useState<PulsePayload | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [hasUpdates, setHasUpdates] = useState(false)
   const [error, setError] = useState('')
-  const [expanded, setExpanded] = useState<string | null>(initialCollection || returnToPulse?.id || null)
+  const [expanded, setExpanded] = useState<string | null>(initialCollection || null)
   const [filter, setFilter] = useState<ArticleFilter>(directLink ? 'all' : returnToPulse?.filter || 'all')
   const [section, setSection] = useState<CollectionFilter>(returnToPulse?.section || 'active')
   const [mergeFrom, setMergeFrom] = useState<string | null>(null)
@@ -100,7 +101,11 @@ export function TopicsLibrary({ initialCollection, feedIcons, refreshKey, onBack
 
   useEffect(() => { void load() }, [load, refreshKey])
   useEffect(() => {
-    if (!initialCollection || initialCollection === open.current) return
+    if (!initialCollection) {
+      if (open.current) { void finishVisit(); open.current = null; setExpanded(null) }
+      return
+    }
+    if (initialCollection === open.current) return
     linked.current = initialCollection
     open.current = initialCollection
     setExpanded(initialCollection)
@@ -128,12 +133,14 @@ export function TopicsLibrary({ initialCollection, feedIcons, refreshKey, onBack
     open.current = collection.id
     setExpanded(collection.id)
     setFilter(nextFilter)
+    onCollectionChange(collection)
   }
   const closeCollection = async () => {
     await finishVisit()
     open.current = null
     setExpanded(null)
     rememberPulseReturn(null)
+    onCollectionChange(null)
   }
   useEffect(() => {
     if (section === 'unread' && expanded && payload && !payload.collections.some(collection => collection.id === expanded && collection.unreadCount > 0)) {
@@ -162,7 +169,7 @@ export function TopicsLibrary({ initialCollection, feedIcons, refreshKey, onBack
       section: view.current.section, scroll: scroll.current?.scrollTop || 0 })
     const sourceFilter = view.current.expanded === collection.id ? view.current.filter : view.current.section === 'unread' ? 'unread' : 'all'
     const ids = collection.sources.filter(source => sourceFilter === 'all' || (sourceFilter === 'new' ? source.isNew : sourceFilter === 'read' ? source.read : !source.read)).map(source => source.id)
-    onOpenEntry(id, { id: collection.id, title: collection.headline, ids })
+    onOpenEntry(id, { id: collection.id, title: collection.headline, ids, linkNumber: collection.linkNumber })
   }
   const markRead = async (ids: string[]) => {
     const displayed = new Map(current.current?.collections.flatMap(collection => collection.sources).map(source => [source.id, source.stateRevision]) || [])

@@ -17,7 +17,7 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const request = event.request
   const url = new URL(request.url)
-  if (request.method !== 'GET' || url.pathname.startsWith('/api/')) return
+  if (request.method !== 'GET' || /^\/(?:api|_offline|health)(?:\/|$)/.test(url.pathname)) return
   if (request.destination === 'image') {
     event.respondWith(caches.open(MEDIA).then(cache => cache.match(request)).then(cached => cached || fetch(request)))
     return

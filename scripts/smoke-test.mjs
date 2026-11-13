@@ -108,6 +108,14 @@ try {
   const page = (await request('/api/entries?kind=all&id=all&unread=0&q=compositor')).data
   assert.equal(page.items.length, 2)
   const id = page.items[0].id
+  const articleNumber = page.items[0].linkNumber
+  assert(Number.isSafeInteger(articleNumber) && articleNumber > 0)
+  assert.equal((await request(`/api/entries/number/${articleNumber}`)).data.entry.id, id)
+  assert.equal((await request('/api/entries/number/999999999')).status, 404)
+  assert.equal((await request('/api/entries/number/not-a-number')).status, 400)
+  const numberedNavigation = (await request('/api/navigation')).data
+  for (const folder of numberedNavigation.folders) assert(Number.isSafeInteger(folder.linkNumber))
+  for (const feed of [...numberedNavigation.uncategorized, ...numberedNavigation.folders.flatMap(folder => folder.feeds)]) assert(Number.isSafeInteger(feed.linkNumber))
   assert.equal((await request('/api/entries/state', { ids: [id], operation: 'read' }, { Origin: 'https://untrusted.example' })).status, 403)
   assert.equal((await request('/api/entries/state', { ids: [id], operation: 'read' })).status, 200)
   assert.equal((await request('/api/entries/state', { ids: [id], operation: 'star' })).status, 200)
@@ -167,6 +175,10 @@ try {
   assert.equal((await request('/api/status')).data.localReadsActive, false)
   const remotePage = (await request('/api/entries?kind=all&id=all&unread=0')).data
   assert.equal(remotePage.items.length, rows.length)
+  assert.equal(remotePage.items.find(entry => entry.id === id).linkNumber, articleNumber)
+  assert.equal((await request(`/api/entries/number/${articleNumber}`)).data.entry.id, id)
+  const remoteNavigation = (await request('/api/navigation')).data
+  assert.deepEqual(remoteNavigation.folders.map(folder => folder.linkNumber), numberedNavigation.folders.map(folder => folder.linkNumber))
   const remoteSearch = (await request('/api/entries?kind=all&id=all&unread=0&q=compositor')).data
   assert.equal(remoteSearch.items.length, 2)
   assert.equal((await request('/api/entries/item', { id })).data.entry.id, id)

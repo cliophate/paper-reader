@@ -58,6 +58,9 @@ migrations. Use the matching pre-upgrade data backup if a migration is not
 backward compatible. Retain both the original database and backup until you have
 verified the restored application.
 
+The current development schema is 12. [Reader routes](reader-routes.md) describes
+its additive migration and `.before-link-numbers-v12` rollback backup.
+
 ### Upgrade to alpha.3
 
 Alpha.3 uses database schema 11. Keep the existing backend and FreshRSS account

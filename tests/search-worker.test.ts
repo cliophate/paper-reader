@@ -77,7 +77,7 @@ it('refuses old or unfinished schemas without creating backups or changing schem
   await expect(service.search(all, { query: 'the' })).rejects.toThrow(/worker/)
   expect(sql(db => db.prepare('PRAGMA user_version').get()?.user_version)).toBe(10)
   expect(fs.readdirSync(directory).some(file => file.includes('before-'))).toBe(false)
-  sql(db => db.exec('PRAGMA user_version=11'))
+  sql(db => db.exec('PRAGMA user_version=12'))
   expect((await service.search(all, { query: 'the' })).items).toHaveLength(12)
   expect(sql(db => db.prepare('PRAGMA schema_version').get()?.schema_version)).toBe(originalSchema)
   await service.close()

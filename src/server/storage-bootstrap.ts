@@ -3,7 +3,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
 import { PaperDatabase } from './db.js'
-import { DATABASE_VERSION } from './search-schema.js'
+import { DATABASE_VERSION } from './link-numbers.js'
 import { acquireStateLock, StateLockError, type StateLock } from './state-lock.js'
 
 export interface CoordinatedStorage { database: PaperDatabase; stateDir: string; close(): void }
