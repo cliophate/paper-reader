@@ -540,7 +540,8 @@ describe('mobile reader switching', () => {
     expect(container.querySelector('video')).toBe(video)
     await act(async () => { video!.dispatchEvent(new Event('touchend', { bubbles: true })) })
     expect(history.state.selectedId).toBe('b')
-    expect(container.querySelector('.article-transition-next-in')).not.toBeNull()
+    expect(container.querySelector('.article-document')?.className).toBe('article-document')
+    expect(HTMLElement.prototype.scrollTo).toHaveBeenLastCalledWith({ top: 96, behavior: 'instant' })
     expect(document.startViewTransition).not.toHaveBeenCalled()
     await edge('a')
     expect(history.state.selectedId).toBe('c')
@@ -593,7 +594,7 @@ describe('mobile reader switching', () => {
     expect(container.querySelector('.article-edge-zone.previous')?.textContent).toContain('Release to open')
     await act(async () => { scroll.querySelector('img')!.dispatchEvent(new Event('touchend', { bubbles: true })) })
     expect(history.state.selectedId).toBe('a')
-    expect(container.querySelector('.article-transition-previous-in')).not.toBeNull()
+    expect(container.querySelector('.article-document')?.className).toBe('article-document')
   })
 
   it('keeps the old post usable while loading and ignores a result after Back', async () => {
@@ -609,6 +610,33 @@ describe('mobile reader switching', () => {
     await act(async () => { resolve({ items: [post('c')], continuation: '' }) })
     expect(history.state.selectedId).not.toBe('c')
     expect(container.querySelector('.article-navigation-status')).toBeNull()
+  })
+
+  it('keeps a newer selection when a slow feed response arrives after cancellation', async () => {
+    await mount()
+    await click(container.querySelector('.article-options button:nth-child(2)'))
+    expect(history.state.selectedId).toBe('b')
+    let resolve!: (page: EntryPage) => void
+    vi.mocked(api.entries).mockImplementationOnce(() => new Promise(done => { resolve = done }))
+    await edge()
+    const video = container.querySelector('video')
+    await edge()
+    expect(container.querySelector('video')).toBe(video)
+    expect(vi.mocked(api.entries).mock.calls.filter(([target]) => target.id === 'tech')).toHaveLength(1)
+    await click(container.querySelector('.mobile-tabs button:nth-child(2)'))
+    await click(container.querySelector('.story-row'))
+    expect(history.state.selectedId).toBe('a')
+    await act(async () => { resolve({ items: [post('late')], continuation: '' }) })
+    expect(history.state.selectedId).toBe('a')
+    expect(container.textContent).not.toContain('Post late')
+  })
+
+  it('settles cancelled gestures without smooth scrolling when reduced motion is requested', async () => {
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({ matches: query.includes('max-width') || query.includes('prefers-reduced-motion'), addEventListener() {}, removeEventListener() {} })))
+    await mount()
+    await edge('video', true)
+    expect(HTMLElement.prototype.scrollTo).toHaveBeenLastCalledWith({ top: 96, behavior: 'instant' })
+    expect(history.state.selectedId).toBe('a')
   })
 
   it('recovers from a failed folder load and allows the next swipe', async () => {

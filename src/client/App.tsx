@@ -34,7 +34,6 @@ type ReaderSize = 'small' | 'medium' | 'large'
 type ReaderSpacing = 'compact' | 'comfortable' | 'spacious'
 type ReaderWidth = 'narrow' | 'standard' | 'wide'
 type ArticleBoundaryDirection = 'previous' | 'next'
-type ArticleTransition = '' | 'previous-in' | 'next-in'
 
 const ARTICLE_BOUNDARY_DISTANCE = 56
 const ARTICLE_BOUNDARY_ZONE_SIZE = 96
@@ -158,7 +157,6 @@ export default function App() {
   const [articleBoundaryStore] = useState(createArticleBoundaryStore)
   const [articleNavigation] = useState(createArticleNavigation)
   const [articleNavigationBusy, setArticleNavigationBusy] = useState(false)
-  const [articleTransition, setArticleTransition] = useState<ArticleTransition>('')
   const [automaticFullFeeds, setAutomaticFullFeeds] = useState(() => automaticFullTextFeeds(localStorage))
   const [status, setStatus] = useState({ backend: 'freshrss' as 'freshrss' | 'standalone', discussionConfigured: false, readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false })
   const listRef = useRef<HTMLDivElement>(null)
@@ -679,7 +677,7 @@ export default function App() {
     localStorage.setItem('paper-reader-width', readerWidth)
   }, [readerSize, readerSpacing, readerWidth])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     revealReaderChrome()
     articleBoundaryGesture.current = { direction: null, travel: 0, ready: false }
     articleBoundaryStore.set(null)
@@ -1051,7 +1049,7 @@ export default function App() {
     }
   }, [selected, mobilePane, setEntryState, autoRead, online])
 
-  const move = useCallback((direction: 1 | -1, animate = false): Promise<boolean> => articleNavigation.run(async signal => {
+  const move = useCallback((direction: 1 | -1): Promise<boolean> => articleNavigation.run(async signal => {
     if (pulseContext && selected) {
       const index = pulseContext.ids.indexOf(selected.id)
       const id = pulseContext.ids[index + direction]
@@ -1063,7 +1061,6 @@ export default function App() {
     if (loading) return null
     const commitEntry = (entry: Entry) => {
       articleBoundaryStore.set(null)
-      setArticleTransition(animate ? direction > 0 ? 'next-in' : 'previous-in' : '')
       openEntry(entry)
     }
     const currentIndex = selected ? entries.findIndex(entry => entry.id === selected.id) : direction > 0 ? -1 : entries.length
@@ -1117,7 +1114,6 @@ export default function App() {
           setLoading(false)
           setLoadingMore(false)
           articleBoundaryStore.set(null)
-          setArticleTransition(animate ? direction > 0 ? 'next-in' : 'previous-in' : '')
           requestAnimationFrame(() => articleRef.current?.focus())
         }
       }
@@ -1127,14 +1123,14 @@ export default function App() {
   }, setArticleNavigationBusy, error => notify(error instanceof Error ? error.message : 'Paper could not open the next article')),
   [articleBoundaryStore, articleNavigation, continuation, entries, navigation, notify, openEntry, pushLocation, query, selected, stream, unreadOnly, streamUnreadOnly, pulseContext, searchStream, dates, libraryMode, loading])
 
-  const settleArticleBoundary = useCallback((direction: ArticleBoundaryDirection | null) => {
+  const settleArticleBoundary = useCallback((direction: ArticleBoundaryDirection | null, smooth = true) => {
     const scroll = articleRef.current?.querySelector<HTMLElement>('.article-scroll')
     if (!scroll || !direction) return
     const maximum = Math.max(0, scroll.scrollHeight - scroll.clientHeight)
     const top = direction === 'previous'
       ? Math.min(ARTICLE_BOUNDARY_ZONE_SIZE, maximum / 2)
       : Math.max(Math.min(ARTICLE_BOUNDARY_ZONE_SIZE, maximum / 2), maximum - ARTICLE_BOUNDARY_ZONE_SIZE)
-    scroll.scrollTo({ top, behavior: 'smooth' })
+    scroll.scrollTo({ top, behavior: smooth && !window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'instant' })
   }, [])
 
   const releaseArticleGesture = useCallback((cancelled = false) => {
@@ -1143,8 +1139,9 @@ export default function App() {
     articleBoundaryHaptic.current = false
     articleBoundaryStore.set(null)
     if (!cancelled && boundary.ready && boundary.direction) {
-      settleArticleBoundary(boundary.direction)
-      void move(boundary.direction === 'next' ? 1 : -1, true)
+      // A smooth scroll must not continue into the destination article.
+      settleArticleBoundary(boundary.direction, false)
+      void move(boundary.direction === 'next' ? 1 : -1)
       return
     }
     settleArticleBoundary(boundary.direction)
@@ -1556,7 +1553,6 @@ export default function App() {
           onScroll={handleArticleScroll}
           boundaryStore={articleBoundaryStore}
           navigationBusy={articleNavigationBusy}
-          transition={articleTransition}
           onTouchEnd={releaseArticleGesture}
           previousAvailable={previousArticleAvailable}
           nextAvailable={nextArticleAvailable}
@@ -1880,14 +1876,13 @@ const ArticleView = forwardRef<HTMLElement, {
   onScroll: (event: React.UIEvent<HTMLDivElement>) => void
   boundaryStore: ArticleBoundaryStore
   navigationBusy: boolean
-  transition: ArticleTransition
   onTouchEnd: (cancelled?: boolean) => void
   previousAvailable: boolean
   nextAvailable: boolean
   previousTitle: string
   nextTitle: string
   onSelectionContext: (state: SelectionContextState | null) => void
-}>(function ArticleView({ active, entry, feedIconUrl, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, readwiseBusy, readwiseConfigured, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onReadwise, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, selectionActionsConfigured, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, transition, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext }, ref) {
+}>(function ArticleView({ active, entry, feedIconUrl, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, readwiseBusy, readwiseConfigured, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onReadwise, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, selectionActionsConfigured, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext }, ref) {
   const content = useRef<HTMLDivElement>(null)
   const chrome = useRef<HTMLDivElement>(null)
   const [hasSelection, setHasSelection] = useState(false)
@@ -1961,7 +1956,7 @@ const ArticleView = forwardRef<HTMLElement, {
     {navigationBusy && <div className="article-navigation-status" role="status">Loading article...</div>}
     <div ref={content} className="article-scroll" onScroll={onScroll} onTouchEndCapture={() => onTouchEnd(false)} onTouchCancelCapture={() => onTouchEnd(true)} onContextMenu={openSelectionContext}>
       <ArticleEdgeZone direction="previous" title={previousTitle} available={previousAvailable} store={boundaryStore} />
-      <div key={entry.id} className={`article-document ${transition ? `article-transition-${transition}` : ''}`}>
+      <div key={entry.id} className="article-document">
         {entry.kind !== 'article' ? <SocialArticle entry={entry} feedIconUrl={feedIconUrl} /> : <StandardArticle entry={entry} feedIconUrl={feedIconUrl} />}
       </div>
       <ArticleEdgeZone direction="next" title={nextTitle} available={nextAvailable} store={boundaryStore} />
