@@ -89,7 +89,9 @@ The route regression starts the built server with a disposable standalone
 SQLite database and synthetic feeds. It checks every route on direct navigation
 and refresh, legacy links, slug correction, missing numbers, mobile history and
 the service worker's nested offline fallback. It removes its own test state on
-shutdown. Run it after building, without another build running at the same time:
+shutdown. CI runs it in the browser job after the layout suite builds the client
+and a separate step builds the server. Run it after building, without another
+build running at the same time:
 
 ```sh
 npx playwright test --config playwright.routes.config.ts

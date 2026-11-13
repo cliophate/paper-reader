@@ -48,7 +48,7 @@ export interface ReaderLinks {
   collections?: Array<{ id: string; linkNumber?: number; headline: string; sources: Array<{ id: string }> }>
 }
 
-const oldParameters = ['kind', 'id', 'entry', 'view', 'collection', 'library', 'searchKind']
+const oldParameters = ['kind', 'id', 'title', 'entry', 'view', 'collection', 'library', 'searchKind', 'searchId', 'searchTitle', 'searchUnread']
 const number = (value?: string) => value && /^[1-9][0-9]*$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : undefined
 
 export function readerSlug(title: string): string {

@@ -737,6 +737,16 @@ export class PaperDatabase {
       folders: navigation.folders.map(folder => ({ ...folder, linkNumber: this.linkNumber('folder', folder.id), feeds: folder.feeds.map(feed) })) }
   }
 
+  numberEntries(entries: Entry[]): Entry[] {
+    return transaction(this.db, () => {
+      const arrival = this.db.prepare('SELECT sequence FROM article_arrivals WHERE entry_id = ?')
+      for (const entry of entries) {
+        if (!arrival.get(entry.id)) this.upsertEntries([entry])
+      }
+      return entries.map(entry => this.numberEntry(entry))
+    })
+  }
+
   numberEntry(entry: Entry): Entry {
     const row = this.db.prepare('SELECT sequence FROM article_arrivals WHERE entry_id = ?').get(entry.id)
     return { ...entry, linkNumber: row ? Number(row.sequence) : undefined }

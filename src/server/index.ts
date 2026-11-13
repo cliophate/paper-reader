@@ -410,8 +410,7 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
   }
   if (!query) {
     const page = await backend.entriesPage(stream, { unreadOnly, limit: ENTRY_PAGE_SIZE, continuation })
-    database.upsertEntries(page.items)
-    return response.json(headlines.page({ ...page, items: page.items.map(entry => database.numberEntry(entry)) }))
+    return response.json(headlines.page({ ...page, items: database.numberEntries(page.items) }))
   }
 
   const items: Entry[] = []
@@ -426,8 +425,7 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
     seenContinuations.add(page.continuation)
     continuation = page.continuation
   }
-  database.upsertEntries(items)
-  response.json(headlines.page({ items: items.map(entry => database.numberEntry(entry)), continuation }))
+  response.json(headlines.page({ items: database.numberEntries(items), continuation }))
 }))
 
 app.get('/api/entries/number/:number', asyncRoute(async (request, response) => {
@@ -442,8 +440,7 @@ app.get('/api/entries/number/:number', asyncRoute(async (request, response) => {
 app.post('/api/entries/item', asyncRoute(async (request, response) => {
   const entry = await entriesSource.entry(String(request.body?.id || ''))
   if (!entry) return response.status(404).json({ error: 'Paper could not find this article' })
-  if (!entry.linkNumber) database.upsertEntries([entry])
-  response.json({ entry: headlines.decorate(database.numberEntry(entry)) })
+  response.json({ entry: headlines.decorate(database.numberEntries([entry])[0]) })
 }))
 
 app.post('/api/entries/state', asyncRoute(async (request, response) => {

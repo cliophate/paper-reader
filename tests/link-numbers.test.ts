@@ -29,6 +29,34 @@ beforeEach(() => {
 afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
 
 describe('reader link numbers', () => {
+  it('numbers remote reads without rewriting existing bodies, mute matches or search rows', () => {
+    const existing = { ...article, contentHtml: '<p>Body-only mutephrase and searchneedle</p>' }
+    db.upsertEntries([existing])
+    db.createMuteFilter('mutephrase', 'content')
+    sql(connection => connection.prepare('UPDATE entries SET synced_at = ? WHERE id = ?').run('2020-01-01T00:00:00Z', article.id))
+    const snapshot = () => sql(connection => ({
+      entry: connection.prepare('SELECT * FROM entries WHERE id = ?').get(article.id),
+      muted: connection.prepare('SELECT rowid, * FROM muted_entries WHERE entry_id = ?').all(article.id),
+      search: connection.prepare('SELECT * FROM entry_search_rows WHERE entry_id = ?').all(article.id),
+      fts: connection.prepare('SELECT rowid, * FROM entries_fts WHERE entry_id = ?').all(article.id),
+      results: connection.prepare("SELECT entry_id FROM entries_fts WHERE entries_fts MATCH 'searchneedle'").all(),
+    }))
+    const before = snapshot()
+    expect(before.muted).toHaveLength(1)
+    expect(before.results).toHaveLength(1)
+    for (const response of [{ ...existing, contentHtml: '' }, existing]) {
+      const numbered = db.numberEntries([response])
+      expect(numbered[0]).toEqual({ ...response, linkNumber: db.localEntry(article.id)!.linkNumber })
+      expect(snapshot()).toEqual(before)
+    }
+    const fresh = { ...article, id: 'tag:google.com,2005:reader/item/0000000000000004' }
+    const numbered = db.numberEntries([fresh, { ...existing, contentHtml: '' }, fresh])
+    expect(numbered[0].linkNumber).toBeGreaterThan(0)
+    expect(numbered[2].linkNumber).toBe(numbered[0].linkNumber)
+    expect(db.entryByNumber(numbered[0].linkNumber!)?.contentHtml).toBe(fresh.contentHtml)
+    expect(snapshot()).toEqual(before)
+  })
+
   it('survives navigation replacement, reimport, restart and restore without recycling numbers', () => {
     const before = db.localNavigation()
     const entry = db.localEntry(article.id)!

@@ -25,6 +25,8 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:browser
+      - run: npm run build:server
+      - run: npx playwright test --config playwright.routes.config.ts
   application:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

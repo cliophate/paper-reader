@@ -33,8 +33,8 @@ The query retains `unread=0`, `q`, `after`, `before` and `pane`. With a search,
 for an article path and `sources` otherwise. Only a different pane is written.
 Desktop layout ignores the pane; mobile history restores it.
 
-A root URL containing `kind`, `id`, `entry`, `view`, `collection`, `library` or
-`searchKind` still uses the original query parser. After loading its targets,
+A root URL containing `kind`, `id`, `title`, `entry`, `view`, `collection`, `library`,
+`searchKind`, `searchId`, `searchTitle` or `searchUnread` still uses the original query parser. After loading its targets,
 Paper replaces that history entry with the new URL. The old `title`,
 `searchKind`, `searchId`, `searchTitle` and `searchUnread` parameters are not
 written in new links.
@@ -52,13 +52,16 @@ Navigation feeds and folders, articles and Pulse collections expose `linkNumber`
 stream page to be loaded. It returns `{entry}`, HTTP 404 for a missing article,
 or HTTP 400 for an invalid number. Existing API IDs and routes remain unchanged.
 FreshRSS responses also receive persisted numbers when local reads are disabled.
+Read requests import only articles without an arrival number, in one transaction.
+Existing article bodies, mute matches, search rows and sync timestamps stay unchanged.
 
 The server serves the application shell on reader paths, including refreshes.
 Reserved `/api`, `/_offline`, `/health` and `/assets` paths do not fall through
 to that shell. Scripts, styles, icons, the manifest and `/sw.js` use absolute
 paths. The service worker fetches navigation normally and falls back to its
 cached `/` shell when the network fails, retaining the requested nested URL.
-It excludes API, health and offline storage requests from navigation handling.
+It excludes API, health, offline storage and `/assets` requests from navigation
+handling. Cached asset subresources still load offline.
 A saved article's payload includes its number, so `/offline/a/<number>` resolves
 from the local article cache without contacting the server. Cache keys still
 use opaque article IDs under `/_offline/articles/`.

@@ -24,6 +24,7 @@ self.addEventListener('fetch', event => {
   }
   if (url.origin !== self.location.origin) return
   if (request.mode === 'navigate') {
+    if (/^\/assets(?:\/|$)/.test(url.pathname)) return
     event.respondWith(fetch(request).catch(async () => (await (await caches.open(SHELL)).match('/')) || Response.error()))
   } else if (url.pathname.startsWith('/assets/')) {
     event.respondWith(caches.open(SHELL).then(async cache => (await cache.match(request)) || fetch(request)))

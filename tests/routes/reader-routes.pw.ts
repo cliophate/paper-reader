@@ -116,6 +116,16 @@ test('a service worker serves a nested offline article after refresh', async ({ 
   await page.reload()
   await ready(page, `/offline/a/${article.linkNumber}?unread=0`)
   await expect(page.locator('.article-header h1')).toHaveText(article.title)
+  const asset = await page.locator('script[src]').first().getAttribute('src')
+  expect(await page.evaluate(async url => {
+    const response = await fetch(url!)
+    return { status: response.status, type: response.headers.get('content-type') }
+  }, asset)).toMatchObject({ status: 200, type: expect.stringContaining('javascript') })
+  for (const path of ['/assets', '/assets/missing.js']) {
+    const tab = await context.newPage()
+    await expect(tab.goto(path)).rejects.toThrow(/net::ERR_/)
+    await tab.close()
+  }
   await context.setOffline(false)
 })
 

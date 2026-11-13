@@ -55,6 +55,27 @@ describe('reader routes', () => {
     }
     expect(readReaderLocation('/?view=topics').view).toBe('pulse')
   })
+  it('keeps legacy parameters emitted without a stream or article ID', async () => {
+    const base = { view: 'reader' as const, stream: { kind: 'all' as const, id: 'all', title: 'All articles' },
+      selectedId: '', unreadOnly: false, query: 'quiet', mobilePane: 'stories' as const, searchUnread: true }
+    const old = legacyUrl(base)
+    expect(old).toBe('/?unread=0&q=quiet&searchUnread=1&pane=stories')
+    expect(readReaderLocation(old).searchUnread).toBe(true)
+    expect(readerLocationUrl((await resolve(old)).location, links)).toBe('/?q=quiet&pane=stories')
+    const titled = legacyUrl({ ...base, query: '', stream: { ...base.stream, title: 'Custom all title' } })
+    expect(readReaderLocation(titled).stream.title).toBe('Custom all title')
+    for (const library of ['recent', 'offline'] as const) {
+      const url = legacyUrl({ ...base, query: '', library })
+      expect(readerLocationUrl((await resolve(url)).location, links)).toBe(`/${library}?unread=0&pane=stories`)
+    }
+    const collection = legacyUrl({ ...base, query: '', view: 'pulse', collection: 'collection-uuid' })
+    expect(readerLocationUrl((await resolve(collection)).location, links)).toBe('/collection/14?unread=0&pane=stories')
+    for (const query of ['', 'quiet']) {
+      const url = legacyUrl({ ...base, query, searchUnread: false, after: '2026-01-01', before: '2026-02-01' })
+      expect(readerLocationUrl((await resolve(url)).location, links)).toBe(url)
+    }
+  })
+
   it('keeps old Starred search scopes in the Starred path', async () => {
     const old = legacyUrl({ view: 'reader', stream: { kind: 'all', id: 'all', title: 'All articles' }, selectedId: '',
       unreadOnly: true, query: 'quiet', mobilePane: 'stories', searchStream: { kind: 'starred', id: 'starred', title: 'Starred' }, searchUnread: false })
