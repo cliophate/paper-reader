@@ -1,3 +1,4 @@
+import { AiError } from './ai-errors.js'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,7 +16,7 @@ export async function runCodex(
   reasoningEffort?: 'low' | 'medium',
 ): Promise<unknown> {
   if (!config.enabled) throw new Error('Codex is disabled')
-  if (process.env.PAPER_AI_WORKER_URL?.trim()) return workerBatch({ model, instruction, input, schema, reasoningEffort })
+  if (process.env.PAPER_AI_WORKER_SOCKET?.trim()) return workerBatch({ model, instruction, input, schema, reasoningEffort })
   requireLocalAi()
   return runLocalCodex(config, model, instruction, input, schema, reasoningEffort)
 }
@@ -49,8 +50,13 @@ export async function runLocalCodex(
       '--output-last-message', outputPath,
       '-',
     ], temporaryDirectory, 300_000, signal, prompt)
-    if ((await fs.stat(outputPath)).size > 4 * 1024 * 1024) throw new Error('Model output exceeded the size limit')
-    return JSON.parse(await fs.readFile(outputPath, 'utf8')) as unknown
+    try {
+      if ((await fs.stat(outputPath)).size > 4 * 1024 * 1024) throw new AiError('output_limit', 0)
+      return JSON.parse(await fs.readFile(outputPath, 'utf8')) as unknown
+    } catch (error) {
+      if (error instanceof AiError) throw error
+      throw new AiError('schema', 0)
+    }
   } finally {
     await fs.rm(temporaryDirectory, { recursive: true, force: true })
   }

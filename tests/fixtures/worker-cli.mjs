@@ -4,13 +4,16 @@ import path from 'node:path'
 import readline from 'node:readline'
 
 const args = process.argv.slice(2)
+if (args[0] === '--version') { console.log('codex fixture'); process.exit(0) }
 const mode = args[args.indexOf('--model') + 1]
+fs.appendFileSync(path.join(process.env.HOME, 'starts'), JSON.stringify({ args, pid: process.pid }) + '\n')
 const capture = { argv: args, env: process.env, pid: process.pid, cwd: process.cwd() }
 function wait() {
   fs.writeFileSync(path.join(process.env.HOME, 'running.json'), JSON.stringify(capture))
   setInterval(() => {}, 1000)
 }
 function result(input) {
+  if (mode?.startsWith('stderr:')) { console.error(mode.slice(7)); process.exit(1) }
   if (mode === 'fail') { console.error(input); process.exit(1) }
   if (mode === 'hang') { wait(); return }
   if (mode === 'invalid') return '{broken private article'
@@ -36,6 +39,8 @@ if (args[0] === 'exec') {
     }
     if (event.method === 'turn/start') {
       send({ method: 'item/agentMessage/delta', params: { delta: 'Fixture ' } })
+      if (model === 'invalid') { send({ id: 2, result: {} }); return }
+      if (model?.startsWith('stderr:')) { console.error(model.slice(7)); process.exit(1) }
       if (model === 'hang') { wait(); return }
       if (model === 'fail') { console.error('private article'); process.exit(1) }
       setTimeout(() => {

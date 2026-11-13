@@ -1,13 +1,11 @@
 services:
   paper:
     environment:
-      PAPER_AI_WORKER_URL: http://paper-ai:8081
+      PAPER_AI_WORKER_SOCKET: /run/paper-ai/worker.sock
       PAPER_AI_WORKER_SECRET: ${PAPER_AI_WORKER_SECRET:?Run setup or follow the AI upgrade steps in docs/integrations.md}
     volumes:
       - ./recap:/app/recap:ro
-    networks:
-      - default
-      - ai
+      - ai-socket:/run/paper-ai:ro
   paper-ai:
     image: ghcr.io/cliophate/paper-reader:0.1.0-alpha.3-ai
     build:
@@ -20,10 +18,10 @@ services:
     user: ${PAPER_UID:-1000}:${PAPER_GID:-1000}
     environment:
       HOME: /home/node
-      HOST: 0.0.0.0
-      PORT: 8081
+      PAPER_AI_WORKER_SOCKET: /run/paper-ai/worker.sock
       PAPER_AI_WORKER_SECRET: ${PAPER_AI_WORKER_SECRET:?Run setup or follow the AI upgrade steps in docs/integrations.md}
     volumes:
+      - ai-socket:/run/paper-ai
       - ./ai-auth/codex:/home/node/.codex
       - ./recap:/app/recap:ro
     read_only: true
@@ -34,10 +32,17 @@ services:
     networks:
       - ai
     healthcheck:
-      test: [CMD, node, -e, "fetch('http://127.0.0.1:8081/health',{headers:{'x-paper-ai-secret':process.env.PAPER_AI_WORKER_SECRET}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: [CMD, node, -e, "require('node:http').get({socketPath:process.env.PAPER_AI_WORKER_SOCKET,path:'/health',headers:{'x-paper-ai-secret':process.env.PAPER_AI_WORKER_SECRET}},r=>{r.resume();if(r.statusCode!==200)process.exit(1)}).on('error',()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       start_period: 10s
       retries: 3
 networks:
   ai:
+volumes:
+  ai-socket:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=1m,uid=${PAPER_UID:-1000},gid=${PAPER_GID:-1000},mode=0700

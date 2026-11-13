@@ -2,6 +2,7 @@
 import fs from 'node:fs'
 import readline from 'node:readline'
 const args = process.argv.slice(2)
+if (args[0] === '--version') { console.log('codex fixture'); process.exit(0) }
 function output(schema) {
   if (schema?.type === 'object') return Object.fromEntries(Object.entries(schema.properties || {}).map(([key, value]) => [key, output(value)]))
   if (schema?.type === 'array') return []

@@ -1,5 +1,9 @@
 import crypto from 'node:crypto'
 import http from 'node:http'
+import os from 'node:os'
+import { AiError } from './ai-errors.js'
+import { AiQueue } from './ai-queue.js'
+import { runModelProcess } from './model-process.js'
 import express, { type ErrorRequestHandler } from 'express'
 import { runLocalCodex } from './codex.js'
 import { createLocalChatModel } from './chat-model.js'
@@ -8,6 +12,8 @@ export interface WorkerOptions {
   secret: string
   codexBin: string
   concurrency?: number
+  queueCapacity?: number
+  queueWaitMs?: number
 }
 
 export function createAiWorker(options: WorkerOptions) {
@@ -15,23 +21,26 @@ export function createAiWorker(options: WorkerOptions) {
   const expected = crypto.createHash('sha256').update(options.secret).digest()
   const app = express()
   app.disable('x-powered-by')
-  let active = 0
+  const queue = new AiQueue(options.concurrency, options.queueCapacity, options.queueWaitMs)
+  const ready = runModelProcess(options.codexBin, ['--version'], os.tmpdir(), 5000).then(() => true, () => false)
   const controllers = new Set<AbortController>()
-  app.use((request, response, next) => {
+  app.use(async (request, response, next) => {
     response.set('Cache-Control', 'no-store')
     const supplied = request.get('x-paper-ai-secret') || ''
     if (!crypto.timingSafeEqual(expected, crypto.createHash('sha256').update(supplied).digest())) {
       response.status(401).json({ error: 'Unauthorized' }); return
     }
-    if (request.method === 'GET' && request.path === '/health') { response.json({ status: 'ok' }); return }
+    if (request.method === 'GET' && request.path === '/health') {
+      if (await ready) response.json({ status: 'ok', cli: 'ready' })
+      else response.status(503).json({ status: 'error', cli: 'unavailable', category: 'spawn' })
+      return
+    }
     if (request.method !== 'POST' || !['/v1/codex', '/v1/discussion'].includes(request.path)) {
       response.status(404).json({ error: 'Unknown worker endpoint' }); return
     }
-    if (active >= (options.concurrency ?? 2)) { response.status(429).json({ error: 'AI worker is busy. Try again.' }); return }
-    active++
     const bodyTimer = setTimeout(() => { response.status(408).json({ error: 'Request body timed out' }); request.destroy() }, 15_000)
     request.once('end', () => clearTimeout(bodyTimer))
-    response.once('close', () => { clearTimeout(bodyTimer); active-- })
+    response.once('close', () => clearTimeout(bodyTimer))
     next()
   })
   app.use(express.json({ limit: '2mb', strict: true }))
@@ -45,11 +54,20 @@ export function createAiWorker(options: WorkerOptions) {
       || Object.keys(body).some(key => !['model', 'instruction', 'input', 'schema', 'reasoningEffort'].includes(key))) {
       response.status(400).json({ error: 'Invalid model request' }); return
     }
+    const requestId = crypto.randomUUID()
+    response.set('x-paper-ai-request-id', requestId)
+    const queuedAt = performance.now()
+    let startedAt: number | undefined
+    let release: (() => void) | undefined
     const controller = new AbortController()
     controllers.add(controller)
     const cancel = () => controller.abort()
     response.once('close', cancel)
     try {
+      if (response.destroyed) controller.abort()
+      release = await queue.acquire(controller.signal)
+      if (controller.signal.aborted) throw new AiError('cancelled')
+      startedAt = performance.now()
       if (discussion) {
         response.set({ 'Content-Type': 'application/x-ndjson', 'X-Content-Type-Options': 'nosniff' })
         response.flushHeaders()
@@ -64,13 +82,22 @@ export function createAiWorker(options: WorkerOptions) {
         const result = await runLocalCodex({ enabled: true, bin: options.codexBin }, body.model, body.instruction, body.input, body.schema, body.reasoningEffort, controller.signal)
         response.json({ result })
       }
-    } catch {
+    } catch (error) {
+      const failure = error instanceof AiError ? error : new AiError('unknown')
+      const now = performance.now()
+      console.error(JSON.stringify({ event: 'ai_worker_failed', requestId, endpoint: request.path,
+        queueWaitMs: Math.round((startedAt ?? now) - queuedAt), runDurationMs: startedAt === undefined ? 0 : Math.round(now - startedAt),
+        exitCode: failure.exitCode, signal: failure.signal, category: failure.category }))
       if (!response.destroyed) {
-        const error = { error: 'Model request failed. Check the worker CLI login and model access.' }
-        if (response.headersSent) response.end(JSON.stringify({ type: 'error', ...error }) + '\n')
-        else response.status(502).json(error)
+        const payload = { category: failure.category, requestId }
+        if (response.headersSent) response.end(JSON.stringify({ type: 'error', ...payload }) + '\n')
+        else {
+          if (failure.category === 'busy') response.set('Retry-After', '5')
+          response.status(failure.category === 'busy' ? 503 : 502).json(payload)
+        }
       }
     } finally {
+      release?.()
       controller.abort()
       controllers.delete(controller)
       response.off('close', cancel)
