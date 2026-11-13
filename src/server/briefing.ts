@@ -7,7 +7,6 @@ import type { PaperDatabase, BriefingRecord } from './db.js'
 import type { EntrySource } from './repository.js'
 import { renderBriefing } from './email.js'
 import { checkBriefingSources } from './briefing-sources.js'
-import { runOpenCode } from './opencode.js'
 import type { ReaderService } from './reader.js'
 import { emailText, plainText } from './text.js'
 import type { TopicService } from './topics.js'
@@ -126,7 +125,7 @@ export class BriefingService {
   ) {}
 
   async generate(kind: 'morning' | 'evening', force = false): Promise<BriefingRecord> {
-    if (!this.config.ai.briefingsEnabled || !(this.config.codex.enabled || this.config.openCode.enabled)) throw new Error('Briefing generation is disabled. Enable it in Settings.')
+    if (!this.config.ai.briefingsEnabled || !this.config.codex.enabled) throw new Error('Briefing generation is disabled. Enable it in Settings.')
     const recent = force ? null : this.db.recentGeneratedBriefing(kind, new Date(Date.now() - 15 * 60_000))
     if (recent) return recent
 
@@ -320,17 +319,13 @@ export class BriefingService {
   }
 
   private profileDirectory(): string {
-    return this.config.codex.enabled ? this.config.codex.configDir : this.config.openCode.configDir
+    return this.config.codex.configDir
   }
 
   private runModel(stage: 'shortlist' | 'editor', instruction: string, input: unknown, schema: Record<string, unknown>): Promise<unknown> {
     if (!this.config.ai.briefingsEnabled) throw new Error('Briefing generation is disabled.')
-    if (this.config.codex.enabled) {
-      const model = stage === 'shortlist' ? this.config.codex.shortlistModel : this.config.codex.editorModel
-      return runCodex(this.config.codex, model, instruction, input, schema)
-    }
-    const model = stage === 'shortlist' ? this.config.openCode.shortlistModel : this.config.openCode.editorModel
-    return runOpenCode(this.config.openCode, model, instruction, input)
+    const model = stage === 'shortlist' ? this.config.codex.shortlistModel : this.config.codex.editorModel
+    return runCodex(this.config.codex, model, instruction, input, schema)
   }
 
   private async enrichEntries(writerIds: string[], clusters: NewsCluster[], entries: Map<string, Entry>) {

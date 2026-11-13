@@ -81,7 +81,7 @@ def start_paper(state):
                '-e', 'PAPER_INTERNAL_SECRET=synthetic-internal-secret-for-release-test',
                '-e', 'PAPER_SIGNING_SECRET=synthetic-signing-secret-for-release-test',
                '-e', 'PAPER_TRUSTED_FEED_ORIGINS=http://fixture:8080',
-               '-e', 'CODEX_ENABLED=false', '-e', 'OPENCODE_ENABLED=false', IMAGE)
+               '-e', 'CODEX_ENABLED=false', IMAGE)
 
 
 def start_standalone(state):
@@ -89,7 +89,7 @@ def start_standalone(state):
     state.chmod(0o700)
     return run('paper', '--user', f'{os.getuid()}:{os.getgid()}', '-p', '127.0.0.1::8080', '-v', f'{state}:/data',
                '-e', 'PAPER_BACKEND=standalone', '-e', 'HOST=0.0.0.0', '-e', 'PUBLIC_URL=http://localhost',
-               '-e', 'PAPER_TRUSTED_FEED_ORIGINS=http://fixture:8080', '-e', 'CODEX_ENABLED=false', '-e', 'OPENCODE_ENABLED=false',
+               '-e', 'PAPER_TRUSTED_FEED_ORIGINS=http://fixture:8080', '-e', 'CODEX_ENABLED=false',
                IMAGE)
 
 

@@ -43,7 +43,7 @@ async function start(publicUrl: string) {
       PATH: process.env.PATH, HOME: directory, NODE_NO_WARNINGS: '1', STATE_DIR: directory,
       PAPER_BACKEND: 'standalone', HOST: '127.0.0.1', PORT: String(port),
       ...(publicUrl ? { PUBLIC_URL: publicUrl } : {}),
-      PAPER_SYNC_ENABLED: 'false', CODEX_ENABLED: 'false', OPENCODE_ENABLED: 'false',
+      PAPER_SYNC_ENABLED: 'false', CODEX_ENABLED: 'false',
     },
   })
   let output = ''

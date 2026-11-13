@@ -58,7 +58,6 @@ jobs:
           tags: paper-public:ai-test
           build-args: SOURCE_REVISION=${{ github.sha }}
       - run: docker run --rm --network none paper-public:ai-test codex --version
-      - run: docker run --rm --network none paper-public:ai-test opencode --version
       - run: PAPER_TEST_IMAGE=paper-public:ai-test python3 scripts/test-installation.py
       - name: Push verified images
         env:

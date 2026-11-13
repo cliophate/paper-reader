@@ -1,7 +1,6 @@
 export interface AiSettings {
   enabled: boolean
   codexEnabled: boolean
-  openCodeEnabled: boolean
   discussionEnabled: boolean
   briefingsEnabled: boolean
   headlinesEnabled: boolean

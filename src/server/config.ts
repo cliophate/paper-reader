@@ -48,7 +48,13 @@ export type Config = ReturnType<typeof loadConfig>
 
 export function stateDirectory() { return value('STATE_DIR', path.resolve('data')) }
 
+let warnedOpenCode = false
+
 export function loadConfig(secrets?: { internalSecret: string; signingSecret: string }) {
+  if (!warnedOpenCode && Object.keys(process.env).some(key => key.startsWith('OPENCODE_'))) {
+    console.warn('OpenCode support was removed. Its environment variables are ignored. Enable Codex in Settings to use AI.')
+    warnedOpenCode = true
+  }
   const backend = value('PAPER_BACKEND', 'freshrss')
   if (backend !== 'freshrss' && backend !== 'standalone') throw new Error('PAPER_BACKEND must be freshrss or standalone')
   if (backend === 'standalone' && value('PAPER_LOCAL_READS', 'true') !== 'true') throw new Error('Standalone mode requires PAPER_LOCAL_READS=true')
@@ -107,12 +113,6 @@ export function loadConfig(secrets?: { internalSecret: string; signingSecret: st
       shortlistModel: value('CODEX_SHORTLIST_MODEL', 'gpt-5.6-luna'),
       editorModel: value('CODEX_EDITOR_MODEL', 'gpt-5.6-sol'),
     },
-    openCode: {
-      enabled: value('OPENCODE_ENABLED', 'false') === 'true',
-      bin: value('OPENCODE_BIN', '/usr/local/bin/opencode'),
-      configDir: value('OPENCODE_CONFIG_DIR', path.resolve('recap')),
-      shortlistModel: value('OPENCODE_SHORTLIST_MODEL', 'openai/gpt-5.6-luna-fast'),
-      editorModel: value('OPENCODE_EDITOR_MODEL', 'openai/gpt-5.6-terra'),
-    },
+
   }
 }

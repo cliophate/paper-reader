@@ -31,7 +31,7 @@ db.saveReadingProgress(members[0].id, .25)
 db.close()
 const child = spawn(process.execPath, [path.resolve('dist-server/index.js')], { stdio: 'inherit', env: {
   PATH: process.env.PATH, NODE_NO_WARNINGS: '1', STATE_DIR: state, PAPER_BACKEND: 'standalone', PAPER_SYNC_ENABLED: 'false',
-  HOST: '127.0.0.1', PORT: '4318', PUBLIC_URL: 'http://127.0.0.1:4318', CODEX_ENABLED: 'false', OPENCODE_ENABLED: 'false',
+  HOST: '127.0.0.1', PORT: '4318', PUBLIC_URL: 'http://127.0.0.1:4318', CODEX_ENABLED: 'false',
 } })
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill('SIGTERM'))
 try { await once(child, 'exit') }

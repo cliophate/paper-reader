@@ -80,7 +80,7 @@ and full-text requests reject private network destinations.
 
 ## AI
 
-CODEX_ENABLED and OPENCODE_ENABLED default to false. Settings provides a master
+CODEX_ENABLED defaults to false. Settings provides a master
 AI switch, provider switches, and individual switches for discussions, headline
 cleanup, Pulse grouping, and briefing generation. Turning AI off stops new model
 requests and cancels active discussions. A batch request already running may
@@ -93,21 +93,19 @@ model on an account. Set model names that your account can access.
 
 For a native Node installation, install and authenticate the desired CLI using
 its official instructions, then set its executable path. The Codex connection
-uses its batch CLI and app-server; OpenCode is a briefing/grouping fallback.
+uses its batch CLI and app-server.
 Article discussions and headline review currently require Codex.
 
 The optional compose.ai.yaml uses the AI image with pinned CLI packages. Run:
 
 ```sh
-mkdir -p ai-auth/codex ai-auth/opencode
+mkdir -p ai-auth/codex
 docker compose -f compose.yaml -f compose.ai.yaml pull paper
 docker compose -f compose.yaml -f compose.ai.yaml run --rm --no-deps paper codex login --device-auth
 ```
 
 Its authentication directory is ./ai-auth/codex, separate from your host login.
-It is private writable state so the CLI can refresh its login. Authenticate
-OpenCode separately with its official CLI if you use that fallback. Its login
-command inside the same container is opencode auth login. Start Paper:
+It is private writable state so the CLI can refresh its login. Start Paper:
 
 ```sh
 docker compose -f compose.yaml -f compose.ai.yaml up -d --no-build paper
@@ -126,7 +124,6 @@ Official setup and authentication guidance:
 
 - https://learn.chatgpt.com/docs/codex/cli
 - https://learn.chatgpt.com/docs/auth
-- https://opencode.ai/docs/
 
 ## Full-text fallback
 

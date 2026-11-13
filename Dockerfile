@@ -26,7 +26,7 @@ COPY --from=build /app/dist-server ./dist-server
 COPY recap ./recap
 COPY LICENSE THIRD_PARTY_NOTICES.md ./
 COPY licenses ./licenses
-RUN mkdir -p /data /home/node/.local/share/opencode /home/node/.codex && chown -R node:node /app /data /home/node/.local /home/node/.codex
+RUN mkdir -p /data /home/node/.local /home/node/.codex && chown -R node:node /app /data /home/node/.local /home/node/.codex
 USER node
 EXPOSE 8080
 CMD ["node", "dist-server/index.js"]
@@ -34,6 +34,5 @@ CMD ["node", "dist-server/index.js"]
 FROM runtime AS ai
 USER root
 ARG CODEX_VERSION=0.167.0
-ARG OPENCODE_VERSION=1.19.5
-RUN npm install --global @openai/codex@${CODEX_VERSION} opencode-ai@${OPENCODE_VERSION} && npm cache clean --force
+RUN npm install --global @openai/codex@${CODEX_VERSION} && npm cache clean --force
 USER node

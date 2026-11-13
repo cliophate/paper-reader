@@ -15,7 +15,7 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
   settings = {
-    ai: { enabled: false, codexEnabled: true, openCodeEnabled: false, discussionEnabled: true, briefingsEnabled: true, headlinesEnabled: true, collectionsEnabled: true },
+    ai: { enabled: false, codexEnabled: true, discussionEnabled: true, briefingsEnabled: true, headlinesEnabled: true, collectionsEnabled: true },
     readwise: { enabled: true, location: 'later', tokenConfigured: true, tokenSource: 'environment' },
     kirby: { enabled: false, publishUrl: '', tokenConfigured: false, tokenSource: null },
   }

@@ -14,7 +14,6 @@ services:
       PORT: 8080
       STATE_DIR: /data
       CODEX_BRIEFING_CONFIG_DIR: /app/recap
-      OPENCODE_CONFIG_DIR: /app/recap
     ports:
       - 127.0.0.1:${PAPER_PORT:-8080}:8080
     volumes:

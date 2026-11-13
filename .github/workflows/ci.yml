@@ -87,4 +87,3 @@ jobs:
           push: false
           build-args: SOURCE_REVISION=${{ github.sha }}
       - run: docker run --rm --network none paper-public:ai-test codex --version
-      - run: docker run --rm --network none paper-public:ai-test opencode --version

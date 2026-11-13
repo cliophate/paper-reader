@@ -5,5 +5,4 @@ services:
       target: ai
     volumes:
       - ./ai-auth/codex:/home/node/.codex
-      - ./ai-auth/opencode:/home/node/.local/share/opencode
       - ./recap:/app/recap:ro

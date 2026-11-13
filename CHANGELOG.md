@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+OpenCode support was removed. Briefings and collections now use Codex only.
+Old OPENCODE_* variables are ignored with a startup notice. Existing saved
+OpenCode-only settings stay off until Codex is enabled in Settings.
+
 The offline FreshRSS migration command was removed. FreshRSS mode remains
 available. Start new installations as standalone.
 

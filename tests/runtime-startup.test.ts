@@ -33,7 +33,7 @@ function start(file: string, port: number, extra: NodeJS.ProcessEnv = {}) {
   const child = spawn(process.execPath, ['--import', 'tsx', `src/server/${file}.ts`], {
     stdio: ['ignore', 'pipe', 'pipe'], env: { PATH: process.env.PATH, HOME: directory, NODE_NO_WARNINGS: '1',
       STATE_DIR: directory, PAPER_BACKEND: 'standalone', PORT: String(port), HOST: '127.0.0.1', PUBLIC_URL: `http://127.0.0.1:${port}`,
-      PAPER_SYNC_ENABLED: 'false', CODEX_ENABLED: 'false', OPENCODE_ENABLED: 'false', ...extra },
+      PAPER_SYNC_ENABLED: 'false', CODEX_ENABLED: 'false', ...extra },
   })
   children.push(child)
   let output = ''

@@ -32,7 +32,6 @@ import { BackendSynchronizer } from './sync.js'
 import { escapeHtml } from './text.js'
 import { TopicService } from './topics.js'
 import { PulseService } from './pulse.js'
-import { runOpenCode } from './opencode.js'
 import { streamXMedia } from './x-media.js'
 import { XThreadService } from './x-thread.js'
 import { BackendValidationError, type EntryStateOperation } from './backend.js'
@@ -66,10 +65,8 @@ const headlines = new HeadlineService(database, url => reader.fetch(url, 0), (st
 const xThreads = new XThreadService(config.rssHub.baseUrl)
 let localReadsActive = Boolean(standalone) || config.sync.localReads && database.getSyncValue('backfill_complete') === 'true'
 const entriesSource = switchingEntrySource(() => localReadsActive, repository, backend)
-const pulse = new PulseService(database, (prompt, input, schema) => config.codex.enabled
-  ? runCodex(config.codex, config.collections.model, prompt, input, schema, 'medium')
-  : runOpenCode(config.openCode, `openai/${config.collections.model}`, prompt, input),
-  config.collections.enabled && (config.codex.enabled || config.openCode.enabled))
+const pulse = new PulseService(database, (prompt, input, schema) => runCodex(config.codex, config.collections.model, prompt, input, schema, 'medium'),
+  config.collections.enabled && config.codex.enabled)
 const topics = new TopicService(database, entriesSource, () => pulse.list().collections)
 const briefings = new BriefingService(config, database, entriesSource, reader, topics)
 const app = express()
@@ -154,7 +151,7 @@ app.get('/api/status', (_request, response) => response.json({
   rssHubConfigured: Boolean(config.rssHub.baseUrl),
   readwiseConfigured: readwise.configured,
   kirbyConfigured: kirby.configured,
-  briefingConfigured: config.ai.briefingsEnabled && (config.codex.enabled || config.openCode.enabled),
+  briefingConfigured: config.ai.briefingsEnabled && config.codex.enabled,
   localReadsConfigured: config.sync.localReads,
   localReadsActive,
   sync: synchronizer.status(),
@@ -172,7 +169,7 @@ app.patch('/api/settings/connections', (request, response) => {
   try {
     const settings = connectionSettings.update(request.body)
     headlines.setEnabled(config.headlines.enabled && config.codex.enabled)
-    pulse.setEnabled(config.collections.enabled && (config.codex.enabled || config.openCode.enabled))
+    pulse.setEnabled(config.collections.enabled && config.codex.enabled)
     if (!discussionEnabled()) discussions.stopAll()
     for (const listener of connectionListeners) listener()
     response.json(settings)
@@ -601,7 +598,7 @@ app.delete('/api/feeds', asyncRoute(async (request, response) => {
 }))
 
 app.post('/api/internal/briefings/generate', requireInternalSecret, asyncRoute(async (request, response) => {
-  if (!config.ai.briefingsEnabled || !(config.codex.enabled || config.openCode.enabled)) return response.status(503).json({ error: 'Briefing generation is disabled. Enable it in Settings.' })
+  if (!config.ai.briefingsEnabled || !config.codex.enabled) return response.status(503).json({ error: 'Briefing generation is disabled. Enable it in Settings.' })
   const kind = request.body?.kind === 'evening' ? 'evening' : 'morning'
   const briefing = await briefings.generate(kind)
   response.json({

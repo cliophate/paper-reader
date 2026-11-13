@@ -59,14 +59,13 @@ function ConnectionForm({ title, children, onSave }: { title: string; children: 
 function AiConnection({ settings, onSave }: { settings: AiSettings; onSave: (patch: ConnectionsUpdate) => Promise<void> }) {
   const [ai, setAi] = useState(settings)
   const toggle = (key: keyof AiSettings) => (value: boolean) => setAi(previous => ({ ...previous, [key]: value }))
-  const provider = ai.codexEnabled || ai.openCodeEnabled
+  const provider = ai.codexEnabled
   return <ConnectionForm title="AI features" onSave={() => onSave({ ai })}>
     <Toggle label="Enable AI features" checked={ai.enabled} onChange={toggle('enabled')} />
     <p className="connection-help">AI sends article text to your chosen provider. Pulse grouping and headline cleanup can run in the background after a sync and may incur charges. Turning AI off stops new requests. Requests already running may finish.</p>
     <fieldset disabled={!ai.enabled}>
       <legend>Providers</legend>
       <Toggle label="Use Codex" checked={ai.codexEnabled} onChange={toggle('codexEnabled')} />
-      <Toggle label="Use OpenCode as a fallback" checked={ai.openCodeEnabled} onChange={toggle('openCodeEnabled')} />
       {!provider && <p className="connection-help">Select a provider to run AI features.</p>}
     </fieldset>
     <fieldset disabled={!ai.enabled}>
@@ -77,12 +76,11 @@ function AiConnection({ settings, onSave }: { settings: AiSettings; onSave: (pat
       <Toggle label="Briefing generation" checked={ai.briefingsEnabled} disabled={!provider} onChange={toggle('briefingsEnabled')} />
     </fieldset>
     <details className="connection-setup"><summary>How to set up AI</summary>
-      <p>Paper uses the Codex and OpenCode CLIs. The standard reader image does not include them. For Docker, run these commands from your Paper checkout:</p>
-      <pre><code>{`mkdir -p ai-auth/codex ai-auth/opencode\ndocker compose -f compose.yaml -f compose.ai.yaml build paper\ndocker compose -f compose.yaml -f compose.ai.yaml run --rm --no-deps paper codex login --device-auth\ndocker compose -f compose.yaml -f compose.ai.yaml up -d paper`}</code></pre>
+      <p>Paper uses the Codex CLI. The standard reader image does not include them. For Docker, run these commands from your Paper checkout:</p>
+      <pre><code>{`mkdir -p ai-auth/codex\ndocker compose -f compose.yaml -f compose.ai.yaml build paper\ndocker compose -f compose.yaml -f compose.ai.yaml run --rm --no-deps paper codex login --device-auth\ndocker compose -f compose.yaml -f compose.ai.yaml up -d paper`}</code></pre>
       <p>Complete the login link and one-time code in your own browser. Device login may need enabling in your ChatGPT security or workspace settings. See <a href="https://learn.chatgpt.com/docs/auth" target="_blank" rel="noreferrer">Codex authentication</a>.</p>
-      <p>For OpenCode, run <code>docker compose -f compose.yaml -f compose.ai.yaml run --rm --no-deps paper opencode auth login</code> and follow the <a href="https://opencode.ai/docs/" target="_blank" rel="noreferrer">OpenCode setup guide</a>. Codex handles discussions and headlines. OpenCode can handle briefings and grouping when Codex is off.</p>
       <p>For a native installation, install and log in to each CLI as the user running Paper. Set its executable path and accessible model names in your server environment, then restart Paper. After setup, enable the provider and features here and save. Enabling a provider here does not verify its login or model access.</p>
-      <p>Model names come from your server's <code>.env</code>. Set <code>PAPER_DISCUSSION_MODEL</code> for discussions, <code>PAPER_COLLECTION_MODEL</code> for Pulse, and <code>PAPER_HEADLINE_WRITER_MODEL</code> / <code>PAPER_HEADLINE_REVIEWER_MODEL</code> for headlines. Briefings use <code>CODEX_SHORTLIST_MODEL</code> / <code>CODEX_EDITOR_MODEL</code>, or their <code>OPENCODE_</code> equivalents. Choose models your provider account can access, then restart Paper after changing the environment.</p>
+      <p>Model names come from your server's <code>.env</code>. Set <code>PAPER_DISCUSSION_MODEL</code> for discussions, <code>PAPER_COLLECTION_MODEL</code> for Pulse, and <code>PAPER_HEADLINE_WRITER_MODEL</code> / <code>PAPER_HEADLINE_REVIEWER_MODEL</code> for headlines. Briefings use <code>CODEX_SHORTLIST_MODEL</code> / <code>CODEX_EDITOR_MODEL</code>. Choose models your provider account can access, then restart Paper after changing the environment.</p>
       <p>AI credentials remain in the CLI login store. Paper does not accept AI tokens in this form. Existing briefings and discussions remain saved when AI is off. Briefing schedules require separate automation.</p>
     </details>
   </ConnectionForm>
