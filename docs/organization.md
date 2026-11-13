@@ -10,6 +10,10 @@ the capabilities its adapter can support.
 Standalone folders use `paper:folder:<uuid>`. Folder names, positions and feed
 URLs never determine identity. Subscriptions keep their existing opaque IDs.
 Empty folders persist independently of memberships and article imports.
+[Reader routes](reader-routes.md) documents the separate v12 link-number table.
+Standalone feed and folder renames keep their numbers. FreshRSS folder IDs change
+on rename, so those folders get new numbers. Navigation replacement never deletes
+the number mappings.
 
 Folder titles trim surrounding whitespace and normalize to Unicode NFC.
 Collision checks compare NFKC-normalized, lowercase names. Empty names and

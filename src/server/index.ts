@@ -216,7 +216,7 @@ app.get('/api/events', (request, response) => {
 app.use('/api/organization', organizationRouter({ database, backend, synchronizer, navigation: () => entriesSource.navigation() }))
 
 app.get('/api/navigation', asyncRoute(async (_request, response) => {
-  response.json(await entriesSource.navigation())
+  response.json(database.numberNavigation(await entriesSource.navigation()))
 }))
 
 app.post('/api/sync', asyncRoute(async (_request, response) => {
@@ -410,7 +410,7 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
   }
   if (!query) {
     const page = await backend.entriesPage(stream, { unreadOnly, limit: ENTRY_PAGE_SIZE, continuation })
-    return response.json(headlines.page(page))
+    return response.json(headlines.page({ ...page, items: database.numberEntries(page.items) }))
   }
 
   const items: Entry[] = []
@@ -425,13 +425,22 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
     seenContinuations.add(page.continuation)
     continuation = page.continuation
   }
-  response.json(headlines.page({ items, continuation }))
+  response.json(headlines.page({ items: database.numberEntries(items), continuation }))
+}))
+
+app.get('/api/entries/number/:number', asyncRoute(async (request, response) => {
+  const number = Number(request.params.number)
+  if (!/^[1-9][0-9]*$/.test(String(request.params.number)) || !Number.isSafeInteger(number)) return response.status(400).json({ error: 'Invalid article number' })
+  const cached = database.entryByNumber(number)
+  const entry = cached && (localReadsActive ? cached : await entriesSource.entry(cached.id))
+  if (!entry) return response.status(404).json({ error: 'Article not found' })
+  response.json({ entry: headlines.decorate(database.numberEntry(entry)) })
 }))
 
 app.post('/api/entries/item', asyncRoute(async (request, response) => {
   const entry = await entriesSource.entry(String(request.body?.id || ''))
   if (!entry) return response.status(404).json({ error: 'Paper could not find this article' })
-  response.json({ entry: headlines.decorate(entry) })
+  response.json({ entry: headlines.decorate(database.numberEntries([entry])[0]) })
 }))
 
 app.post('/api/entries/state', asyncRoute(async (request, response) => {
@@ -647,6 +656,9 @@ app.post('/briefings/:id/confirm', asyncRoute(async (request, response) => {
 
 const clientPath = path.resolve('dist')
 app.use(express.static(clientPath, { index: false, maxAge: '1h' }))
+app.use(['/api', '/_offline', '/assets', '/health'], (_request, response) => {
+  response.set('Content-Security-Policy', "default-src 'none'").sendStatus(404)
+})
 app.get('*splat', (_request, response) => response.sendFile('index.html', { root: clientPath }))
 
 app.use((error: Error, request: Request, response: Response, _next: NextFunction) => {

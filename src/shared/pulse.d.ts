@@ -18,6 +18,7 @@ export interface PulseSource {
 }
 
 export interface PulseCollection {
+  linkNumber?: number
   id: string
   headline: string
   scope: string

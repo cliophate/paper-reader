@@ -74,6 +74,7 @@ export const api = {
     if (continuation) params.set('continuation', continuation)
     return request<EntryPage>(`/api/entries?${params}`, { signal })
   },
+  entryByNumber: (number: number) => request<{ entry: Entry }>(`/api/entries/number/${number}`),
   entry: (id: string) => request<{ entry: Entry | null }>('/api/entries/item', { method: 'POST', body: JSON.stringify({ id }) }),
   editState: (ids: string[], operation: 'read' | 'unread' | 'star' | 'unstar', origin: 'reader' | 'pulse' | 'automatic' = 'reader', options: { expectedRevisions?: Record<string, number>; undo?: boolean } = {}) =>
     request<{ ok: boolean; revisions?: Record<string, number>; undoToken?: string }>('/api/entries/state', { method: 'POST', body: JSON.stringify({ ids, operation, origin, ...options }) }),

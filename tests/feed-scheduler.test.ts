@@ -298,7 +298,7 @@ describe('schema v9 recovery', () => {
     expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
     const connection = new DatabaseSync(backup, { readOnly: true })
     expect(connection.prepare('PRAGMA user_version').get()?.user_version).toBe(8); connection.close()
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(11)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(12)
   })
   it('rolls back migration failures and reuses its pre-upgrade backup', () => {
     downgrade()
@@ -308,7 +308,7 @@ describe('schema v9 recovery', () => {
     const backup = fs.readFileSync(`${file}.before-feed-fetch-v9`)
     sql(c => c.exec('DROP VIEW feed_fetch_state'))
     const migrated = new PaperDatabase(file); extras.push(migrated)
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(11)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(12)
     expect(fs.readFileSync(`${file}.before-feed-fetch-v9`)).toEqual(backup)
   })
 })

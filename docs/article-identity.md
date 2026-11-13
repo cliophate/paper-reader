@@ -144,8 +144,11 @@ by the current FreshRSS adapter.
 
 ## Upgrade and recovery
 
-The current schema is v11. [Search indexing](search-index.md) documents its
-durable row mapping, full-text rebuild and pre-upgrade backup.
+The current schema is v12. [Reader routes](reader-routes.md) documents the additive
+link-number table, backfill and `.before-link-numbers-v12` backup. Article links
+reuse the existing arrival sequence without changing identity.
+[Search indexing](search-index.md) documents v11's durable row mapping, full-text
+rebuild and pre-upgrade backup.
 Schema v10 adds backend and revision context to undo actions. Its pre-upgrade
 backup is `.before-standalone-setup-v10`.
 [Standalone feed scheduling](feed-scheduling.md)

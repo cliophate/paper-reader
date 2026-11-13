@@ -17,13 +17,14 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const request = event.request
   const url = new URL(request.url)
-  if (request.method !== 'GET' || url.pathname.startsWith('/api/')) return
+  if (request.method !== 'GET' || /^\/(?:api|_offline|health)(?:\/|$)/.test(url.pathname)) return
   if (request.destination === 'image') {
     event.respondWith(caches.open(MEDIA).then(cache => cache.match(request)).then(cached => cached || fetch(request)))
     return
   }
   if (url.origin !== self.location.origin) return
   if (request.mode === 'navigate') {
+    if (/^\/assets(?:\/|$)/.test(url.pathname)) return
     event.respondWith(fetch(request).catch(async () => (await (await caches.open(SHELL)).match('/')) || Response.error()))
   } else if (url.pathname.startsWith('/assets/')) {
     event.respondWith(caches.open(SHELL).then(async cache => (await cache.match(request)) || fetch(request)))

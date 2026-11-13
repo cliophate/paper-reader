@@ -9,7 +9,8 @@ import { IdentityStore, migrateIdentity, type BackendIdentity, type SourceItemId
 import { transaction } from './transaction.js'
 import { FeedFetchStore, migrateFeedFetchState } from './feed-fetch-state.js'
 import { migrateStandaloneSetup } from './migration-schema.js'
-import { DATABASE_VERSION, migrateSearchRows } from './search-schema.js'
+import { migrateSearchRows } from './search-schema.js'
+import { DATABASE_VERSION, migrateLinkNumbers } from './link-numbers.js'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
@@ -189,7 +190,8 @@ export class PaperDatabase {
         this.backupBeforeMigration(8, 'organization')
         this.backupBeforeMigration(9, 'feed-fetch')
         this.backupBeforeMigration(10, 'standalone-setup')
-        this.backupBeforeMigration(DATABASE_VERSION, 'search-rows')
+        this.backupBeforeMigration(11, 'search-rows')
+        this.backupBeforeMigration(12, 'link-numbers')
         const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
         // Current-schema participants must not drop/recreate triggers on every
         // open. Coordinated bootstrap performs upgrades under exclusive access.
@@ -422,6 +424,10 @@ export class PaperDatabase {
   }
 
   private migrate() {
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) >= 11 && this.getSyncValue('fulltext_search_v1') === 'true') {
+      migrateLinkNumbers(this.db)
+      return
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS discussions (
         entry_id TEXT PRIMARY KEY,
@@ -715,6 +721,40 @@ export class PaperDatabase {
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 9) migrateFeedFetchState(this.db)
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 10) migrateStandaloneSetup(this.db)
     migrateSearchRows(this.db)
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 12) migrateLinkNumbers(this.db)
+  }
+
+  linkNumber(kind: 'feed' | 'folder' | 'collection', id: string): number {
+    const row = this.db.prepare('SELECT number FROM link_numbers WHERE kind = ? AND target_id = ?').get(kind, id)
+    if (row) return Number(row.number)
+    this.db.prepare('INSERT OR IGNORE INTO link_numbers(kind, target_id) VALUES (?, ?)').run(kind, id)
+    return Number(this.db.prepare('SELECT number FROM link_numbers WHERE kind = ? AND target_id = ?').get(kind, id)!.number)
+  }
+
+  numberNavigation(navigation: NavigationPayload): NavigationPayload {
+    const feed = (item: Feed): Feed => ({ ...item, linkNumber: this.linkNumber('feed', item.id) })
+    return { ...navigation, uncategorized: navigation.uncategorized.map(feed),
+      folders: navigation.folders.map(folder => ({ ...folder, linkNumber: this.linkNumber('folder', folder.id), feeds: folder.feeds.map(feed) })) }
+  }
+
+  numberEntries(entries: Entry[]): Entry[] {
+    return transaction(this.db, () => {
+      const arrival = this.db.prepare('SELECT sequence FROM article_arrivals WHERE entry_id = ?')
+      for (const entry of entries) {
+        if (!arrival.get(entry.id)) this.upsertEntries([entry])
+      }
+      return entries.map(entry => this.numberEntry(entry))
+    })
+  }
+
+  numberEntry(entry: Entry): Entry {
+    const row = this.db.prepare('SELECT sequence FROM article_arrivals WHERE entry_id = ?').get(entry.id)
+    return { ...entry, linkNumber: row ? Number(row.sequence) : undefined }
+  }
+
+  entryByNumber(number: number): Entry | null {
+    const row = this.db.prepare('SELECT entry_id FROM article_arrivals WHERE sequence = ?').get(number)
+    return row ? this.localEntry(String(row.entry_id)) : null
   }
 
   replaceNavigation(navigation: NavigationPayload) {
@@ -877,7 +917,7 @@ export class PaperDatabase {
         AND NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = entries.id)
       ORDER BY timestamp DESC, id LIMIT ?
     `).all(after, after, before, limit) as Array<Record<string, string | number>>
-    return rows.map(entryFromRow)
+    return rows.map(row => this.numberEntry(entryFromRow(row)))
   }
 
   pulseRelatedCandidates(entries: Entry[], now: number, limit = 80): Entry[] {
@@ -891,7 +931,7 @@ export class PaperDatabase {
       AND NOT EXISTS (SELECT 1 FROM pulse_memberships WHERE entry_id = entries.id)
       AND NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = entries.id)
       ORDER BY bm25(entries_fts), entries.timestamp DESC, entries.id LIMIT ?`).all(query, now - 30 * 86_400_000, now + 60_000, limit) as Array<Record<string, string | number>>
-    return rows.map(entryFromRow)
+    return rows.map(row => this.numberEntry(entryFromRow(row)))
   }
 
   briefingEntries(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; before: Date }): Entry[] {
@@ -909,7 +949,7 @@ export class PaperDatabase {
     const rows = this.db.prepare(`SELECT entries.* FROM entries LEFT JOIN briefing_considered ON briefing_considered.entry_id = entries.id
       WHERE ${clauses.join(' AND ')} ORDER BY COALESCE(briefing_considered.considered_at, 0), MAX(entries.timestamp, entries.first_seen_at) DESC, entries.id
       LIMIT ?`).all(...parameters, options.limit || 1000) as Array<Record<string, string | number>>
-    return rows.map(entryFromRow)
+    return rows.map(row => this.numberEntry(entryFromRow(row)))
   }
 
   recordBriefingConsidered(ids: string[], at: number) {
@@ -980,7 +1020,7 @@ export class PaperDatabase {
       FROM pulse_collections LEFT JOIN pulse_visits ON pulse_visits.collection_id = pulse_collections.id`).all()
     return collections.map(row => {
       const members = sources.get(String(row.id)) || []
-      return { id: String(row.id), headline: String(row.headline), scope: String(row.scope), createdAt: String(row.created_at),
+      return { id: String(row.id), linkNumber: this.linkNumber('collection', String(row.id)), headline: String(row.headline), scope: String(row.scope), createdAt: String(row.created_at),
         updatedAt: members[0]?.addedAt || String(row.created_at), revision: members[0]?.sequence || 0,
         seenThrough: Number(row.seen_through), newCount: 0, unreadCount: 0, publicationCount: 0,
         articleCount: members.length, quiet: false, sources: members.map(source => ({ ...source, isNew: source.sequence > Number(row.seen_through) })) }
@@ -1147,7 +1187,7 @@ export class PaperDatabase {
         SUM(CASE WHEN starred = 1 THEN 1 ELSE 0 END) AS starred
       FROM entries
     `).get() as { unread: number | null; starred: number | null }
-    return { unread: Number(counts.unread || 0), starred: Number(counts.starred || 0), folders, uncategorized }
+    return this.numberNavigation({ unread: Number(counts.unread || 0), starred: Number(counts.starred || 0), folders, uncategorized })
   }
 
   private pageScope(stream: StreamRef, options: PageOptions) {
@@ -1277,7 +1317,7 @@ export class PaperDatabase {
     const progress = this.db.prepare('SELECT position, updated_at FROM reading_progress WHERE entry_id = ?').get(entry.id)
     const saved = this.db.prepare(`SELECT saved_at FROM readwise_saves WHERE url = ? OR url IN
       (SELECT url FROM article_urls WHERE entry_id = ?) ORDER BY saved_at DESC LIMIT 1`).get(entry.url, entry.id)
-    return { ...entry, readingPosition: progress ? Number(progress.position) : undefined, lastReadAt: progress ? String(progress.updated_at) : undefined, readwiseSavedAt: saved ? String(saved.saved_at) : undefined }
+    return { ...this.numberEntry(entry), readingPosition: progress ? Number(progress.position) : undefined, lastReadAt: progress ? String(progress.updated_at) : undefined, readwiseSavedAt: saved ? String(saved.saved_at) : undefined }
   }
 
   saveReadingProgress(id: string, position: number) {
@@ -1302,7 +1342,7 @@ export class PaperDatabase {
     const params = Array(scope === 'title' ? 1 : scope === 'content' ? 2 : 5).fill(phrase)
     const where = `WHERE (? = '' OR feed_id = ?) AND (${match})`
     const count = Number(this.db.prepare(`SELECT COUNT(*) AS count FROM entries ${where}`).get(feedId, feedId, ...params)?.count || 0)
-    const items = this.db.prepare(`SELECT * FROM entries ${where} ORDER BY timestamp DESC LIMIT 8`).all(feedId, feedId, ...params).map(row => entryFromRow(row as Record<string, string | number>))
+    const items = this.db.prepare(`SELECT * FROM entries ${where} ORDER BY timestamp DESC LIMIT 8`).all(feedId, feedId, ...params).map(row => this.numberEntry(entryFromRow(row as Record<string, string | number>)))
     return { count, items }
   }
 
@@ -1323,7 +1363,7 @@ export class PaperDatabase {
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
     const rows = this.db.prepare(`SELECT * FROM entries ${where} ORDER BY timestamp DESC, id DESC LIMIT ?`)
       .all(...parameters, limit) as Array<Record<string, string | number>>
-    return rows.map(entryFromRow)
+    return rows.map(row => this.numberEntry(entryFromRow(row)))
   }
 
   localEntry(id: string): Entry | null {

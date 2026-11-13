@@ -16,6 +16,9 @@ the shared collector, discovery and repair fetch contract.
 [Search indexing](search-index.md) documents schema v11 and the collection and
 search responsiveness regression.
 
+[Reader routes](reader-routes.md) documents schema v12, link numbers, legacy
+bookmarks and nested offline routes.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh
@@ -81,6 +84,18 @@ npm run test:browser
 
 It checks phone, tablet, landscape, and desktop layouts, including control
 hide/show, article-boundary gestures, reading progress, and growing controls.
+
+The route regression starts the built server with a disposable standalone
+SQLite database and synthetic feeds. It checks every route on direct navigation
+and refresh, legacy links, slug correction, missing numbers, mobile history and
+the service worker's nested offline fallback. It removes its own test state on
+shutdown. CI runs it in the browser job after the layout suite builds the client
+and a separate step builds the server. Run it after building, without another
+build running at the same time:
+
+```sh
+npx playwright test --config playwright.routes.config.ts
+```
 
 ## Docker integration test
 
