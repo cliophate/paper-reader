@@ -81,7 +81,7 @@ and full-text requests reject private network destinations.
 ## AI
 
 CODEX_ENABLED defaults to false. Settings provides a master
-AI switch, provider switches, and individual switches for discussions, headline
+AI switch, a Codex switch, and individual switches for discussions, headline
 cleanup, Pulse grouping, and briefing generation. Turning AI off stops new model
 requests and cancels active discussions. A batch request already running may
 finish; disabled features do not start its next review or batch. Existing
@@ -91,34 +91,97 @@ the selected provider. Enabling grouping or headline cleanup can make background
 requests after synchronization. Enabling a CLI does not itself enable every
 model on an account. Set model names that your account can access.
 
-For a native Node installation, install and authenticate the desired CLI using
-its official instructions, then set its executable path. The Codex connection
-uses its batch CLI and app-server.
-Article discussions and headline review currently require Codex.
+### Isolated Codex worker
 
-The optional compose.ai.yaml uses the AI image with pinned CLI packages. Run:
+`compose.ai.yaml` adds `paper-ai`, a separate Codex worker. Paper keeps the normal
+runtime image. The worker uses the `-ai` image and has no Paper data mount or
+Paper environment file. It mounts only `./ai-auth/codex` for login refresh and
+`./recap` read-only. Its root filesystem is read-only, with scratch space in
+`/tmp`. It runs without root privileges or Linux capabilities, on a separate
+Compose network shared with Paper. It needs outbound internet for Codex.
+There is no published worker port. The proxy still reaches Paper on the default
+network.
+
+New setup generates `PAPER_AI_WORKER_SECRET` in the private `.env`, mode 0600.
+Compose passes that variable explicitly to both services. It never passes the
+rest of Paper's `.env` to the worker. The worker authenticates every HTTP request,
+including health checks. Do not publish its port or reuse Paper's internal secret.
+If using a custom env file, pass it to Compose with `--env-file` as well as setting
+`PAPER_ENV_FILE`, so Compose can interpolate the worker secret.
+
+From your Paper checkout, after setup:
 
 ```sh
 mkdir -p ai-auth/codex
-docker compose -f compose.yaml -f compose.ai.yaml pull paper
-docker compose -f compose.yaml -f compose.ai.yaml run --rm --no-deps paper codex login --device-auth
+chmod 700 ai-auth/codex
+docker compose -f compose.yaml -f compose.ai.yaml build paper paper-ai
+docker compose -f compose.yaml -f compose.ai.yaml run --rm --no-deps paper-ai codex login --device-auth
+docker compose -f compose.yaml -f compose.ai.yaml up -d --no-build paper paper-ai
 ```
 
-Its authentication directory is ./ai-auth/codex, separate from your host login.
-It is private writable state so the CLI can refresh its login. Start Paper:
+Use `pull paper paper-ai` instead of `build paper paper-ai` when installing a
+release with matching published runtime and `-ai` images. For an unreleased
+checkout, build both images from that checkout. `PAPER_UID` and `PAPER_GID` must
+match the owner of the auth directory and must not use UID 0. Setup records the
+current user's IDs. Run setup and login as a non-root user.
+
+Complete the device login in your own browser, then enable Codex and the desired
+features in Settings. Settings never accepts or returns AI tokens. Keep the
+Codex directory dedicated to Paper's login. Do not copy a host Codex home with
+AGENTS.md, skills or other instructions into it. Codex may load files from its
+login directory despite the tool-disabling flags.
+
+The default editorial profile is `recap/editorial-profile.md`. Both services
+mount `./recap` read-only, so private replacements still reach Paper, which reads
+the profile before constructing briefing requests.
+All model requests send article text to the provider. The model child environment
+still excludes Paper's tokens and the worker secret. Within the worker, the CLI
+can access its own login and scratch files. The container boundary keeps Paper's
+files and process environment out of reach.
+
+### Upgrade an existing AI installation
+
+Back up your private `.env` and `data` directory, then update to this source
+revision or a release containing the worker. Keep the existing Codex login.
+From the updated checkout:
 
 ```sh
-docker compose -f compose.yaml -f compose.ai.yaml up -d --no-build paper
+sh scripts/setup.sh --ai-worker-secret
+mkdir -p ai-auth/codex
+chmod 700 ai-auth/codex
+docker compose -f compose.yaml -f compose.ai.yaml build paper paper-ai
+docker compose -f compose.yaml -f compose.ai.yaml up -d --no-build --force-recreate paper paper-ai
 ```
 
-Enable the provider and desired features in Settings.
-Paper uses the CLI login stores; it does not accept AI tokens in Settings.
-Switches do not verify login or model access. The CLI package installation is checked during image building; this
-release does not exercise a live provider account or make billable model calls.
+For a published release, replace the build command with `pull paper paper-ai`.
+The helper adds a random worker secret without replacing existing settings or
+printing the secret. Review private Compose overrides before restarting. Remove
+any CLI auth mounts, AI image override, local CLI commands and
+`PAPER_AI_LOCAL=unsafe` from the Paper service. The final Paper service should
+mount `./data` and read-only `./recap`, and use the runtime image. Only `paper-ai`
+mounts the Codex login.
+Preserve proxy overrides in your usual Compose command.
 
-The default editorial profile is in recap/editorial-profile.md. Mount a private
-replacement there if you want personalized briefings. Model subprocesses omit
-Paper's FreshRSS, Readwise, Kirby, and automation secrets from their environment.
+OpenCode support was removed. Old `OPENCODE_*` variables are ignored with one
+startup notice. Old saved provider settings still load, but OpenCode-only
+installations must log in to Codex using the worker command above, then enable
+Codex in Settings. The old `ai-auth/opencode` directory is no longer mounted;
+Paper does not delete it.
+
+Open Settings > Reading & connections to check the worker connection. A missing
+worker, missing secret, or failed authentication makes AI unavailable. Paper
+never falls back to running a CLI locally. Reading and saved AI results remain
+available. Compose refuses to start this override without the shared secret.
+
+### Native development
+
+Use the worker for real feeds, including when running Paper natively. Configure
+`PAPER_AI_WORKER_URL` and the same `PAPER_AI_WORKER_SECRET` through a private
+reachable endpoint. For synthetic development fixtures only, install and log in
+to Codex, set `CODEX_BIN`, and explicitly set `PAPER_AI_LOCAL=unsafe`. This logs a
+warning at startup. It allows the CLI to read Paper files and process secrets,
+and is unsafe for real feeds. Without either configuration, AI stays unavailable.
+A configured worker always takes precedence over the unsafe opt-in.
 
 Official setup and authentication guidance:
 

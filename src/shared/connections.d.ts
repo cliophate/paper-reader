@@ -8,6 +8,7 @@ export interface AiSettings {
 }
 
 export interface ConnectionsSettings {
+  aiRuntime?: { available: boolean; message: string }
   ai: AiSettings
   readwise: { enabled: boolean; location: string; tokenConfigured: boolean; tokenSource: 'environment' | 'settings' | null }
   kirby: { enabled: boolean; publishUrl: string; tokenConfigured: boolean; tokenSource: 'environment' | 'settings' | null }

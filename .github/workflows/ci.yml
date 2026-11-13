@@ -70,11 +70,12 @@ jobs:
           tags: paper-public:test
           push: false
           build-args: SOURCE_REVISION=${{ github.sha }}
+      - run: docker build --target ai -t paper-public:ai-test .
       - run: python3 scripts/test-installation.py
   ai-image:
     needs: application
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
@@ -86,4 +87,6 @@ jobs:
           tags: paper-public:ai-test
           push: false
           build-args: SOURCE_REVISION=${{ github.sha }}
+      - run: docker build --target runtime -t paper-public:test .
       - run: docker run --rm --network none paper-public:ai-test codex --version
+      - run: python3 scripts/test-ai-worker.py --real

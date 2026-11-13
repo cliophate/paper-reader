@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+AI runs now use a separate Codex worker container without Paper data or service
+secrets. Existing AI installations must add a shared secret and recreate both
+services. See the [AI upgrade steps](docs/integrations.md#upgrade-an-existing-ai-installation).
+Without the worker, AI is unavailable. Local CLI execution requires the explicit
+unsafe development opt-in.
+
 OpenCode support was removed. Briefings and collections now use Codex only.
 Old OPENCODE_* variables are ignored with a startup notice. Existing saved
 OpenCode-only settings stay off until Codex is enabled in Settings.

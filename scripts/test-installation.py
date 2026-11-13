@@ -238,3 +238,5 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         for name in reversed(list(dict.fromkeys(containers))):
             docker('rm', '-f', name, check=False)
         docker('network', 'rm', PREFIX, check=False)
+
+subprocess.run(["python3", str(ROOT / "scripts/test-ai-worker.py")], check=True)

@@ -1,3 +1,5 @@
+import { requireLocalAi, workerChat } from './ai-client.js'
+import { killModel, modelEnvironment } from './model-process.js'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -12,15 +14,23 @@ export type ChatModel = (input: unknown, signal: AbortSignal, onText: (text: str
 // Each request starts an ephemeral, tool-disabled thread.
 export function createChatModel(bin: string, model = 'gpt-5.6-sol'): ChatModel {
   return async (input, signal, onText) => {
+    if (process.env.PAPER_AI_WORKER_URL?.trim()) return workerChat(model, input, signal, onText)
+    requireLocalAi()
+    return createLocalChatModel(bin, model)(input, signal, onText)
+  }
+}
+
+export function createLocalChatModel(bin: string, model = 'gpt-5.6-sol'): ChatModel {
+  return async (input, signal, onText) => {
     signal.throwIfAborted()
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'paper-discussion-'))
     try {
       return await new Promise<string>((resolve, reject) => {
         const config = toolDisabledCodexConfig()
         const child = spawn(bin, ['app-server', '--stdio', ...Object.entries(config).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`])], {
-          cwd: dir, stdio: ['pipe', 'pipe', 'pipe'],
+          cwd: dir, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
           // Never pass Paper's service tokens into the model process environment.
-          env: { PATH: process.env.PATH, HOME: process.env.HOME, NO_COLOR: '1', CI: '1' },
+          env: modelEnvironment(),
         })
         let buffer = '', text = '', settled = false
         const finish = (error?: Error) => {
@@ -28,7 +38,7 @@ export function createChatModel(bin: string, model = 'gpt-5.6-sol'): ChatModel {
           settled = true
           clearTimeout(timeout)
           signal.removeEventListener('abort', cancel)
-          child.kill('SIGKILL')
+          killModel(child)
           error ? reject(error) : resolve(text)
         }
         const cancel = () => finish(new Error('Response stopped'))

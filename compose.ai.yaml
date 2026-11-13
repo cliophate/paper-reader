@@ -1,8 +1,43 @@
 services:
   paper:
+    environment:
+      PAPER_AI_WORKER_URL: http://paper-ai:8081
+      PAPER_AI_WORKER_SECRET: ${PAPER_AI_WORKER_SECRET:?Run setup or follow the AI upgrade steps in docs/integrations.md}
+    volumes:
+      - ./recap:/app/recap:ro
+    networks:
+      - default
+      - ai
+  paper-ai:
     image: ghcr.io/cliophate/paper-reader:0.1.0-alpha.3-ai
     build:
+      context: .
       target: ai
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION:-unknown}
+    command: [node, dist-server/ai-worker.js]
+    restart: unless-stopped
+    user: ${PAPER_UID:-1000}:${PAPER_GID:-1000}
+    environment:
+      HOME: /home/node
+      HOST: 0.0.0.0
+      PORT: 8081
+      PAPER_AI_WORKER_SECRET: ${PAPER_AI_WORKER_SECRET:?Run setup or follow the AI upgrade steps in docs/integrations.md}
     volumes:
       - ./ai-auth/codex:/home/node/.codex
       - ./recap:/app/recap:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777,size=512m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks:
+      - ai
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8081/health',{headers:{'x-paper-ai-secret':process.env.PAPER_AI_WORKER_SECRET}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+networks:
+  ai:

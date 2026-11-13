@@ -52,6 +52,15 @@ describe('connection settings forms', () => {
     expect(changed).toHaveBeenCalledOnce()
   })
 
+  it('shows worker availability and keeps deployment details out of saved settings', async () => {
+    settings.aiRuntime = { available: false, message: 'AI is unavailable. Configure and start the isolated AI worker.' }
+    await render()
+    expect(form('AI features').textContent).toContain(settings.aiRuntime.message)
+    expect(form('AI features').textContent).toContain('--no-deps paper-ai codex login')
+    await submit(form('AI features'))
+    expect(api.updateConnections).toHaveBeenCalledWith({ ai: settings.ai })
+  })
+
   it('saves a replacement token and clears it from the form after saving', async () => {
     await render()
     const input = form('Readwise Reader').querySelector<HTMLInputElement>('input[type="password"]')!

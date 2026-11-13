@@ -26,6 +26,8 @@ beforeEach(async () => {
   const home = path.join(directory, 'home')
   await fs.mkdir(home)
   vi.stubEnv('HOME', home)
+  vi.stubEnv('PAPER_AI_LOCAL', 'unsafe')
+  vi.stubEnv('PAPER_AI_WORKER_URL', '')
   vi.stubEnv('PAPER_SIGNING_SECRET', 'synthetic-signing-secret')
   vi.stubEnv('READWISE_TOKEN', 'synthetic-reader-token')
   vi.stubEnv('OPENAI_API_KEY', 'synthetic-api-key')
