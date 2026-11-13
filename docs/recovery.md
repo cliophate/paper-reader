@@ -58,41 +58,66 @@ migrations. Use the matching pre-upgrade data backup if a migration is not
 backward compatible. Retain both the original database and backup until you have
 verified the restored application.
 
-The current development schema is 12. [Reader routes](reader-routes.md) describes
+Alpha.4 uses database schema 12. [Reader routes](reader-routes.md) describes
 its additive migration and `.before-link-numbers-v12` rollback backup.
 
-### Upgrade to alpha.3
+### Upgrade to alpha.4
 
-Alpha.3 uses database schema 11. Keep the existing backend and FreshRSS account
+Alpha.4 uses database schema 12. Keep the existing backend and FreshRSS account
 configuration for the upgrade. An omitted `PAPER_BACKEND` still selects FreshRSS;
 new setup selects standalone. Do not rerun setup over an existing `.env` or change
 the backend to move data. Review the [changelog](../CHANGELOG.md) first.
 
-After stopping every briefing command and backing up as described above, update
-the public checkout and pull the runtime image:
+Preserve any local Compose and proxy overrides when updating the checkout.
+Before restarting, check that your proxy preserves the original Host header and
+that `PUBLIC_URL` matches the hostname and port you use. A mismatch now returns
+HTTP 421. See [remote access](access.md).
+
+For an installation without AI, stop every briefing command and back up as
+described above, then update the checkout and pull the runtime image:
 
 ```sh
 docker compose stop paper
-git fetch origin tag v0.1.0-alpha.3
-git switch --detach v0.1.0-alpha.3
+git fetch origin tag v0.1.0-alpha.4
+git switch --detach v0.1.0-alpha.4
 sh scripts/pull-image.sh
 docker compose up -d --no-build paper
 ```
 
-Preserve any local Compose overrides when updating the checkout. For the AI
-variant, use `docker compose -f compose.yaml -f compose.ai.yaml` for stop, pull and
-up. Replace the helper command with that Compose command followed by `pull paper`.
-The helper's release archive contains only the runtime image. Keep `--no-build`
-when starting either pulled image. Source installations can build the selected
-tag instead, as described in the [README](../README.md#build-from-source).
+AI installations need the updated two-container setup. Stop the existing AI stack
+before fetching and switching to `v0.1.0-alpha.4` as shown above. Follow the
+[AI upgrade steps](integrations.md#upgrade-an-existing-ai-installation) to add
+`PAPER_AI_WORKER_SECRET`, keep the Codex login, set the shared non-root UID and
+GID, and remove old Paper-side auth mounts and AI overrides. Then pull and
+recreate both services with your usual proxy overrides included:
+
+```sh
+docker compose -f compose.yaml -f compose.ai.yaml pull paper paper-ai
+docker compose -f compose.yaml -f compose.ai.yaml up -d --no-build --force-recreate paper paper-ai
+```
+
+Paper uses the runtime image and `paper-ai` uses the worker image. The helper's
+release archive contains only the runtime image. OpenCode support was removed;
+OpenCode-only installs must configure Codex and enable it in Settings. Set
+briefing automation timeouts to at least 660 seconds. Source installations can
+build the selected tag instead, as described in the
+[README](../README.md#build-from-source).
 
 Before upgrading an existing database, Paper creates and validates
-`paper.sqlite.before-search-rows-v11` in the data directory. This upgrade rebuilds
-the derived full-text index from saved article and full-text content. Earlier schema
-steps can create additional backups. Keep these files, the original full backup,
-private configuration and saved secrets. A schema backup is not a complete
-installation backup. Verify startup, articles, reading positions and saved state
-before treating the upgrade as complete.
+`paper.sqlite.before-link-numbers-v12` in the data directory. Schema v12 adds
+`link_numbers` for feed, folder and collection links while articles use their
+existing arrival numbers. Old reader links still work. Earlier schema steps can
+create additional backups. Keep these files, the original full backup, private
+configuration and saved secrets. A schema backup is not a complete installation
+backup. Rolling back the image alone does not undo schema v12. Restore the
+matching pre-upgrade database backup as described in
+[reader route recovery](reader-routes.md#schema-v12-and-recovery).
+Verify startup, articles, reading positions and saved state before treating the
+upgrade as complete.
+
+The offline FreshRSS migration tool is no longer included. FreshRSS mode remains
+available. Keep the existing backend and account; use a separate data directory
+for a fresh standalone installation.
 
 Offline browser copies are separate device storage. They can disappear when the
 browser clears storage and are not a backup of the server database.

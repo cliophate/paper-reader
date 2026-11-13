@@ -8,7 +8,7 @@ Entirely AI-coded. If this steals kittens, don't blame me.
 
 Paper is an early single-user alpha with no built-in login. Keep it local or
 use an [authenticated HTTPS proxy](docs/access.md) for remote access.
-See the [changelog](CHANGELOG.md) for alpha.3 changes and upgrade notes.
+See the [changelog](CHANGELOG.md) for alpha.4 changes and upgrade notes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/desktop-dark.png">
@@ -26,12 +26,12 @@ See the [changelog](CHANGELOG.md) for alpha.3 changes and upgrade notes.
 
 Start with a fresh standalone installation for this alpha.
 
-You need Docker Compose 2.24.4 or newer. The alpha.3 images support Linux amd64.
+You need Docker Compose 2.24.4 or newer. The alpha.4 images support Linux amd64.
 Standalone mode needs one Paper container and a persistent data directory. No
 FreshRSS or optional integration credentials are needed.
 
 ```sh
-git clone --branch v0.1.0-alpha.3 --depth 1 https://github.com/cliophate/paper-reader.git
+git clone --branch v0.1.0-alpha.4 --depth 1 https://github.com/cliophate/paper-reader.git
 cd paper-reader
 sh scripts/setup.sh
 sh scripts/pull-image.sh
@@ -110,9 +110,8 @@ external services.
 
 ## Known alpha limits
 
-Readable URLs and clearer refresh controls remain open, along with iPad bottom
-padding, an unconfirmed header blur report, article-transition flicker and a
-mark-read plus scroll viewport jump. See the
+Clearer refresh controls remain open, along with iPad bottom padding, an
+unconfirmed header blur report and article-transition flicker. See the
 [known alpha issues](CHANGELOG.md#known-alpha-issues) for tracking links.
 Broad searches can still take time, although they run outside the HTTP event
 loop. Article cleanup avoids known repeated-markup scans; very deep or large
