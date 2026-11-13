@@ -124,6 +124,7 @@ it('blocks framing on SPA HTML, API, health, errors and rejected hosts', async (
     ['/api/status', 'localhost', 'GET', 200], ['/health', 'localhost', 'GET', 200],
     ['/api/entries?kind=unknown', 'localhost', 'GET', 400],
     ['/missing', 'localhost', 'DELETE', 404],
+    ...['/api/missing', '/_offline/missing', '/assets/missing.js', '/health/missing'].map(route => [route, 'localhost', 'GET', 404] as const),
     ['/api/status', 'evil.test', 'GET', 421],
     ['/api/entries/state', 'localhost', 'POST', 403],
   ] as const) {

@@ -50,7 +50,12 @@ for (const width of [1280, 390]) test(`direct navigation and refresh for every r
     expect(await page.locator('script[src]').evaluateAll(nodes => nodes.every(node => node.getAttribute('src')!.startsWith('/assets/')))).toBe(true)
   }
   expect(errors).toEqual([])
-  for (const path of ['/api/missing', '/_offline/missing', '/assets/missing.js', '/health/missing']) expect((await page.request.get(path)).status()).toBe(404)
+  for (const path of ['/api/missing', '/_offline/missing', '/assets/missing.js', '/health/missing']) {
+    const response = await page.request.get(path)
+    expect(response.status()).toBe(404)
+    expect(response.headers()['content-security-policy']).toBe("default-src 'none', frame-ancestors 'none'")
+    expect(response.headers()['x-frame-options']).toBe('DENY')
+  }
 })
 
 test('replaces old bookmarks, corrects slugs and falls back for missing numbers', async ({ page }) => {

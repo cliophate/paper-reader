@@ -57,7 +57,8 @@ Existing article bodies, mute matches, search rows and sync timestamps stay unch
 
 The server serves the application shell on reader paths, including refreshes.
 Reserved `/api`, `/_offline`, `/health` and `/assets` paths do not fall through
-to that shell. Scripts, styles, icons, the manifest and `/sw.js` use absolute
+to that shell. Their 404 responses retain the restrictive CSP and framing headers.
+Scripts, styles, icons, the manifest and `/sw.js` use absolute
 paths. The service worker fetches navigation normally and falls back to its
 cached `/` shell when the network fails, retaining the requested nested URL.
 It excludes API, health, offline storage and `/assets` requests from navigation

@@ -656,7 +656,9 @@ app.post('/briefings/:id/confirm', asyncRoute(async (request, response) => {
 
 const clientPath = path.resolve('dist')
 app.use(express.static(clientPath, { index: false, maxAge: '1h' }))
-app.use(['/api', '/_offline', '/assets', '/health'], (_request, response) => { response.sendStatus(404) })
+app.use(['/api', '/_offline', '/assets', '/health'], (_request, response) => {
+  response.set('Content-Security-Policy', "default-src 'none'").sendStatus(404)
+})
 app.get('*splat', (_request, response) => response.sendFile('index.html', { root: clientPath }))
 
 app.use((error: Error, request: Request, response: Response, _next: NextFunction) => {
