@@ -22,7 +22,7 @@ remains in each CLI's separate login store.
 Feed/article HTML is sanitized before display. Private network checks reduce
 the risk from URL fetching but are not a complete network-isolation boundary.
 Do not grant an Internet-facing deployment unrestricted access to sensitive
-internal services. This alpha has not had an independent security audit.
+internal services. Paper has not had an independent security audit.
 
 External article images and embeds can contact their publishers from the browser.
 Full-text extraction contacts the publisher and, if explicitly enabled, the

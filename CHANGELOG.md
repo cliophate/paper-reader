@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.1.0
+
+Paper's first stable release closes the 0.1 Stable milestone. This is still a
+0.1 release for single-user installations, with no built-in login. Keep Paper
+on loopback or use an [authenticated HTTPS proxy](docs/access.md).
+
+### Changes since alpha.4
+
+[#62](https://github.com/cliophate/paper-reader/pull/62) fixes the iPad reader:
+
+- Bottom tabs have more padding and at least 44px touch targets. The layout
+  follows the visible viewport as browser controls change its height.
+- Headers and tabs use opaque backgrounds. Controls return without fading or
+  sliding text over the article.
+- Article navigation no longer fades or slides the incoming document. A
+  boundary gesture stops scrolling before opening the next article, and
+  cancelled gestures respect reduced-motion preferences.
+- Home-screen apps on iOS and iPadOS keep header controls below the system's
+  top-edge blur, with a shorter header row. Settings and discussions respect
+  the same top inset.
+
+### What 0.1 Stable delivered
+
+The alpha releases already recorded the changes below in detail:
+
+- Standalone mode stores feeds, articles, search and reading state locally,
+  with scheduled collection, feed discovery, flat folders and OPML import/export.
+  FreshRSS remains supported as an alternative backend.
+- Security work for #46, #47 and #48 shipped through
+  [#54](https://github.com/cliophate/paper-reader/pull/54),
+  [#55](https://github.com/cliophate/paper-reader/pull/55),
+  [#56](https://github.com/cliophate/paper-reader/pull/56) and
+  [#60](https://github.com/cliophate/paper-reader/pull/60). It adds Host validation,
+  framing protection, destination checks and limits on outbound fetches, and
+  isolation of AI execution from Paper's data and secrets.
+- The optional Codex worker runs in a separate container over an authenticated
+  Unix socket, without Paper's data mount or network. OpenCode support was removed.
+- [#58](https://github.com/cliophate/paper-reader/pull/58) adds short, readable
+  reader links, with legacy links, direct navigation and offline routes supported.
+
+### Upgrade from alpha.4
+
+Schema v12 is unchanged. Upgrading from 0.1.0-alpha.4 needs no database migration
+or new configuration. Back up the data and private configuration, update to
+`v0.1.0`, and pull and recreate the runtime and optional AI worker. Keep the same
+backend and account. See the [upgrade guide](docs/recovery.md#upgrade-from-alpha4-to-010).
+Earlier alphas still need the schema, AI worker and proxy upgrade steps documented
+below and in [recovery](docs/recovery.md#upgrade-from-earlier-alphas).
+
 ## 0.1.0-alpha.4
 
 Changes since [0.1.0-alpha.3](https://github.com/cliophate/paper-reader/releases/tag/v0.1.0-alpha.3).

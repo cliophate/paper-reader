@@ -6,9 +6,9 @@ or connect it to FreshRSS to share subscriptions, read state, and stars.
 
 Entirely AI-coded. If this steals kittens, don't blame me.
 
-Paper is an early single-user alpha with no built-in login. Keep it local or
-use an [authenticated HTTPS proxy](docs/access.md) for remote access.
-See the [changelog](CHANGELOG.md) for alpha.4 changes and upgrade notes.
+Paper 0.1.0 is the first stable release, intended for single-user use. It has no
+built-in login. Keep it local or use an [authenticated HTTPS proxy](docs/access.md) for remote access.
+See the [changelog](CHANGELOG.md) for 0.1.0 changes and upgrade notes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/desktop-dark.png">
@@ -24,14 +24,15 @@ See the [changelog](CHANGELOG.md) for alpha.4 changes and upgrade notes.
 
 ## Quick start
 
-Start with a fresh standalone installation for this alpha.
+Start new installations in standalone mode. For an existing installation, follow
+the [upgrade guide](docs/recovery.md#upgrade-from-alpha4-to-010).
 
-You need Docker Compose 2.24.4 or newer. The alpha.4 images support Linux amd64.
+You need Docker Compose 2.24.4 or newer. The 0.1.0 images support Linux amd64.
 Standalone mode needs one Paper container and a persistent data directory. No
 FreshRSS or optional integration credentials are needed.
 
 ```sh
-git clone --branch v0.1.0-alpha.4 --depth 1 https://github.com/cliophate/paper-reader.git
+git clone --branch v0.1.0 --depth 1 https://github.com/cliophate/paper-reader.git
 cd paper-reader
 sh scripts/setup.sh
 sh scripts/pull-image.sh
@@ -90,9 +91,10 @@ Open **Settings > Reading & connections** to enable:
 - Kirby note drafts through a compatible publishing plugin.
 
 Each connection has setup instructions. Readwise and Kirby tokens can be saved
-in Settings. AI requires the isolated Codex worker and a CLI login. Existing AI installs must
-follow the [worker upgrade steps](docs/integrations.md#upgrade-an-existing-ai-installation). Reading works
-without any of these connections.
+in Settings. AI requires the isolated Codex worker and a CLI login. AI installs
+from before alpha.4 must follow the
+[worker upgrade steps](docs/integrations.md#upgrade-an-existing-ai-installation).
+Reading works without any of these connections.
 
 See the [integration guide](docs/integrations.md) for full setup instructions.
 
@@ -108,11 +110,15 @@ See [backup, restore, and upgrades](docs/recovery.md) before updating Paper,
 and [security and privacy](SECURITY.md) for details about stored data and
 external services.
 
-## Known alpha limits
+## Limits
 
-Clearer refresh controls remain open, along with iPad bottom padding, an
-unconfirmed header blur report and article-transition flicker. See the
-[known alpha issues](CHANGELOG.md#known-alpha-issues) for tracking links.
+Clearer refresh controls and a visible feed-check schedule remain open in
+[#33](https://github.com/cliophate/paper-reader/issues/33). Refresh runs due feeds
+only, as described above.
+
+This is a 0.1 release. Keep backups before upgrading. Folders are flat, and OPML
+transfers subscriptions, not article history or settings. Offline browser copies
+are not server backups. Identity conflicts have no dedicated resolution UI.
 Broad searches can still take time, although they run outside the HTTP event
 loop. Article cleanup avoids known repeated-markup scans; very deep or large
 HTML still has a processing cost.
