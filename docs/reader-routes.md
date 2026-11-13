@@ -27,7 +27,8 @@ so a folder named `A` works as `/folder/3/a`, with articles at `/folder/3/a/a/42
 Articles and collections have no slug. Headings come from loaded navigation.
 
 The query retains `unread=0`, `q`, `after`, `before` and `pane`. With a search,
-`unread` represents the search's unread filter. `in=feed/<number>` or
+`unread=1` limits results to unread articles. Without it the search covers read
+articles too, which matches what old search links meant. `in=feed/<number>` or
 `in=folder/<number>` limits the search to a source. Starred searches use the
 `/starred` path; an archive search from Starred uses `/`. The default pane is `article`
 for an article path and `sources` otherwise. Only a different pane is written.

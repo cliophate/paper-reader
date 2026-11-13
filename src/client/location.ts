@@ -87,7 +87,8 @@ export function readReaderLocation(input = window.location.pathname + window.loc
     location.searchStream = { kind: scope[0] === 'feed' ? 'feed' : 'category', id: '', title: '', linkNumber: number(scope[1]) }
   }
   if (location.query) {
-    location.searchUnread = location.unreadOnly
+    // Old search links left `unread` out for all articles, so only an explicit `unread=1` limits a search.
+    location.searchUnread = params.get('unread') === '1'
     if (!location.searchStream && location.stream.kind === 'starred') location.searchStream = location.stream
   }
   for (const key of ['after', 'before'] as const) if (params.has(key)) location[key] = params.get(key)!
@@ -148,7 +149,8 @@ export function readerLocationUrl(location: ReaderLocation, links: ReaderLinks =
     path = `/${stream.kind === 'feed' ? 'feed' : 'folder'}/${stream.linkNumber}${slug ? `/${slug}` : ''}`
   }
   if (articleNumber && location.view === 'reader') path = `${path === '/' ? '' : path}/a/${articleNumber}`
-  if (!(location.query ? location.searchUnread : location.unreadOnly)) params.set('unread', '0')
+  if (location.query && location.searchUnread) params.set('unread', '1')
+  else if (!location.unreadOnly) params.set('unread', '0')
   if (location.query) {
     params.set('q', location.query)
     const scope = location.searchStream && (linkedStream(location.searchStream, links) || location.searchStream)
