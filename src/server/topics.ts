@@ -64,8 +64,8 @@ export interface TopicsPayload {
 }
 
 export class TopicService {
-  private running: Promise<void> | null = null
-  async drain() { await this.running }
+  private running: { promise: Promise<void>; controller: AbortController; waiters: number } | null = null
+  async drain() { await this.running?.promise }
   private stale = false
   private revision = 0
 
@@ -149,12 +149,35 @@ export class TopicService {
 
   refresh(signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted()
-    if (this.running) return abortable(() => this.running!, signal).then(() => this.stale ? this.refresh(signal) : undefined)
+    const joined = Boolean(this.running)
+    const run = this.running ?? this.startRebuild()
+    run.waiters++
+    let left = false
+    // The rebuild is shared, so one caller's cancellation must not fail the others.
+    // Cancel it only when nobody is waiting for it any more.
+    const leave = () => {
+      if (left) return
+      left = true
+      if (--run.waiters > 0) return
+      run.controller.abort()
+      if (this.running === run) this.running = null
+    }
+    return abortable(() => run.promise, signal)
+      .finally(leave)
+      .then(() => joined && this.stale ? this.refresh(signal) : undefined)
+  }
+
+  private startRebuild() {
     const revision = this.revision
-    this.running = this.rebuild(signal)
+    const controller = new AbortController()
+    const run = { controller, waiters: 0, promise: Promise.resolve() }
+    run.promise = this.rebuild(controller.signal)
       .then(() => { if (revision === this.revision) this.stale = false })
-      .finally(() => { this.running = null })
-    return this.running
+      .finally(() => { if (this.running === run) this.running = null })
+    // Every waiter may have left already, so a cancelled rebuild must not become an unhandled rejection.
+    run.promise.catch(() => {})
+    this.running = run
+    return run
   }
 
   async rememberSemanticClusters(clusters: Array<{ id: string; entries: Entry[] }>, signal?: AbortSignal) {
