@@ -202,17 +202,32 @@ A full queue or expired wait returns HTTP 503, `Retry-After: 5`, and category
 The execution deadline starts after admission, with 300 seconds for a batch and
 120 seconds for a discussion. Paper's worker client allows 620 and 440 seconds
 respectively, covering queue wait, execution, the 15-second request-body deadline
-and a five-second transport margin. Briefing HTTP callers must allow for several
-sequential model calls. The briefing CLI has no shorter overall deadline.
+and a five-second transport margin. A briefing has a ten-minute overall deadline
+across its model calls, retries and source checks. HTTP disconnects and CLI
+SIGINT/SIGTERM cancel queued and running work. Concurrent requests for the same
+briefing kind share one generation within the Paper process, even with force
+enabled. One caller leaving does not cancel the others; the last caller leaving
+stops the job. Separate CLI processes do not share generations. Cancelled or
+timed-out generations never save a completed briefing.
 
 Each failed run writes one JSON line with `event`, `requestId`, `endpoint`,
 `queueWaitMs`, `runDurationMs`, `exitCode`, `signal` and `category`. Categories are
 `auth`, `model_access`, `schema`, `timeout`, `spawn`, `output_limit`, `cancelled`,
-`busy` or `unknown`. Exit code and signal are null when no process ran. The worker
-classifies a bounded 8 KiB stderr tail and discards it. Logs never contain raw
+`busy` or `unknown`. Exit code and signal are null when no process ran. Batch
+runs use `codex exec --json`. The worker classifies only `error` and `turn.failed` event diagnostics, bounded to 8 KiB.
+Discussions use app-server error responses and failed-turn diagnostics. Both
+runners discard stderr, which can contain echoed article text. Failures without
+a structured diagnostic have category `unknown`. Logs never contain raw
 stderr, model output, prompts, articles, request bodies, headers or tokens.
 Paper receives only the category and request ID, logs them, and shows a matching
 message. Use the request ID to match Paper and worker failures.
+
+The worker holds an exclusive `flock` on `worker.sock.lock` before checking or
+removing a stale socket, and retains it until the server closes and unlinks its
+socket. A competing worker fails before touching the socket. The lock file stays
+in place; the kernel releases the lock when its holder exits. A helper holds the
+lock and exits on pipe EOF if the worker crashes. Native workers need `flock`
+from util-linux. Socket paths must be absolute and at most 103 UTF-8 bytes.
 
 ### Native development
 
@@ -245,8 +260,12 @@ an SMTP account, recipient, or active n8n workflow. A scheduler can call
 POST /api/internal/briefings/generate with x-paper-secret and a JSON body such as
 {"kind":"morning"}. The render and delivered endpoints are documented by the
 routes in src/server/index.ts. Keep the secret in the scheduler's credential
-store. If using the authenticated proxy, automation must satisfy proxy
-authentication as well or use a restricted internal network route.
+store. Set the automation HTTP timeout to 660 seconds, or 660000 milliseconds
+in n8n, to cover the ten-minute briefing deadline and response cleanup. The n8n
+default of 300 seconds can cancel a briefing while it is still queued or running.
+A retry after a disconnect starts fresh unless another caller kept the shared
+generation alive or a completed briefing is available. If using the authenticated
+proxy, automation must satisfy proxy authentication as well or use a restricted internal network route.
 
 Briefing confirmation links use PUBLIC_URL. Use your actual HTTPS reader URL
 and configure TZ for email dates. PAPER_BRIEFING_INCLUDE_READ_UNTIL normally

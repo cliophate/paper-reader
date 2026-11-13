@@ -159,8 +159,10 @@ at once and up to 16 wait in FIFO order for at most 300 seconds. A full queue or
 expired wait returns 503 with `Retry-After: 5` and category `busy`. Batch execution
 allows 300 seconds, discussions 120 seconds, starting after queue admission.
 The client allows 620 seconds for a batch and 440 for a discussion. Disconnects
-remove queued requests or abort the active CLI process group. Slots are released
-after process exit. Failed runs produce one structured log line with timings,
+remove queued requests or abort the active CLI process group. Briefings share
+one generation per kind within the service, with a ten-minute overall deadline.
+The last caller disconnecting, or SIGINT/SIGTERM in the briefing CLI, cancels it.
+Slots are released after process exit. Failed runs produce one structured log line with timings,
 request ID, exit status and an allowlisted category. Error responses omit provider
 diagnostics and input text. Paper limits batch responses to 4 MiB and discussion replies to 24,000
 characters. A missing or unreachable worker never enables local execution.
