@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { Config } from './config.js'
+import { toolDisabledCodexConfig } from './codex-config.js'
 
 export async function runCodex(
   config: Config['codex'],
@@ -30,6 +31,7 @@ export async function runCodex(
         '--skip-git-repo-check',
         '--color', 'never',
         '--model', model,
+        ...Object.entries(toolDisabledCodexConfig()).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`]),
         ...(reasoningEffort ? ['-c', `model_reasoning_effort="${reasoningEffort}"`] : []),
         '--output-schema', schemaPath,
         '--output-last-message', outputPath,
