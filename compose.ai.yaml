@@ -7,7 +7,7 @@ services:
       - ./recap:/app/recap:ro
       - ai-socket:/run/paper-ai:ro
   paper-ai:
-    image: ghcr.io/cliophate/paper-reader:0.1.0-alpha.4-ai
+    image: ghcr.io/cliophate/paper-reader:0.1.0-ai
     build:
       context: .
       target: ai

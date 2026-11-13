@@ -76,4 +76,9 @@ jobs:
           docker tag paper-public:test "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION"
           docker save "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION" | gzip -1 > "$archive"
           sha256sum "$archive" > "$archive.sha256"
-          gh release create "$GITHUB_REF_NAME" "$archive" "$archive.sha256" --verify-tag --prerelease --title "Paper $RELEASE_VERSION" --notes-file .github/alpha-release-notes.md
+          if [[ "$RELEASE_VERSION" == *-* ]]; then
+            release_flag=--prerelease
+          else
+            release_flag=--latest
+          fi
+          gh release create "$GITHUB_REF_NAME" "$archive" "$archive.sha256" --verify-tag "$release_flag" --title "Paper $RELEASE_VERSION" --notes-file .github/release-notes.md

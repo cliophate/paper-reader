@@ -58,12 +58,49 @@ migrations. Use the matching pre-upgrade data backup if a migration is not
 backward compatible. Retain both the original database and backup until you have
 verified the restored application.
 
-Alpha.4 uses database schema 12. [Reader routes](reader-routes.md) describes
-its additive migration and `.before-link-numbers-v12` rollback backup.
+Paper 0.1.0 uses database schema 12, unchanged since alpha.4.
+[Reader routes](reader-routes.md) describes its additive migration and
+`.before-link-numbers-v12` rollback backup.
 
-### Upgrade to alpha.4
+### Upgrade from alpha.4 to 0.1.0
 
-Alpha.4 uses database schema 12. Keep the existing backend and FreshRSS account
+Upgrading from 0.1.0-alpha.4 needs no database migration or new configuration.
+Schema v12 and the AI worker setup are unchanged. Keep the existing backend,
+account, private configuration, data directory and any Compose or proxy overrides.
+Do not rerun setup.
+
+Stop every briefing command and Paper, then take the consistent backup described
+above before updating. For an installation without AI:
+
+```sh
+docker compose stop paper
+# Back up data and private configuration before continuing.
+git fetch origin tag v0.1.0
+git switch --detach v0.1.0
+sh scripts/pull-image.sh
+docker compose up -d --no-build paper
+```
+
+For an AI installation, stop both services before backing up and switching tags:
+
+```sh
+docker compose -f compose.yaml -f compose.ai.yaml stop paper paper-ai
+# Back up data, private configuration and ai-auth before continuing.
+git fetch origin tag v0.1.0
+git switch --detach v0.1.0
+docker compose -f compose.yaml -f compose.ai.yaml pull paper paper-ai
+docker compose -f compose.yaml -f compose.ai.yaml up -d --no-build --force-recreate paper paper-ai
+```
+
+Include your usual proxy overrides in those Compose commands. Verify startup,
+articles, reading positions, saved state and AI availability when enabled.
+The pull helper's archive contains only the runtime image. Source installations
+can build the selected tag as described in the [README](../README.md#build-from-source).
+
+### Upgrade from earlier alphas
+
+Upgrades from versions before alpha.4 also need the steps below. Paper 0.1.0
+uses database schema 12. Keep the existing backend and FreshRSS account
 configuration for the upgrade. An omitted `PAPER_BACKEND` still selects FreshRSS;
 new setup selects standalone. Do not rerun setup over an existing `.env` or change
 the backend to move data. Review the [changelog](../CHANGELOG.md) first.
@@ -78,14 +115,14 @@ described above, then update the checkout and pull the runtime image:
 
 ```sh
 docker compose stop paper
-git fetch origin tag v0.1.0-alpha.4
-git switch --detach v0.1.0-alpha.4
+git fetch origin tag v0.1.0
+git switch --detach v0.1.0
 sh scripts/pull-image.sh
 docker compose up -d --no-build paper
 ```
 
 AI installations need the updated two-container setup. Stop the existing AI stack
-before fetching and switching to `v0.1.0-alpha.4` as shown above. Follow the
+before fetching and switching to `v0.1.0` as shown above. Follow the
 [AI upgrade steps](integrations.md#upgrade-an-existing-ai-installation) to add
 `PAPER_AI_WORKER_SECRET`, keep the Codex login, set the shared non-root UID and
 GID, and remove old Paper-side auth mounts and AI overrides. Then pull and
@@ -103,7 +140,7 @@ briefing automation timeouts to at least 660 seconds. Source installations can
 build the selected tag instead, as described in the
 [README](../README.md#build-from-source).
 
-Before upgrading an existing database, Paper creates and validates
+Before upgrading a database older than schema v12, Paper creates and validates
 `paper.sqlite.before-link-numbers-v12` in the data directory. Schema v12 adds
 `link_numbers` for feed, folder and collection links while articles use their
 existing arrival numbers. Old reader links still work. Earlier schema steps can
