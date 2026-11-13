@@ -95,17 +95,26 @@ model on an account. Set model names that your account can access.
 
 `compose.ai.yaml` adds `paper-ai`, a separate Codex worker. Paper keeps the normal
 runtime image. The worker uses the `-ai` image and has no Paper data mount or
-Paper environment file. It mounts only `./ai-auth/codex` for login refresh and
-`./recap` read-only. Its root filesystem is read-only, with scratch space in
+Paper environment file. It mounts `./ai-auth/codex` for login refresh,
+`./recap` read-only, and a shared socket volume. Its root filesystem is read-only, with scratch space in
 `/tmp`. It runs without root privileges or Linux capabilities, on a separate
-Compose network shared with Paper. It needs outbound internet for Codex.
-There is no published worker port. The proxy still reaches Paper on the default
-network.
+Compose network with outbound internet for Codex. Paper never joins that network.
+The worker listens only on `/run/paper-ai/worker.sock`. Paper connects through
+`PAPER_AI_WORKER_SOCKET`, without a TCP listener or published worker port. The
+proxy still reaches Paper on the default network.
+
+The `ai-socket` named volume uses a 1 MiB tmpfs. Both containers use the same
+`PAPER_UID:PAPER_GID`. Its directory has mode 0700 and the socket has mode 0600,
+so only that UID can use it. Paper mounts the volume read-only, which still permits
+socket connections. The worker removes an owned, stale socket after a crash,
+but refuses to replace a live socket or another kind of file. Changing the UID
+or GID requires recreating this socket volume with the new IDs. It holds no
+persistent data.
 
 New setup generates `PAPER_AI_WORKER_SECRET` in the private `.env`, mode 0600.
 Compose passes that variable explicitly to both services. It never passes the
 rest of Paper's `.env` to the worker. The worker authenticates every HTTP request,
-including health checks. Do not publish its port or reuse Paper's internal secret.
+including health checks. Keep the shared secret separate from Paper's internal secret.
 If using a custom env file, pass it to Compose with `--env-file` as well as setting
 `PAPER_ENV_FILE`, so Compose can interpolate the worker secret.
 
@@ -157,9 +166,14 @@ For a published release, replace the build command with `pull paper paper-ai`.
 The helper adds a random worker secret without replacing existing settings or
 printing the secret. Review private Compose overrides before restarting. Remove
 any CLI auth mounts, AI image override, local CLI commands and
-`PAPER_AI_LOCAL=unsafe` from the Paper service. The final Paper service should
-mount `./data` and read-only `./recap`, and use the runtime image. Only `paper-ai`
-mounts the Codex login.
+`PAPER_AI_LOCAL=unsafe` from the Paper service. Remove `PAPER_AI_WORKER_URL`
+and any private override that connects Paper to the `ai` network. The final Paper
+service should mount `./data`, read-only `./recap` and read-only `ai-socket`, and
+use the runtime image. Only `paper-ai` mounts the Codex login. Check that
+`PAPER_UID` and `PAPER_GID` match the auth directory owner before starting.
+Compose creates the socket volume with those IDs. The worker refuses an incorrectly
+owned or accessible socket directory. The obsolete URL setting does not enable
+local execution, even when unsafe mode is set.
 Preserve proxy overrides in your usual Compose command.
 
 OpenCode support was removed. Old `OPENCODE_*` variables are ignored with one
@@ -170,14 +184,44 @@ Paper does not delete it.
 
 Open Settings > Reading & connections to check the worker connection. A missing
 worker, missing secret, or failed authentication makes AI unavailable. Paper
-never falls back to running a CLI locally. Reading and saved AI results remain
+never falls back to running a CLI locally. Health checks run `codex --version`
+once at worker startup and cache the result. They detect a missing or unstartable
+CLI, but do not verify model access or login with a model call. Restart the worker
+after repairing its CLI. Reading and saved AI results remain
 available. Compose refuses to start this override without the shared secret.
+
+### Queue and failure diagnostics
+
+Two model processes can run at once. Up to 16 validated requests wait in FIFO
+order for at most 300 seconds. Discussions and briefings use the same queue as
+headlines and Pulse, so a steady stream of interactive work cannot starve
+background requests. Disconnecting removes a queued request before it can start.
+A full queue or expired wait returns HTTP 503, `Retry-After: 5`, and category
+`busy`. Paper displays "AI is busy, try again shortly."
+
+The execution deadline starts after admission, with 300 seconds for a batch and
+120 seconds for a discussion. Paper's worker client allows 620 and 440 seconds
+respectively, covering queue wait, execution, the 15-second request-body deadline
+and a five-second transport margin. Briefing HTTP callers must allow for several
+sequential model calls. The briefing CLI has no shorter overall deadline.
+
+Each failed run writes one JSON line with `event`, `requestId`, `endpoint`,
+`queueWaitMs`, `runDurationMs`, `exitCode`, `signal` and `category`. Categories are
+`auth`, `model_access`, `schema`, `timeout`, `spawn`, `output_limit`, `cancelled`,
+`busy` or `unknown`. Exit code and signal are null when no process ran. The worker
+classifies a bounded 8 KiB stderr tail and discards it. Logs never contain raw
+stderr, model output, prompts, articles, request bodies, headers or tokens.
+Paper receives only the category and request ID, logs them, and shows a matching
+message. Use the request ID to match Paper and worker failures.
 
 ### Native development
 
 Use the worker for real feeds, including when running Paper natively. Configure
-`PAPER_AI_WORKER_URL` and the same `PAPER_AI_WORKER_SECRET` through a private
-reachable endpoint. For synthetic development fixtures only, install and log in
+`PAPER_AI_WORKER_SOCKET` and the same `PAPER_AI_WORKER_SECRET`. Mount a dedicated
+host directory into the worker at `/run/paper-ai`, with mode 0700 and the same
+non-root UID as native Paper. Point native Paper at `worker.sock` in that host
+directory. Keep the worker off Paper's networks and never mount Paper's data or
+environment file into it. For synthetic development fixtures only, install and log in
 to Codex, set `CODEX_BIN`, and explicitly set `PAPER_AI_LOCAL=unsafe`. This logs a
 warning at startup. It allows the CLI to read Paper files and process secrets,
 and is unsafe for real feeds. Without either configuration, AI stays unavailable.

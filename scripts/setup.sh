@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+# --ai-worker-secret preserves settings and prints the socket upgrade guidance.
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 if command -v node >/dev/null 2>&1 && node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)' >/dev/null 2>&1; then
     exec node scripts/init-config.mjs "$@"

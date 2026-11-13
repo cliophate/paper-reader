@@ -20,6 +20,7 @@ if (process.argv.includes('--ai-worker-secret')) {
     } finally { fs.rmSync(temporary, { force: true }) }
     console.log('Added a private AI worker secret to .env with mode 0600.')
   }
+  console.log('Use compose.ai.yaml for the private worker socket. Remove old worker URL and shared AI network overrides; see docs/integrations.md.')
   process.exit(0)
 }
 const content = fs.readFileSync(path.join(directory, '.env.example'), 'utf8')
