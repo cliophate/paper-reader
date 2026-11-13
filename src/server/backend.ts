@@ -9,6 +9,7 @@ export type FeedOperation = 'edit' | 'remove' | 'repair' | 'filter'
 export type EntryStateOperation = 'read' | 'unread' | 'star' | 'unstar'
 
 export interface EntryOptions {
+  signal?: AbortSignal
   unreadOnly?: boolean
   limit?: number
   after?: Date
@@ -16,6 +17,7 @@ export interface EntryOptions {
 }
 
 export interface EntryPageOptions {
+  signal?: AbortSignal
   unreadOnly?: boolean
   limit?: number
   continuation?: string
@@ -33,12 +35,12 @@ export interface EntryPage {
 }
 
 export interface EntrySource {
-  briefingEntries?(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; before: Date }): Promise<Entry[]>
-  navigation(): Promise<NavigationPayload>
+  briefingEntries?(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; before: Date; signal?: AbortSignal }): Promise<Entry[]>
+  navigation(signal?: AbortSignal): Promise<NavigationPayload>
   entries(stream: StreamRef, options?: EntryOptions): Promise<Entry[]>
   entriesPage(stream: StreamRef, options?: EntryPageOptions): Promise<EntryPage>
-  entry(id: string): Promise<Entry | null>
-  entryIds(stream: StreamRef, unreadOnly?: boolean): Promise<string[]>
+  entry(id: string, signal?: AbortSignal): Promise<Entry | null>
+  entryIds(stream: StreamRef, unreadOnly?: boolean, signal?: AbortSignal): Promise<string[]>
 }
 
 export interface ReaderBackend extends EntrySource {
@@ -47,7 +49,7 @@ export interface ReaderBackend extends EntrySource {
   // IDs are opaque to callers. Adapters reject invalid input before any I/O.
   validateFeedId(id: string, operation: FeedOperation): void
   entriesPage(stream: StreamRef, options?: BackendPageOptions): Promise<EntryPage>
-  entriesByIds(ids: string[]): Promise<Entry[]>
+  entriesByIds(ids: string[], signal?: AbortSignal): Promise<Entry[]>
   // Set the requested state. Repeating an operation must not toggle it.
   editEntries(ids: string[], operation: EntryStateOperation): Promise<void>
   addFeed(url: string, title?: string, folder?: string): Promise<void>

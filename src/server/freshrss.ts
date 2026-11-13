@@ -1,3 +1,5 @@
+import { setTimeout as delay } from 'node:timers/promises'
+import { abortable } from './abort.js'
 import type { Config } from './config.js'
 import { BackendValidationError } from './backend.js'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES } from './organization.js'
@@ -77,28 +79,30 @@ export class FreshRssClient implements ReaderBackend {
   }
 
   private async request(path: string, init: RequestInit = {}, retry = true): Promise<Response> {
-    if (!this.authToken) await this.login()
+    init.signal?.throwIfAborted()
+    if (!this.authToken) await this.login(init.signal)
     const headers = new Headers(init.headers)
     headers.set('Authorization', `GoogleLogin auth=${this.authToken}`)
     const response = await this.fetchBuffered(`${this.baseUrl}${path}`, { ...init, headers })
     if (response.status === 401 && retry) {
       this.authToken = ''
       this.editToken = ''
-      await this.login()
+      await this.login(init.signal)
       return this.request(path, init, false)
     }
     if (!response.ok) throw new Error(`FreshRSS request failed with ${response.status} for ${path}`)
     return response
   }
 
-  private async login() {
+  private async login(signal?: AbortSignal | null) {
     const body = new URLSearchParams({ Email: this.config.username, Passwd: this.config.apiPassword })
     const response = await this.fetchBuffered(`${this.baseUrl}/accounts/ClientLogin`, {
       method: 'POST',
       body,
+      signal,
     })
     if (!response.ok) throw new Error(`FreshRSS login failed with ${response.status}`)
-    const match = (await response.text()).match(/^Auth=(.+)$/m)
+    const match = (await abortable(() => response.text(), signal)).match(/^Auth=(.+)$/m)
     if (!match) throw new Error('FreshRSS login returned no authentication token')
     this.authToken = match[1].trim()
   }
@@ -111,18 +115,19 @@ export class FreshRssClient implements ReaderBackend {
     return this.editToken
   }
 
-  private async feedMetadata(retry = true): Promise<FeedMetadata> {
-    if (!this.authToken) await this.login()
+  private async feedMetadata(retry = true, signal?: AbortSignal): Promise<FeedMetadata> {
+    if (!this.authToken) await this.login(signal)
     const response = await this.fetchBuffered(`${this.rootUrl}/api/paper-feed-health.php`, {
+      signal,
       headers: { Authorization: `GoogleLogin auth=${this.authToken}` },
     })
     if (response.status === 401 && retry) {
       this.authToken = ''
       this.editToken = ''
-      return this.feedMetadata(false)
+      return this.feedMetadata(false, signal)
     }
     if (!response.ok) throw new Error(`FreshRSS feed health failed with ${response.status}`)
-    const payload = await response.json() as { feeds?: FeedHealth[]; folderOrder?: string[] }
+    const payload = await abortable(() => response.json(), signal) as { feeds?: FeedHealth[]; folderOrder?: string[] }
     return {
       feeds: payload.feeds || [],
       folderOrder: payload.folderOrder || [],
@@ -144,37 +149,40 @@ export class FreshRssClient implements ReaderBackend {
   private async fetchBuffered(url: string, init: RequestInit, retries = 2): Promise<Response> {
     let lastError: unknown
     for (let attempt = 0; attempt <= retries; attempt += 1) {
+      init.signal?.throwIfAborted()
       try {
-        const response = await fetch(url, { ...init, signal: AbortSignal.timeout(30_000) })
-        const body = await response.arrayBuffer()
+        const signal = init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000)
+        const response = await abortable(() => fetch(url, { ...init, signal }), signal)
+        const body = await abortable(() => response.arrayBuffer(), signal)
         const buffered = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers })
         if (response.status < 500 || attempt === retries) return buffered
         lastError = new Error(`FreshRSS returned ${response.status}`)
       } catch (error) {
+        init.signal?.throwIfAborted()
         lastError = error
         if (attempt === retries) throw error
       }
-      await delay(250 * (attempt + 1))
+      await delay(250 * (attempt + 1), undefined, { signal: init.signal || undefined })
     }
     throw lastError instanceof Error ? lastError : new Error('FreshRSS request failed')
   }
 
-  async navigation(): Promise<NavigationPayload> {
+  async navigation(signal?: AbortSignal): Promise<NavigationPayload> {
     const [subscriptionsResponse, unreadResponse, starredIds, metadata] = await Promise.all([
-      this.request('/reader/api/0/subscription/list?output=json'),
-      this.request('/reader/api/0/unread-count?output=json'),
-      this.entryIds({ kind: 'starred', id: 'starred', title: 'Starred' }),
-      this.feedMetadata().catch(() => ({ feeds: [], folderOrder: [] })),
+      this.request('/reader/api/0/subscription/list?output=json', { signal }),
+      this.request('/reader/api/0/unread-count?output=json', { signal }),
+      this.entryIds({ kind: 'starred', id: 'starred', title: 'Starred' }, false, signal),
+      this.feedMetadata(true, signal).catch(() => { signal?.throwIfAborted(); return { feeds: [], folderOrder: [] } }),
     ])
-    const subscriptions = (await subscriptionsResponse.json() as { subscriptions?: GReaderSubscription[] }).subscriptions || []
-    const unreadRows = (await unreadResponse.json() as { unreadcounts?: Array<{ id: string; count: number; newestItemTimestampUsec?: string }> }).unreadcounts || []
+    const subscriptions = (await abortable(() => subscriptionsResponse.json(), signal) as { subscriptions?: GReaderSubscription[] }).subscriptions || []
+    const unreadRows = (await abortable(() => unreadResponse.json(), signal) as { unreadcounts?: Array<{ id: string; count: number; newestItemTimestampUsec?: string }> }).unreadcounts || []
     const unreadById = new Map(unreadRows.map(row => [row.id, Number(row.count) || 0]))
     const newestById = new Map(unreadRows.map(row => [row.id, usecToIso(row.newestItemTimestampUsec)]))
     const healthById = new Map(metadata.feeds.map(row => [row.id, row]))
-    const preferredIcons = await Promise.all(subscriptions.map(subscription => this.socialAvatars.iconForFeed(
+    const preferredIcons = await abortable(() => Promise.all(subscriptions.map(subscription => this.socialAvatars.iconForFeed(
       subscription.url || subscription.id.replace(/^feed\//, ''),
       subscription.iconUrl || '',
-    )))
+    ))), signal)
     const folderMap = new Map<string, Folder>()
     const uncategorized: Feed[] = []
 
@@ -221,11 +229,12 @@ export class FreshRssClient implements ReaderBackend {
     const requested = Math.min(Math.max(options.limit || 200, 1), 1000)
     let continuation = ''
     while (result.length < requested) {
-      const page = await this.entriesPage(stream, {
+      options.signal?.throwIfAborted()
+      const page = await abortable(() => this.entriesPage(stream, {
         ...options,
         limit: Math.min(250, requested - result.length),
         continuation,
-      })
+      }), options.signal)
       result.push(...page.items)
       if (!page.continuation || page.continuation === continuation) break
       continuation = page.continuation
@@ -234,6 +243,7 @@ export class FreshRssClient implements ReaderBackend {
   }
 
   async entriesPage(stream: StreamRef, options: BackendPageOptions = {}): Promise<EntryPage> {
+    options.signal?.throwIfAborted()
     const params = new URLSearchParams({
       output: 'json',
       n: String(Math.min(Math.max(options.limit || 100, 1), 1000)),
@@ -244,38 +254,40 @@ export class FreshRssClient implements ReaderBackend {
     if (options.before) params.set('nt', String(Math.floor(options.before.getTime() / 1000)))
     if (/^\d+$/.test(options.continuation || '')) params.set('c', options.continuation!)
     const path = streamPath(stream)
-    const response = await this.request(`/reader/api/0/stream/contents/${path}?${params}`)
-    const payload = await response.json() as { items?: GReaderItem[]; continuation?: string }
+    const response = await this.request(`/reader/api/0/stream/contents/${path}?${params}`, { signal: options.signal })
+    const payload = await abortable(() => response.json(), options.signal) as { items?: GReaderItem[]; continuation?: string }
     return {
       items: (payload.items || []).map(item => mapEntry(item)),
       continuation: String(payload.continuation || ''),
     }
   }
 
-  async entry(id: string): Promise<Entry | null> {
+  async entry(id: string, signal?: AbortSignal): Promise<Entry | null> {
     if (!id) return null
-    return (await this.entriesByIds([id]))[0] || null
+    return (await this.entriesByIds([id], signal))[0] || null
   }
 
-  async entriesByIds(ids: string[]): Promise<Entry[]> {
+  async entriesByIds(ids: string[], signal?: AbortSignal): Promise<Entry[]> {
+    signal?.throwIfAborted()
     if (!ids.length) return []
     const body = new URLSearchParams()
     for (const id of ids) body.append('i', id)
-    const response = await this.request('/reader/api/0/stream/items/contents?output=json', { method: 'POST', body })
-    const payload = await response.json() as { items?: GReaderItem[] }
+    const response = await this.request('/reader/api/0/stream/items/contents?output=json', { method: 'POST', body, signal })
+    const payload = await abortable(() => response.json(), signal) as { items?: GReaderItem[] }
     return (payload.items || []).map(item => mapEntry(item))
   }
 
-  async entryIds(stream: StreamRef, unreadOnly = false): Promise<string[]> {
+  async entryIds(stream: StreamRef, unreadOnly = false, signal?: AbortSignal): Promise<string[]> {
     const result: string[] = []
     const seenContinuations = new Set<string>()
     let continuation = ''
     while (true) {
+      signal?.throwIfAborted()
       const params = new URLSearchParams({ output: 'json', n: '1000', s: streamId(stream), r: 'n' })
       if (unreadOnly) params.append('xt', READ)
       if (continuation) params.set('c', continuation)
-      const response = await this.request(`/reader/api/0/stream/items/ids?${params}`)
-      const payload = await response.json() as { itemRefs?: Array<{ id: string }>; continuation?: string }
+      const response = await this.request(`/reader/api/0/stream/items/ids?${params}`, { signal })
+      const payload = await abortable(() => response.json(), signal) as { itemRefs?: Array<{ id: string }>; continuation?: string }
       result.push(...(payload.itemRefs || []).map(item => canonicalItemId(item.id)))
       const next = String(payload.continuation || '')
       if (!next || seenContinuations.has(next)) break
@@ -434,8 +446,4 @@ function imageScore(url: string): number {
   if (/-\d{2,4}x\d{2,4}\.(?:avif|jpe?g|png|webp)(?:$|\?)/i.test(url)) score -= 80
   if (/(?:thumbnail|thumb|small|low[_-]?res)/i.test(url)) score -= 40
   return score
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, milliseconds))
 }

@@ -1,3 +1,4 @@
+import { abortable } from './abort.js'
 import type { BriefingSelection, Entry } from './types.js'
 import { plainText } from './text.js'
 
@@ -24,7 +25,7 @@ export async function checkBriefingSources(selection: BriefingSelection, entries
       })
       if (!sources.length) continue
       const story = { headline: item.headline, summary: item.summary }
-      const raw = await model(SOURCE_CHECK_PROMPT, { ...story, sources }, decisionsSchema) as { decisions?: Array<{ id: string; relevant: boolean }> } | null
+      const raw = await abortable(() => model(SOURCE_CHECK_PROMPT, { ...story, sources }, decisionsSchema), signal) as { decisions?: Array<{ id: string; relevant: boolean }> } | null
       if (!Array.isArray(raw?.decisions) || raw.decisions.length !== sources.length) continue
       const decisions = new Map<string, boolean>()
       for (const decision of raw.decisions) {
@@ -34,7 +35,7 @@ export async function checkBriefingSources(selection: BriefingSelection, entries
       const remaining = sources.filter(source => decisions.get(source.id) === true)
       if (!remaining.length) continue
       signal?.throwIfAborted()
-      const support = await model(SUPPORT_CHECK_PROMPT, { ...story, sources: remaining, newSourceIds: item.entryIds, backgroundSourceIds: item.backgroundEntryIds || [], previousCoverage: history.get(item.collectionId || '') || [] }, supportSchema) as { supported?: boolean } | null
+      const support = await abortable(() => model(SUPPORT_CHECK_PROMPT, { ...story, sources: remaining, newSourceIds: item.entryIds, backgroundSourceIds: item.backgroundEntryIds || [], previousCoverage: history.get(item.collectionId || '') || [] }, supportSchema), signal) as { supported?: boolean } | null
       if (support?.supported !== true) continue
       const entryIds = remaining.filter(source => item.entryIds.includes(source.id)).map(source => source.id)
       if (!entryIds.length) continue

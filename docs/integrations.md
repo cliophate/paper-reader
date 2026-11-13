@@ -203,11 +203,14 @@ The execution deadline starts after admission, with 300 seconds for a batch and
 120 seconds for a discussion. Paper's worker client allows 620 and 440 seconds
 respectively, covering queue wait, execution, the 15-second request-body deadline
 and a five-second transport margin. A briefing has a ten-minute overall deadline
-across its model calls, retries and source checks. HTTP disconnects and CLI
+across navigation, FreshRSS pagination, candidate and article loading, coverage,
+model calls, retries, source checks and saving. HTTP disconnects and CLI
 SIGINT/SIGTERM cancel queued and running work. Concurrent requests for the same
 briefing kind share one generation within the Paper process, even with force
-enabled. One caller leaving does not cancel the others; the last caller leaving
-stops the job. Separate CLI processes do not share generations. Cancelled or
+enabled. Each caller stops waiting as soon as it disconnects. One caller leaving does
+not cancel the others. The last caller leaving or the deadline cancels and clears
+the job immediately, so the next request can start fresh even if a backend call
+has not returned. Separate CLI processes do not share generations. Cancelled or
 timed-out generations never save a completed briefing.
 
 Each failed run writes one JSON line with `event`, `requestId`, `endpoint`,

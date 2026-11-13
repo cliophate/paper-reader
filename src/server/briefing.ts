@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { abortable } from './abort.js'
 import { AiError } from './ai-errors.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -130,33 +131,32 @@ export class BriefingService {
   async generate(kind: 'morning' | 'evening', force = false, signal?: AbortSignal): Promise<BriefingRecord> {
     signal?.throwIfAborted()
     let job = this.generating.get(kind)
-    if (job?.controller.signal.aborted) {
-      await job.result.catch(() => {})
-      return this.generate(kind, force, signal)
-    }
     if (!job) {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(new AiError('timeout')), 600_000)
-      job = { controller, callers: 0, result: this.generateEdition(kind, force, controller.signal).finally(() => {
+      const clear = () => {
         clearTimeout(timer)
-        this.generating.delete(kind)
+        if (this.generating.get(kind) === current) this.generating.delete(kind)
+      }
+      controller.signal.addEventListener('abort', clear, { once: true })
+      const current = { controller, callers: 0, result: abortable(() => this.generateEdition(kind, force, controller.signal), controller.signal).finally(() => {
+        clear()
+        controller.signal.removeEventListener('abort', clear)
       }) }
-      this.generating.set(kind, job)
+      job = current
+      this.generating.set(kind, current)
     }
     const current = job
     current.callers += 1
-    return new Promise<BriefingRecord>((resolve, reject) => {
-      const cancel = () => { signal?.removeEventListener('abort', cancel); reject(new AiError('cancelled')) }
-      signal?.addEventListener('abort', cancel, { once: true })
-      current.result.then(value => { signal?.removeEventListener('abort', cancel); resolve(value) }, error => { signal?.removeEventListener('abort', cancel); reject(error) })
-      if (signal?.aborted) cancel()
-    }).finally(async () => {
+    try {
+      return await abortable(() => current.result, signal)
+    } catch (error) {
+      if (signal?.aborted) throw new AiError('cancelled')
+      throw error
+    } finally {
       current.callers -= 1
-      if (!current.callers) {
-        current.controller.abort(new AiError('cancelled'))
-        await current.result.catch(() => {})
-      }
-    })
+      if (!current.callers) current.controller.abort(new AiError('cancelled'))
+    }
   }
 
   private async generateEdition(kind: 'morning' | 'evening', force: boolean, signal: AbortSignal): Promise<BriefingRecord> {
@@ -170,14 +170,14 @@ export class BriefingService {
     const windowStart = lastCutoff ? new Date(lastCutoff) : new Date(cutoff.getTime() - (kind === 'morning' ? 14 : 11) * 3_600_000)
     const unreadOnly = shouldLimitBriefingToUnread(cutoff, this.config.briefing.includeReadUntil)
     const stableFolderIds = this.db.organizationCapabilities.stableFolderIds
-    const writersFolder = resolveWritersFolder(await this.entries.navigation(), stableFolderIds, this.db.getSyncValue('briefing_writers_folder_id'))
+    const writersFolder = resolveWritersFolder(await abortable(() => this.entries.navigation(signal), signal), stableFolderIds, this.db.getSyncValue('briefing_writers_folder_id'))
     signal.throwIfAborted()
     if (writersFolder.status === 'ambiguous') throw new Error('More than one Writers folder exists. Give the briefing folder a unique name before generating a briefing.')
     if (stableFolderIds && writersFolder.stream) this.db.setSyncValue('briefing_writers_folder_id', writersFolder.stream.id)
     const allStream: StreamRef = { kind: 'all', id: 'all', title: 'All articles' }
-    const candidates = (stream: StreamRef, limit: number) => this.entries.briefingEntries
-      ? this.entries.briefingEntries(stream, { unreadOnly, limit, before: cutoff })
-      : this.entries.entries(stream, { unreadOnly, limit, after: windowStart, before: cutoff })
+    const candidates = (stream: StreamRef, limit: number) => abortable(() => this.entries.briefingEntries
+      ? this.entries.briefingEntries(stream, { unreadOnly, limit, before: cutoff, signal })
+      : this.entries.entries(stream, { unreadOnly, limit, after: windowStart, before: cutoff, signal }), signal)
     const [writers, all] = await Promise.all([writersFolder.stream ? candidates(writersFolder.stream, 250) : Promise.resolve([]), candidates(allStream, 1000)])
     signal.throwIfAborted()
     const surfaced = this.db.surfacedEntryIds()
@@ -189,7 +189,7 @@ export class BriefingService {
     let clusters: NewsCluster[]
     try {
       clusters = this.coverage
-        ? (await this.coverage.clustersForEntries(newsCandidates)).map(topic => ({
+        ? (await abortable(() => this.coverage!.clustersForEntries(newsCandidates, signal), signal)).map(topic => ({
             id: topic.id,
             collectionId: topic.collectionId,
             scope: topic.summary,
@@ -236,8 +236,8 @@ export class BriefingService {
         id: `semantic-checked-v1-${crypto.createHash('sha1').update([...item.entryIds].sort().join('\n')).digest('hex').slice(0, 12)}`,
         entries: item.entryIds.map(id => entryMap.get(id)).filter((entry): entry is Entry => Boolean(entry)),
       })).filter(cluster => new Set(cluster.entries.map(entry => domain(entry.url))).size >= 2)
-      try { await this.coverage.rememberSemanticClusters(checked) }
-      catch { console.warn('Could not save checked briefing groups to the coverage index') }
+      try { await abortable(() => this.coverage!.rememberSemanticClusters(checked, signal), signal) }
+      catch { signal.throwIfAborted(); console.warn('Could not save checked briefing groups to the coverage index') }
     }
 
     signal.throwIfAborted()
@@ -264,6 +264,7 @@ export class BriefingService {
     }
     signal.throwIfAborted()
     this.db.transaction(() => {
+      signal.throwIfAborted()
       this.db.createBriefing(record, entries)
       this.db.recordBriefingConsidered([...new Set([...writers, ...all].map(entry => entry.id))], cutoff.getTime())
     })
@@ -299,7 +300,7 @@ export class BriefingService {
   }
 
   private async shortlist(kind: 'morning' | 'evening', writers: Entry[], clusters: NewsCluster[], news: Entry[], social: Entry[], entries: Map<string, Entry>, signal: AbortSignal): Promise<Shortlist> {
-    const profile = await fs.readFile(path.join(this.profileDirectory(), 'editorial-profile.md'), 'utf8')
+    const profile = await abortable(() => fs.readFile(path.join(this.profileDirectory(), 'editorial-profile.md'), { encoding: 'utf8', signal }), signal)
     const input = {
       briefing: kind,
       profile,
@@ -333,7 +334,7 @@ export class BriefingService {
   }
 
   private async edit(kind: 'morning' | 'evening', shortlist: Shortlist, entries: Map<string, Entry>, clusters: NewsCluster[], signal: AbortSignal): Promise<BriefingSelection> {
-    const profile = await fs.readFile(path.join(this.profileDirectory(), 'editorial-profile.md'), 'utf8')
+    const profile = await abortable(() => fs.readFile(path.join(this.profileDirectory(), 'editorial-profile.md'), { encoding: 'utf8', signal }), signal)
     const selectedClusters = clusters.filter(cluster => shortlist.newsClusterIds.includes(cluster.id))
     await this.enrichEntries(shortlist.writerIds.slice(0, 8), selectedClusters, entries, signal)
     const input = {
@@ -371,7 +372,7 @@ export class BriefingService {
     signal.throwIfAborted()
     if (!this.config.ai.briefingsEnabled) throw new Error('Briefing generation is disabled.')
     const model = stage === 'shortlist' ? this.config.codex.shortlistModel : this.config.codex.editorModel
-    return runCodex(this.config.codex, model, instruction, input, schema, undefined, signal)
+    return abortable(() => runCodex(this.config.codex, model, instruction, input, schema, undefined, signal), signal)
   }
 
   private async enrichEntries(writerIds: string[], clusters: NewsCluster[], entries: Map<string, Entry>, signal: AbortSignal) {
@@ -399,7 +400,8 @@ export class BriefingService {
         const entry = id ? entries.get(id) : null
         if (!id || !entry) continue
         try {
-          const article = await beforeDeadline(this.reader!.fetch(entry.url, undefined, signal), deadline)
+          const article = await beforeDeadline(abortable(() => this.reader!.fetch(entry.url, undefined, signal), signal), deadline)
+          signal.throwIfAborted()
           entries.set(id, {
             ...entry,
             contentHtml: article.contentHtml,

@@ -168,3 +168,52 @@ describe('feed endpoint repair', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('FreshRSS cancellation', () => {
+  const stream: StreamRef = { kind: 'all', id: 'all', title: 'All' }
+  const client = () => new FreshRssClient({ baseUrl: 'https://freshrss.test', username: 'fixture', apiPassword: 'synthetic-password' })
+
+  it.each(['login', 'body', 'entries', 'starred', 'entry', 'metadata'] as const)('cancels a pending %s request without retrying', async stage => {
+    const controller = new AbortController()
+    const waiting = vi.fn()
+    let requestSignal: AbortSignal | undefined
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      const login = url.includes('ClientLogin')
+      if (login && stage !== 'login') return new Response('Auth=synthetic-token')
+      const target = stage === 'login' || stage === 'body' || stage === 'entries' || stage === 'entry'
+        || stage === 'starred' && url.includes('/items/ids') || stage === 'metadata' && url.includes('paper-feed-health')
+      if (!target) return Response.json({})
+      requestSignal = init.signal as AbortSignal
+      waiting()
+      if (stage === 'body') return { arrayBuffer: () => new Promise(() => {}) } as Response
+      return new Promise<Response>(() => {})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const backend = client()
+    const result = stage === 'starred' || stage === 'metadata' ? backend.navigation(controller.signal)
+      : stage === 'entry' ? backend.entry('synthetic-entry', controller.signal)
+      : backend.entries(stream, { signal: controller.signal })
+    const rejected = expect(result).rejects.toThrow('Synthetic cancellation')
+    await vi.waitFor(() => expect(waiting).toHaveBeenCalled())
+    const requests = fetchMock.mock.calls.length
+    controller.abort(new Error('Synthetic cancellation'))
+    await rejected
+    expect(requestSignal?.aborted).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(requests)
+  })
+
+  it.each(['entries', 'ids'] as const)('checks cancellation between %s pages', async kind => {
+    const controller = new AbortController()
+    let pages = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('ClientLogin')) return new Response('Auth=synthetic-token')
+      pages += 1
+      controller.abort(new Error('Stopped between pages'))
+      return Response.json({ items: [], itemRefs: [], continuation: '2' })
+    }))
+    const backend = client()
+    const result = kind === 'entries' ? backend.entries(stream, { signal: controller.signal }) : backend.entryIds(stream, false, controller.signal)
+    await expect(result).rejects.toThrow('Stopped between pages')
+    expect(pages).toBe(1)
+  })
+})

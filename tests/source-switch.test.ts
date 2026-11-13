@@ -20,14 +20,15 @@ describe('first import activation', () => {
     expect(remote.entriesPage).toHaveBeenCalledWith(stream, pageOptions)
     ready = true
     expect(await shared.entryIds(stream)).toEqual(['local'])
-    await shared.navigation()
-    expect(local.navigation).toHaveBeenCalledOnce()
+    const controller = new AbortController()
+    await shared.navigation(controller.signal)
+    expect(local.navigation).toHaveBeenCalledWith(controller.signal)
     expect(remote.navigation).not.toHaveBeenCalled()
-    expect(await shared.entry('one')).toBeNull()
-    expect(local.entry).toHaveBeenCalledWith('one')
+    expect(await shared.entry('one', controller.signal)).toBeNull()
+    expect(local.entry).toHaveBeenCalledWith('one', controller.signal)
     expect(await shared.entriesPage(stream, pageOptions)).toEqual({ items: [], continuation: 'local' })
     expect(local.entriesPage).toHaveBeenCalledWith(stream, pageOptions)
-    const options = { before: new Date(), after: new Date(0), unreadOnly: true, limit: 5 }
+    const options = { before: new Date(), after: new Date(0), unreadOnly: true, limit: 5, signal: controller.signal }
     await shared.entries(stream, options)
     expect(local.entries).toHaveBeenCalledWith(stream, options)
     await shared.briefingEntries!(stream, options)
