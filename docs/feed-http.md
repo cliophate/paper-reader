@@ -3,7 +3,8 @@
 `src/server/feed-http.ts` exports `boundedFetch(input, options)`,
 `BoundedFetchOptions`, `BoundedFetchResult`, `FeedValidators`, `FeedHttpError`,
 `FeedHttpErrorCode`, `FEED_HTTP_DEFAULTS`, `validEtag` and `validLastModified`.
-Feed collection, discovery and FreshRSS repair use this transport.
+Feed collection, discovery, FreshRSS repair, full-text pages, social avatar
+lookups and X threads use this transport.
 
 The result contains `status`, `url` as the final URL without a fragment, `text`,
 `contentType`, optional `etag`, `lastModified` and `retryAfter`, and `conditional`
@@ -32,7 +33,7 @@ address directly through its lookup callback, retaining the original HTTP Host
 and TLS hostname. A later DNS answer cannot redirect that connection. IPv4
 private, link-local, shared, multicast, reserved and documentation networks are
 blocked. IPv6 must be global unicast, excluding transition and special ranges.
-IPv4-mapped IPv6 addresses are rejected. Private services need an exact origin
+Private services need an exact origin
 in the administrator's allowlist, including scheme and port. Never derive this
 allowlist from a submitted feed URL, imported OPML or an HTTP redirect.
 
@@ -54,3 +55,13 @@ Discovery can omit it when its caller already bounds requests.
 Public IPv4-mapped IPv6 addresses use the same checks as their IPv4 address.
 Mapped loopback, private, and reserved addresses remain blocked. The default
 user agent identifies Paper in a browser-compatible form.
+
+Social avatar lookups and X threads fetch RSS XML with 2 MiB limits for wire,
+decompressed and decoded bytes. Avatar lookups use `PAPER_TRUSTED_FEED_ORIGINS`;
+X threads trust only the exact origin of `RSSHUB_BASE_URL`. Redirects still pass
+the transport policy on every hop. Avatar warnings include the origin and a safe
+error message, without feed paths, credentials or query strings.
+
+`POST /api/fulltext` permits four active requests. Additional requests receive
+503 with a retry message. Disconnects cancel the page fetch and optional reader
+fallback. A slot stays occupied until the work finishes or fails.

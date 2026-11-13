@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { boundedFetch, FeedHttpError } from '../src/server/feed-http.js'
-import { extractReadableArticle, fetchHtml } from '../src/server/reader.js'
+import type { PaperDatabase } from '../src/server/db.js'
+import { ReaderService, extractReadableArticle, fetchHtml } from '../src/server/reader.js'
 
 vi.mock('../src/server/feed-http.js', async importOriginal => ({ ...await importOriginal<typeof import('../src/server/feed-http.js')>(), boundedFetch: vi.fn() }))
 afterEach(() => { vi.unstubAllGlobals(); vi.resetAllMocks() })
@@ -102,4 +103,38 @@ it('retains HTML content-type and size error messages', async () => {
   await expect(fetchHtml(new URL('https://example.test/story'))).rejects.toThrow('The article URL did not return an HTML page')
   vi.mocked(boundedFetch).mockRejectedValue(new FeedHttpError('limit', 'The response exceeds its byte limit.'))
   await expect(fetchHtml(new URL('https://example.test/story'))).rejects.toThrow('The article page is too large to extract')
+})
+
+
+it('passes cancellation through the reader to the bounded transport without caching an article', async () => {
+  const controller = new AbortController()
+  const cacheArticle = vi.fn()
+  const database = { getArticle: () => null, cacheArticle } as unknown as PaperDatabase
+  vi.mocked(boundedFetch).mockImplementation((_url, options) => new Promise((_resolve, reject) => {
+    options!.signal!.addEventListener('abort', () => reject(new FeedHttpError('aborted', 'The HTTP request was interrupted.')), { once: true })
+  }))
+  const work = new ReaderService(database).fetch('https://example.test/story', 0, controller.signal)
+  expect(vi.mocked(boundedFetch).mock.calls[0][1]?.signal).toBe(controller.signal)
+  controller.abort()
+  await expect(work).rejects.toMatchObject({ code: 'aborted' })
+  expect(cacheArticle).not.toHaveBeenCalled()
+})
+
+it.each(['blocked', 'unreadable'])('cancels the optional fallback for a %s page', async reason => {
+  vi.mocked(boundedFetch).mockResolvedValue({ ...page(reason === 'blocked' ? 403 : 200), text: '<p>Short.</p>' })
+  const controller = new AbortController()
+  let fallbackSignal: AbortSignal | undefined
+  const started = Promise.withResolvers<void>()
+  vi.stubGlobal('fetch', vi.fn((_url, options: RequestInit) => new Promise((_resolve, reject) => {
+    fallbackSignal = options.signal!
+    fallbackSignal.addEventListener('abort', () => reject(fallbackSignal!.reason), { once: true })
+    started.resolve()
+  })))
+  const database = { getArticle: () => null, cacheArticle: vi.fn() } as unknown as PaperDatabase
+  const work = new ReaderService(database, true).fetch('https://example.test/story', 0, controller.signal)
+  await started.promise
+  controller.abort()
+  expect(fallbackSignal?.aborted).toBe(true)
+  await expect(work).rejects.toMatchObject({ name: 'AbortError' })
+  expect(database.cacheArticle).not.toHaveBeenCalled()
 })

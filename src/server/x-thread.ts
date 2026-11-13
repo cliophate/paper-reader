@@ -1,3 +1,4 @@
+import { boundedFetch } from './feed-http.js'
 import { JSDOM } from 'jsdom'
 import { cleanArticleHtml, decodeHtmlText } from './text.js'
 
@@ -29,17 +30,17 @@ export class XThreadService {
     if (cached && cached.expiresAt > Date.now()) return cached.posts
 
     const route = `${this.baseUrl}/twitter/tweet/${encodeURIComponent(reference.handle)}/status/${reference.status}`
-    const response = await fetch(route, {
-      headers: { Accept: 'application/rss+xml, application/xml;q=0.9' },
-      signal: AbortSignal.timeout(30_000),
+    const response = await boundedFetch(route, {
+      trustedOrigins: [new URL(this.baseUrl).origin],
+      accept: 'application/rss+xml, application/xml;q=0.9',
+      timeoutMs: 30_000,
+      maxResponseBytes: MAX_XML_BYTES,
+      maxDecompressedBytes: MAX_XML_BYTES,
+      maxDecodedBytes: MAX_XML_BYTES,
     })
-    if (!response.ok) throw new Error(`RSSHub returned status ${response.status}`)
-    const declaredLength = Number(response.headers.get('content-length') || 0)
-    if (declaredLength > MAX_XML_BYTES) throw new Error('The X thread response is too large')
-    const xml = await response.text()
-    if (Buffer.byteLength(xml) > MAX_XML_BYTES) throw new Error('The X thread response is too large')
+    if (response.status < 200 || response.status >= 300) throw new Error(`RSSHub returned status ${response.status}`)
 
-    const posts = parseXThreadXml(xml, reference)
+    const posts = parseXThreadXml(response.text, reference)
     this.cache.set(key, { posts, expiresAt: Date.now() + CACHE_TTL })
     return posts
   }

@@ -801,6 +801,22 @@ describe('reader workflow improvements', () => {
     expect(container.querySelector('[role="dialog"]')?.textContent).toContain('2 unread articles')
   })
 
+  it('shows the full-text capacity error with a retry button and keeps the feed content', async () => {
+    initialPage = { items: [{ ...post('a'), kind: 'article', contentHtml: '<p>Original feed version.</p>' }], continuation: '' }
+    const message = 'Paper is fetching too many full articles. Try again shortly.'
+    vi.mocked(api.fullText).mockRejectedValue(new Error(message))
+    await mount()
+    await click(container.querySelector('[aria-label="Fetch full article"]'))
+    expect(container.querySelector('.article-error')?.textContent).toContain(message)
+    expect(container.querySelector('.article-document')?.textContent).toContain('Original feed version')
+    const retry = [...container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Retry full article')!
+    expect(retry.disabled).toBe(false)
+    vi.mocked(api.fullText).mockResolvedValue({ url: initialPage.items[0].url, title: 'Expanded', byline: '', contentHtml: '<p>Full article version.</p>', excerpt: 'Full', readingMinutes: 3, fetchedAt: '', cached: false })
+    await click(retry)
+    expect(container.querySelector('.article-error')).toBeNull()
+    expect(container.querySelector('.article-document')?.textContent).toContain('Full article version')
+  })
+
   it('switches full and feed content without reverting a star made while reading', async () => {
     initialPage = { items: [{ ...post('a'), kind: 'article', contentHtml: '<p>Original feed version.</p>' }], continuation: '' }
     vi.mocked(api.fullText).mockResolvedValue({ url: initialPage.items[0].url, title: 'Expanded', byline: '', contentHtml: '<p>Full article version.</p>', excerpt: 'Full', readingMinutes: 3, fetchedAt: '', cached: false })
