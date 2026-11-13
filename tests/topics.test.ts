@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -33,6 +33,64 @@ function entry(id: string, domain: string, title: string, overrides: Partial<Ent
 }
 
 describe('topic clustering', () => {
+  it('cancels coverage loading and cannot write late entries or checked groups', async () => {
+    const database = new PaperDatabase(':memory:')
+    const articles = [entry('1', 'one.test', 'A synthetic story'), entry('2', 'two.test', 'A synthetic story')]
+    let resolve!: (entries: Entry[]) => void
+    const pending = new Promise<Entry[]>(done => { resolve = done })
+    const source: EntrySource = {
+      navigation: async () => ({ unread: 0, starred: 0, folders: [], uncategorized: [] }),
+      entries: vi.fn(() => pending), entriesPage: async () => ({ items: [], continuation: '' }),
+      entry: async () => null, entryIds: async () => [],
+    }
+    const controller = new AbortController()
+    const service = new TopicService(database, source)
+    const replace = vi.spyOn(database, 'replaceCoverageIndex')
+    const upsert = vi.spyOn(database, 'upsertCoverageClusters')
+    try {
+      const result = service.rememberSemanticClusters([{ id: 'synthetic', entries: articles }], controller.signal)
+      const rejected = expect(result).rejects.toThrow('Synthetic cancellation')
+      const rebuildSignal = vi.mocked(source.entries).mock.calls[0][1]!.signal!
+      expect(rebuildSignal.aborted).toBe(false)
+      controller.abort(new Error('Synthetic cancellation'))
+      await rejected
+      expect(rebuildSignal.aborted).toBe(true)
+      resolve(articles)
+      await service.drain().catch(() => {})
+      expect(replace).not.toHaveBeenCalled()
+      expect(upsert).not.toHaveBeenCalled()
+      vi.mocked(source.entries).mockResolvedValue([])
+      await service.refresh()
+      expect(replace).toHaveBeenCalledTimes(1)
+    } finally { database.close() }
+  })
+
+  it('keeps a shared coverage rebuild running for other callers when one cancels', async () => {
+    const database = new PaperDatabase(':memory:')
+    const articles = [entry('1', 'one.test', 'A synthetic story'), entry('2', 'two.test', 'A synthetic story')]
+    let resolve!: (entries: Entry[]) => void
+    const pending = new Promise<Entry[]>(done => { resolve = done })
+    const source: EntrySource = {
+      navigation: async () => ({ unread: 0, starred: 0, folders: [], uncategorized: [] }),
+      entries: vi.fn(() => pending), entriesPage: async () => ({ items: [], continuation: '' }),
+      entry: async () => null, entryIds: async () => [],
+    }
+    const service = new TopicService(database, source)
+    const replace = vi.spyOn(database, 'replaceCoverageIndex')
+    try {
+      const briefing = new AbortController()
+      const cancelled = service.refresh(briefing.signal)
+      const pulse = service.refresh()
+      expect(source.entries).toHaveBeenCalledTimes(1)
+      briefing.abort(new Error('Synthetic briefing cancellation'))
+      await expect(cancelled).rejects.toThrow('Synthetic briefing cancellation')
+      expect(vi.mocked(source.entries).mock.calls[0][1]!.signal!.aborted).toBe(false)
+      resolve(articles)
+      await expect(pulse).resolves.toBeUndefined()
+      expect(replace).toHaveBeenCalledTimes(1)
+    } finally { database.close() }
+  })
+
   it('does not group the reported GOG and GTA headlines with OpenAI mathematics', () => {
     const candidates = [
       entry('1', 'technologyreview.com', "What OpenAI's latest controversy tells us about the future of math"),

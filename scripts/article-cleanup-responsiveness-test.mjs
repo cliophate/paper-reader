@@ -49,7 +49,7 @@ try {
   child = spawn(process.execPath, [path.join(build, 'index.js')], { stdio: ['ignore', 'pipe', 'pipe'], env: {
     PATH: process.env.PATH, HOME: temporary, NODE_NO_WARNINGS: '1', STATE_DIR: state, PAPER_BACKEND: 'standalone',
     HOST: '127.0.0.1', PORT: String(port), PUBLIC_URL: base, PAPER_TRUSTED_FEED_ORIGINS: origin,
-    CODEX_ENABLED: 'false', OPENCODE_ENABLED: 'false',
+    CODEX_ENABLED: 'false',
   } })
   child.stdout.on('data', data => { logs = (logs + data).slice(-4000) })
   child.stderr.on('data', data => { logs = (logs + data).slice(-4000) })

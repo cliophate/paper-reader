@@ -6,7 +6,7 @@ import type { ConnectionsSettings, ConnectionsUpdate } from '../shared/connectio
 
 export class SettingsValidationError extends Error {}
 
-const aiKeys = ['enabled', 'codexEnabled', 'openCodeEnabled', 'discussionEnabled', 'briefingsEnabled', 'headlinesEnabled', 'collectionsEnabled'] as const
+const aiKeys = ['enabled', 'codexEnabled', 'discussionEnabled', 'briefingsEnabled', 'headlinesEnabled', 'collectionsEnabled'] as const
 const locations = new Set(['new', 'later', 'archive', 'feed'])
 
 function object(value: unknown): Record<string, unknown> {
@@ -23,6 +23,8 @@ function validate(input: unknown): ConnectionsUpdate {
     const allowed: readonly string[] = section === 'ai' ? aiKeys : section === 'readwise' ? ['enabled', 'location', 'token'] : ['enabled', 'publishUrl', 'token']
     const checked: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(fields)) {
+      // Accept old saved settings without restoring the removed provider.
+      if (section === 'ai' && key === 'openCodeEnabled' && typeof value === 'boolean') continue
       if (!allowed.includes(key)) throw new SettingsValidationError('Unknown connection setting.')
       if (key === 'enabled' || section === 'ai') {
         if (typeof value !== 'boolean') throw new SettingsValidationError('Switches must be true or false.')
@@ -58,9 +60,8 @@ export class ConnectionSettings {
     this.filename = path.join(config.stateDir, 'connections.json')
     this.defaults = {
       ai: {
-        enabled: config.codex.enabled || config.openCode.enabled,
-        codexEnabled: config.codex.enabled || !config.openCode.enabled,
-        openCodeEnabled: config.openCode.enabled,
+        enabled: config.codex.enabled,
+        codexEnabled: true,
         discussionEnabled: config.ai.discussionEnabled,
         briefingsEnabled: config.ai.briefingsEnabled,
         headlinesEnabled: config.headlines.enabled,
@@ -128,7 +129,6 @@ export class ConnectionSettings {
   private apply() {
     const view = this.view()
     this.config.codex.enabled = view.ai.enabled && view.ai.codexEnabled
-    this.config.openCode.enabled = view.ai.enabled && view.ai.openCodeEnabled
     this.config.ai.discussionEnabled = view.ai.discussionEnabled
     this.config.ai.briefingsEnabled = view.ai.briefingsEnabled
     this.config.headlines.enabled = view.ai.headlinesEnabled

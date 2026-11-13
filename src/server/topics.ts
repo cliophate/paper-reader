@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { abortable } from './abort.js'
 import { decodeHtmlText, plainText } from './text.js'
 import type { EntrySource } from './repository.js'
 import type { CoverageFeedbackAction, CoverageFeedbackRecord, PaperDatabase } from './db.js'
@@ -63,8 +64,8 @@ export interface TopicsPayload {
 }
 
 export class TopicService {
-  private running: Promise<void> | null = null
-  async drain() { await this.running }
+  private running: { promise: Promise<void>; controller: AbortController; waiters: number } | null = null
+  async drain() { await this.running?.promise }
   private stale = false
   private revision = 0
 
@@ -94,9 +95,10 @@ export class TopicService {
     }
   }
 
-  async clustersForEntries(entries: Entry[]): Promise<Topic[]> {
+  async clustersForEntries(entries: Entry[], signal?: AbortSignal): Promise<Topic[]> {
+    signal?.throwIfAborted()
     if (!entries.length) return []
-    await this.ensureFresh()
+    await this.ensureFresh(signal)
     const ids = new Set(entries.map(entry => entry.id))
     const first = Math.min(...entries.map(entry => entry.timestamp))
     const last = Math.max(...entries.map(entry => entry.timestamp))
@@ -145,18 +147,44 @@ export class TopicService {
     return this.db.deleteCoverageFeedback(id)
   }
 
-  refresh(): Promise<void> {
-    if (this.running) return this.running.then(() => this.stale ? this.refresh() : undefined)
-    const revision = this.revision
-    this.running = this.rebuild()
-      .then(() => { if (revision === this.revision) this.stale = false })
-      .finally(() => { this.running = null })
-    return this.running
+  refresh(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
+    const joined = Boolean(this.running)
+    const run = this.running ?? this.startRebuild()
+    run.waiters++
+    let left = false
+    // The rebuild is shared, so one caller's cancellation must not fail the others.
+    // Cancel it only when nobody is waiting for it any more.
+    const leave = () => {
+      if (left) return
+      left = true
+      if (--run.waiters > 0) return
+      run.controller.abort()
+      if (this.running === run) this.running = null
+    }
+    return abortable(() => run.promise, signal)
+      .finally(leave)
+      .then(() => joined && this.stale ? this.refresh(signal) : undefined)
   }
 
-  async rememberSemanticClusters(clusters: Array<{ id: string; entries: Entry[] }>) {
+  private startRebuild() {
+    const revision = this.revision
+    const controller = new AbortController()
+    const run = { controller, waiters: 0, promise: Promise.resolve() }
+    run.promise = this.rebuild(controller.signal)
+      .then(() => { if (revision === this.revision) this.stale = false })
+      .finally(() => { if (this.running === run) this.running = null })
+    // Every waiter may have left already, so a cancelled rebuild must not become an unhandled rejection.
+    run.promise.catch(() => {})
+    this.running = run
+    return run
+  }
+
+  async rememberSemanticClusters(clusters: Array<{ id: string; entries: Entry[] }>, signal?: AbortSignal) {
+    signal?.throwIfAborted()
     if (!clusters.length) return
-    await this.ensureFresh()
+    await this.ensureFresh(signal)
+    signal?.throwIfAborted()
     const topics = clusters.flatMap(cluster => {
       const topic = topicFromEntries(cluster.entries, 'event')
       return topic ? [{ ...topic, id: cluster.id }] : []
@@ -164,20 +192,24 @@ export class TopicService {
     this.db.upsertCoverageClusters(topics, new Date().toISOString())
   }
 
-  private async ensureFresh() {
+  private async ensureFresh(signal?: AbortSignal) {
+    signal?.throwIfAborted()
     const generatedAt = Date.parse(this.db.getSyncValue('coverage_generated_at'))
     const synchronizedAt = Date.parse(this.db.getSyncValue('last_sync_completed_at'))
-    if (this.stale || !Number.isFinite(generatedAt) || (Number.isFinite(synchronizedAt) && generatedAt < synchronizedAt)) await this.refresh()
+    if (this.stale || !Number.isFinite(generatedAt) || (Number.isFinite(synchronizedAt) && generatedAt < synchronizedAt)) await abortable(() => this.refresh(signal), signal)
+    signal?.throwIfAborted()
   }
 
-  private async rebuild() {
+  private async rebuild(signal?: AbortSignal) {
     const now = new Date()
-    const entries = await this.entries.entries(ALL, {
+    const entries = await abortable(() => this.entries.entries(ALL, {
+      signal,
       unreadOnly: false,
       limit: MAX_ENTRIES,
       after: new Date(now.getTime() - DEFAULT_WINDOW_HOURS * 3_600_000),
       before: new Date(now.getTime() + 60_000),
-    })
+    }), signal)
+    signal?.throwIfAborted()
     const after = new Date(now.getTime() - DEFAULT_WINDOW_HOURS * 3_600_000)
     const remembered = this.db.coverageTopics({ after, before: new Date(now.getTime() + 60_000) })
       .filter(topic => topic.id.startsWith('semantic-checked-v1-'))

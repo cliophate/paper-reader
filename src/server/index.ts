@@ -1,3 +1,5 @@
+import { withRequestSignal } from './request-signal.js'
+import { AI_UNAVAILABLE, aiAvailability, aiExecutionConfigured, warnUnsafeAi } from './ai-client.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import { organizationRouter } from './organization-routes.js'
 import crypto from 'node:crypto'
@@ -32,7 +34,6 @@ import { BackendSynchronizer } from './sync.js'
 import { escapeHtml } from './text.js'
 import { TopicService } from './topics.js'
 import { PulseService } from './pulse.js'
-import { runOpenCode } from './opencode.js'
 import { streamXMedia } from './x-media.js'
 import { XThreadService } from './x-thread.js'
 import { BackendValidationError, type EntryStateOperation } from './backend.js'
@@ -43,13 +44,14 @@ const ENTRY_PAGE_SIZE = 80
 const SEARCH_SCAN_SIZE = 80
 const UNDO_LIFETIME_MS = 20_000
 
+warnUnsafeAi()
 const storage = await openRuntimeStorage()
 const { config, database, backend } = storage
 let shuttingDown = false
 const eventResponses = new Set<Response>()
 const connectionSettings = new ConnectionSettings(config)
 const connectionListeners = new Set<() => void>()
-const discussionEnabled = () => config.codex.enabled && config.ai.discussionEnabled
+const discussionEnabled = () => aiExecutionConfigured() && config.codex.enabled && config.ai.discussionEnabled
 logMemory('database ready')
 const repository = new PaperRepository(database)
 const search = new SearchService(database)
@@ -61,15 +63,13 @@ const kirby = new KirbyPublisher(config.kirby)
 const reader = new ReaderService(database, config.readerFallbackEnabled)
 const headlines = new HeadlineService(database, url => reader.fetch(url, 0), (stage, prompt, input, schema) =>
   runCodex(config.codex, stage === 'write' ? config.headlines.writerModel : config.headlines.reviewerModel,
-    prompt, input, schema, 'medium'), config.headlines.enabled && config.codex.enabled,
+    prompt, input, schema, 'medium'), aiExecutionConfigured() && config.headlines.enabled && config.codex.enabled,
   `${config.headlines.writerModel}:${config.headlines.reviewerModel}`)
 const xThreads = new XThreadService(config.rssHub.baseUrl)
 let localReadsActive = Boolean(standalone) || config.sync.localReads && database.getSyncValue('backfill_complete') === 'true'
 const entriesSource = switchingEntrySource(() => localReadsActive, repository, backend)
-const pulse = new PulseService(database, (prompt, input, schema) => config.codex.enabled
-  ? runCodex(config.codex, config.collections.model, prompt, input, schema, 'medium')
-  : runOpenCode(config.openCode, `openai/${config.collections.model}`, prompt, input),
-  config.collections.enabled && (config.codex.enabled || config.openCode.enabled))
+const pulse = new PulseService(database, (prompt, input, schema) => runCodex(config.codex, config.collections.model, prompt, input, schema, 'medium'),
+  aiExecutionConfigured() && config.collections.enabled && config.codex.enabled)
 const topics = new TopicService(database, entriesSource, () => pulse.list().collections)
 const briefings = new BriefingService(config, database, entriesSource, reader, topics)
 const app = express()
@@ -126,7 +126,7 @@ app.get('/api/discussion/events', (request, response) => {
   response.on('close', () => { clearInterval(timer); unsubscribe() })
 })
 app.post('/api/discussion', asyncRoute(async (request, response) => {
-  if (!discussionEnabled()) return response.status(503).json({ error: 'Enable article discussions and Codex in Settings.' })
+  if (!discussionEnabled()) return response.status(503).json({ error: aiExecutionConfigured() ? 'Enable article discussions and Codex in Settings.' : AI_UNAVAILABLE })
   const entry = database.localEntry(String(request.body?.entryId || ''))
   if (!entry) return response.status(404).json({ error: 'Article is not available in Paper.' })
   const full = request.body?.fullText === true ? database.getArticleForEntry(entry.id) : null
@@ -137,7 +137,7 @@ app.post('/api/discussion', asyncRoute(async (request, response) => {
   } catch (error) { response.status(400).json({ error: error instanceof Error ? error.message : 'Could not open discussion' }) }
 }))
 app.post('/api/discussion/message', (request, response) => {
-  if (!discussionEnabled()) return response.status(503).json({ error: 'Article discussion is disabled.' })
+  if (!discussionEnabled()) return response.status(503).json({ error: aiExecutionConfigured() ? 'Article discussion is disabled.' : AI_UNAVAILABLE })
   try { response.json(discussions.send(String(request.body?.entryId || ''), String(request.body?.requestId || ''), String(request.body?.question || ''), String(request.body?.quote || ''))) }
   catch (error) { response.status(409).json({ error: error instanceof Error ? error.message : 'Could not send message' }) }
 })
@@ -154,7 +154,7 @@ app.get('/api/status', (_request, response) => response.json({
   rssHubConfigured: Boolean(config.rssHub.baseUrl),
   readwiseConfigured: readwise.configured,
   kirbyConfigured: kirby.configured,
-  briefingConfigured: config.ai.briefingsEnabled && (config.codex.enabled || config.openCode.enabled),
+  briefingConfigured: aiExecutionConfigured() && config.ai.briefingsEnabled && config.codex.enabled,
   localReadsConfigured: config.sync.localReads,
   localReadsActive,
   sync: synchronizer.status(),
@@ -164,18 +164,18 @@ app.get('/api/status', (_request, response) => response.json({
   headlines: headlines.status(),
 }))
 
-app.get('/api/settings/connections', (_request, response) => {
-  response.set('Cache-Control', 'no-store').json(connectionSettings.view())
+app.get('/api/settings/connections', async (_request, response) => {
+  response.set('Cache-Control', 'no-store').json({ ...connectionSettings.view(), aiRuntime: await aiAvailability(config.codex.enabled) })
 })
-app.patch('/api/settings/connections', (request, response) => {
+app.patch('/api/settings/connections', async (request, response) => {
   response.set('Cache-Control', 'no-store')
   try {
     const settings = connectionSettings.update(request.body)
-    headlines.setEnabled(config.headlines.enabled && config.codex.enabled)
-    pulse.setEnabled(config.collections.enabled && (config.codex.enabled || config.openCode.enabled))
+    headlines.setEnabled(aiExecutionConfigured() && config.headlines.enabled && config.codex.enabled)
+    pulse.setEnabled(aiExecutionConfigured() && config.collections.enabled && config.codex.enabled)
     if (!discussionEnabled()) discussions.stopAll()
     for (const listener of connectionListeners) listener()
-    response.json(settings)
+    response.json({ ...settings, aiRuntime: await aiAvailability(config.codex.enabled) })
   } catch (error) {
     response.status(error instanceof SettingsValidationError ? 400 : 500).json({
       error: error instanceof SettingsValidationError ? error.message : 'Could not save connection settings. Check the data directory permissions.',
@@ -601,9 +601,10 @@ app.delete('/api/feeds', asyncRoute(async (request, response) => {
 }))
 
 app.post('/api/internal/briefings/generate', requireInternalSecret, asyncRoute(async (request, response) => {
-  if (!config.ai.briefingsEnabled || !(config.codex.enabled || config.openCode.enabled)) return response.status(503).json({ error: 'Briefing generation is disabled. Enable it in Settings.' })
+  if (!aiExecutionConfigured()) return response.status(503).json({ error: AI_UNAVAILABLE })
+  if (!config.ai.briefingsEnabled || !config.codex.enabled) return response.status(503).json({ error: 'Briefing generation is disabled. Enable it in Settings.' })
   const kind = request.body?.kind === 'evening' ? 'evening' : 'morning'
-  const briefing = await briefings.generate(kind)
+  const briefing = await withRequestSignal(request, response, signal => briefings.generate(kind, false, signal))
   response.json({
     id: briefing.id,
     subject: briefing.subject,

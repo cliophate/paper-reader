@@ -23,6 +23,24 @@ const selection: BriefingSelection = {
 const decisions = { decisions: [...entries.keys()].map(id => ({ id, relevant: ['0', '2', '4'].includes(id) })) }
 
 describe('briefing source checks', () => {
+  it.each(['relevance', 'support'])('stops waiting for a pending %s check on cancellation', async stage => {
+    const controller = new AbortController()
+    const model = vi.fn().mockReturnValue(new Promise(() => {}))
+    if (stage === 'support') model.mockResolvedValueOnce(decisions)
+    const result = checkBriefingSources(selection, entries, model, new Map(), controller.signal)
+    const rejected = expect(result).rejects.toThrow('Synthetic cancellation')
+    await vi.waitFor(() => expect(model).toHaveBeenCalledTimes(stage === 'support' ? 2 : 1))
+    controller.abort(new Error('Synthetic cancellation'))
+    await rejected
+  })
+
+  it('propagates cancellation instead of saving a partially checked selection', async () => {
+    const controller = new AbortController()
+    const model = vi.fn(async () => { controller.abort(); throw new Error('cancelled') })
+    await expect(checkBriefingSources(selection, entries, model, new Map(), controller.signal)).rejects.toThrow()
+    expect(model).toHaveBeenCalledTimes(1)
+  })
+
   it('removes GOG and GTA from the maths story, rendered links, image and mark-read membership', async () => {
     const model = vi.fn().mockResolvedValueOnce(decisions).mockResolvedValueOnce({ supported: true })
     const checked = await checkBriefingSources(selection, entries, model)

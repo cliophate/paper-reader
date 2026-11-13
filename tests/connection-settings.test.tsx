@@ -15,7 +15,7 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
   settings = {
-    ai: { enabled: false, codexEnabled: true, openCodeEnabled: false, discussionEnabled: true, briefingsEnabled: true, headlinesEnabled: true, collectionsEnabled: true },
+    ai: { enabled: false, codexEnabled: true, discussionEnabled: true, briefingsEnabled: true, headlinesEnabled: true, collectionsEnabled: true },
     readwise: { enabled: true, location: 'later', tokenConfigured: true, tokenSource: 'environment' },
     kirby: { enabled: false, publishUrl: '', tokenConfigured: false, tokenSource: null },
   }
@@ -50,6 +50,15 @@ describe('connection settings forms', () => {
     await submit(form('Readwise Reader'))
     expect(api.updateConnections).toHaveBeenCalledWith({ readwise: { enabled: true, location: 'later' } })
     expect(changed).toHaveBeenCalledOnce()
+  })
+
+  it('shows worker availability and keeps deployment details out of saved settings', async () => {
+    settings.aiRuntime = { available: false, message: 'AI is unavailable. Configure and start the isolated AI worker.' }
+    await render()
+    expect(form('AI features').textContent).toContain(settings.aiRuntime.message)
+    expect(form('AI features').textContent).toContain('--no-deps paper-ai codex login')
+    await submit(form('AI features'))
+    expect(api.updateConnections).toHaveBeenCalledWith({ ai: settings.ai })
   })
 
   it('saves a replacement token and clears it from the form after saving', async () => {

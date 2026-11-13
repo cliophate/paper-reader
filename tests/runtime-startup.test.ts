@@ -33,7 +33,7 @@ function start(file: string, port: number, extra: NodeJS.ProcessEnv = {}) {
   const child = spawn(process.execPath, ['--import', 'tsx', `src/server/${file}.ts`], {
     stdio: ['ignore', 'pipe', 'pipe'], env: { PATH: process.env.PATH, HOME: directory, NODE_NO_WARNINGS: '1',
       STATE_DIR: directory, PAPER_BACKEND: 'standalone', PORT: String(port), HOST: '127.0.0.1', PUBLIC_URL: `http://127.0.0.1:${port}`,
-      PAPER_SYNC_ENABLED: 'false', CODEX_ENABLED: 'false', OPENCODE_ENABLED: 'false', ...extra },
+      PAPER_SYNC_ENABLED: 'false', CODEX_ENABLED: 'false', ...extra },
   })
   children.push(child)
   let output = ''
@@ -52,7 +52,7 @@ async function ready(port: number) {
 it('starts the actual server and briefing CLI together, then admits a current CLI while excluding exclusive access', async () => {
   const number = await port()
   const server = start('index', number)
-  const firstBriefing = start('briefing-cli', number, { CODEX_ENABLED: 'true', CODEX_BIN: path.join(directory, 'synthetic-model') })
+  const firstBriefing = start('briefing-cli', number, { CODEX_ENABLED: 'true', PAPER_AI_LOCAL: 'unsafe', CODEX_BIN: path.join(directory, 'synthetic-model') })
   await ready(number)
   const firstResult = await firstBriefing.exited
   expect(firstResult.code, firstResult.output).toBe(0)
@@ -61,7 +61,7 @@ it('starts the actual server and briefing CLI together, then admits a current CL
   const db = new DatabaseSync(path.join(directory, 'paper.sqlite'), { readOnly: true })
   const schema = db.prepare('PRAGMA schema_version').get()?.schema_version
   expect(() => acquireStateLock(directory, 'exclusive')).toThrow(/in use/)
-  const nextBriefing = await start('briefing-cli', number, { CODEX_ENABLED: 'true', CODEX_BIN: path.join(directory, 'synthetic-model') }).exited
+  const nextBriefing = await start('briefing-cli', number, { CODEX_ENABLED: 'true', PAPER_AI_LOCAL: 'unsafe', CODEX_BIN: path.join(directory, 'synthetic-model') }).exited
   expect(nextBriefing.code, nextBriefing.output).toBe(0)
   expect(db.prepare('PRAGMA schema_version').get()?.schema_version).toBe(schema)
   db.close()
@@ -228,3 +228,23 @@ it('uses Paper wording for an acknowledged briefing confirmation', async () => {
   expect(await response.text()).toContain('entries from this briefing are read in Paper.')
   server.child.kill('SIGTERM'); expect((await server.exited).code).toBe(0)
 }, 15000)
+
+it('keeps legacy provider installs readable and reports the removed provider once', async () => {
+  const number = await port()
+  const server = start('index', number, { OPENCODE_ENABLED: 'true', OPENCODE_BIN: '/missing/old-cli' })
+  await ready(number)
+  const settings = await (await fetch(`http://127.0.0.1:${number}/api/settings/connections`)).json()
+  expect(settings.aiRuntime.available).toBe(false)
+  expect(settings.aiRuntime.message).toContain('AI is unavailable')
+  expect(settings.ai).not.toHaveProperty('openCodeEnabled')
+  server.child.kill('SIGTERM')
+  const result = await server.exited
+  expect(result.code).toBe(0)
+  expect(result.output.match(/OpenCode support was removed/g)).toHaveLength(1)
+}, 15000)
+
+it('refuses briefing generation without a worker or explicit unsafe local opt-in', async () => {
+  const result = await start('briefing-cli', await port(), { CODEX_ENABLED: 'true', CODEX_BIN: path.join(directory, 'synthetic-model') }).exited
+  expect(result.code).not.toBe(0)
+  expect(result.output).toContain('AI is unavailable')
+})

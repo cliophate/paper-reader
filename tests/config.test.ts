@@ -23,10 +23,9 @@ describe('backend configuration', () => {
   })
   it('starts without optional credentials and enables no AI provider by default', () => {
     configured()
-    for (const key of ['CODEX_ENABLED', 'OPENCODE_ENABLED', 'KIRBY_PUBLISH_URL', 'KIRBY_PUBLISH_TOKEN', 'READWISE_TOKEN', 'RSSHUB_BASE_URL', 'PAPER_TRUSTED_FEED_ORIGINS', 'HOST']) vi.stubEnv(key, '')
+    for (const key of ['CODEX_ENABLED', 'KIRBY_PUBLISH_URL', 'KIRBY_PUBLISH_TOKEN', 'READWISE_TOKEN', 'RSSHUB_BASE_URL', 'PAPER_TRUSTED_FEED_ORIGINS', 'HOST']) vi.stubEnv(key, '')
     const config = loadConfig()
     expect(config.codex.enabled).toBe(false)
-    expect(config.openCode.enabled).toBe(false)
     expect(config.kirby.publishUrl).toBe('')
     expect(config.readwise.token).toBe('')
     expect(config.host).toBe('127.0.0.1')

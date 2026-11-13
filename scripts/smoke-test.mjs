@@ -66,7 +66,7 @@ async function start(state, localReads = true) {
       FRESHRSS_USERNAME: 'fixture', FRESHRSS_API_PASSWORD: 'synthetic-password',
       PAPER_INTERNAL_SECRET: 'synthetic-internal-secret-only-for-tests', PAPER_SIGNING_SECRET: 'synthetic-signing-secret-only-for-tests',
       PAPER_SYNC_MINUTES: '28,58', PAPER_SYNC_ENABLED: 'true', PAPER_LOCAL_READS: String(localReads),
-      CODEX_ENABLED: 'false', OPENCODE_ENABLED: 'false',
+      CODEX_ENABLED: 'false',
     },
   })
   child.stdout.on('data', chunk => { logs += chunk }); child.stderr.on('data', chunk => { logs += chunk })

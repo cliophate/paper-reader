@@ -1,3 +1,6 @@
+import { AiError, classifyModelFailure } from './ai-errors.js'
+import { requireLocalAi, workerChat } from './ai-client.js'
+import { killModel, modelEnvironment } from './model-process.js'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -12,58 +15,75 @@ export type ChatModel = (input: unknown, signal: AbortSignal, onText: (text: str
 // Each request starts an ephemeral, tool-disabled thread.
 export function createChatModel(bin: string, model = 'gpt-5.6-sol'): ChatModel {
   return async (input, signal, onText) => {
-    signal.throwIfAborted()
+    if (process.env.PAPER_AI_WORKER_SOCKET?.trim()) return workerChat(model, input, signal, onText)
+    requireLocalAi()
+    return createLocalChatModel(bin, model)(input, signal, onText)
+  }
+}
+
+export function createLocalChatModel(bin: string, model = 'gpt-5.6-sol'): ChatModel {
+  return async (input, signal, onText) => {
+    if (signal.aborted) throw new AiError('cancelled')
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'paper-discussion-'))
     try {
       return await new Promise<string>((resolve, reject) => {
         const config = toolDisabledCodexConfig()
         const child = spawn(bin, ['app-server', '--stdio', ...Object.entries(config).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`])], {
-          cwd: dir, stdio: ['pipe', 'pipe', 'pipe'],
+          cwd: dir, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
           // Never pass Paper's service tokens into the model process environment.
-          env: { PATH: process.env.PATH, HOME: process.env.HOME, NO_COLOR: '1', CI: '1' },
+          env: modelEnvironment(),
         })
-        let buffer = '', text = '', settled = false
-        const finish = (error?: Error) => {
+        let buffer = '', text = '', settled = false, failure: AiError | undefined
+        const finish = (error?: AiError) => {
           if (settled) return
           settled = true
-          clearTimeout(timeout)
-          signal.removeEventListener('abort', cancel)
-          child.kill('SIGKILL')
-          error ? reject(error) : resolve(text)
+          failure = error
+          killModel(child)
         }
-        const cancel = () => finish(new Error('Response stopped'))
-        const timeout = setTimeout(() => finish(new Error('The model took too long. Please try again.')), 120_000)
+        const cancel = () => finish(new AiError('cancelled'))
+        const timeout = setTimeout(() => finish(new AiError('timeout')), 120_000)
         signal.addEventListener('abort', cancel, { once: true })
         const send = (id: number | undefined, method: string, params?: unknown) => child.stdin.write(JSON.stringify({ ...(id === undefined ? {} : { id }), method, params }) + '\n')
-        child.stdin.on('error', () => finish(new Error('Model connection closed')))
-        child.on('error', () => finish(new Error('Paper could not start the model connection')))
-        child.on('close', () => { if (!settled) finish(new Error('Model connection closed before completing its reply')) })
-        child.stderr.resume() // Never log credentials, article text, or provider diagnostics.
+        child.stdin.on('error', () => { /* Classify the process exit below. */ })
+        child.on('error', () => finish(new AiError('spawn')))
+        child.on('close', (code, exitSignal) => {
+          clearTimeout(timeout)
+          signal.removeEventListener('abort', cancel)
+          if (!settled) failure = new AiError('unknown', code, exitSignal)
+          if (failure) { failure.exitCode = code; failure.signal = exitSignal; reject(failure) }
+          else resolve(text)
+        })
+        child.stderr.resume()
         child.stdout.on('data', chunk => {
+          if (settled) return
           buffer += chunk.toString()
-          if (buffer.length > 1_000_000) return finish(new Error('Model event exceeded the size limit'))
+          if (buffer.length > 1_000_000) return finish(new AiError('output_limit'))
           let newline: number
           while ((newline = buffer.indexOf('\n')) >= 0) {
             const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1)
             let event: any
-            try { event = JSON.parse(line) } catch { continue }
-            if (event.error) return finish(new Error('Model connection rejected the request'))
+            try { event = JSON.parse(line) } catch { return finish(new AiError('schema')) }
+            if (!event || typeof event !== 'object') return finish(new AiError('schema'))
+            if (event.error) return finish(new AiError(classifyModelFailure(JSON.stringify(event.error).slice(-8192))))
             if (event.id === 1) {
               send(undefined, 'initialized')
               send(2, 'thread/start', { model, cwd: dir, ephemeral: true, approvalPolicy: 'never', sandbox: 'read-only', baseInstructions: CHAT_INSTRUCTIONS, config })
             } else if (event.id === 2) {
+              if (typeof event.result?.thread?.id !== 'string') return finish(new AiError('schema'))
               send(3, 'turn/start', { threadId: event.result.thread.id, effort: 'medium', input: [{ type: 'text', text: JSON.stringify(input), text_elements: [] }] })
             } else if (event.method === 'item/agentMessage/delta') {
+              if (typeof event.params?.delta !== 'string') return finish(new AiError('schema'))
               text += event.params.delta
-              if (text.length > 24000) return finish(new Error('Response reached the length limit'))
+              if (text.length > 24000) return finish(new AiError('output_limit'))
               onText(text)
             } else if (event.method === 'turn/completed') {
-              if (event.params.turn.status !== 'completed' || !text.trim()) return finish(new Error('The model could not complete its reply'))
-              finish()
+              if (!event.params?.turn) return finish(new AiError('schema'))
+              if (event.params.turn.status !== 'completed' || !text.trim()) return finish(new AiError(classifyModelFailure(JSON.stringify(event.params.turn.error || '').slice(-8192))))
+              return finish()
             } else if (event.id !== undefined && event.method) {
               // No approval, file, tool or credential request is ever serviced.
               child.stdin.write(JSON.stringify({ id: event.id, error: { code: -32601, message: 'Tools are disabled' } }) + '\n')
-              finish(new Error('The model attempted an unavailable action'))
+              return finish(new AiError('unknown'))
             }
           }
         })

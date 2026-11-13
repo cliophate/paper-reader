@@ -27,7 +27,7 @@ const base = `http://127.0.0.1:${port}`, feedOrigin = `http://127.0.0.1:${fixtur
 const state = path.join(temporary, 'data')
 const env = { PATH: process.env.PATH, HOME: temporary, NODE_NO_WARNINGS: '1', STATE_DIR: state,
   PAPER_BACKEND: 'standalone', HOST: '127.0.0.1', PORT: String(port), PUBLIC_URL: base,
-  PAPER_TRUSTED_FEED_ORIGINS: feedOrigin, CODEX_ENABLED: 'false', OPENCODE_ENABLED: 'false' }
+  PAPER_TRUSTED_FEED_ORIGINS: feedOrigin, CODEX_ENABLED: 'false' }
 let child, logs = ''
 async function until(check) {
   for (let n = 0; n < 100; n++) { try { const value = await check(); if (value) return value } catch {} await delay(100) }

@@ -954,9 +954,7 @@ export class PaperDatabase {
 
   recordBriefingConsidered(ids: string[], at: number) {
     const insert = this.db.prepare('INSERT OR REPLACE INTO briefing_considered(entry_id, considered_at) SELECT id, ? FROM entries WHERE id = ?')
-    this.db.exec('BEGIN IMMEDIATE')
-    try { for (const id of ids) insert.run(at, id); this.db.exec('COMMIT') }
-    catch (error) { this.db.exec('ROLLBACK'); throw error }
+    transaction(this.db, () => { for (const id of ids) insert.run(at, id) })
   }
 
   previousPulseBriefings(collectionId: string): Array<{ headline: string; summary: string; deliveredAt: string }> {
@@ -1901,8 +1899,7 @@ export class PaperDatabase {
   }
 
   createBriefing(record: BriefingRecord, entries: Array<{ id: string; section: string }>) {
-    this.db.exec('BEGIN IMMEDIATE')
-    try {
+    transaction(this.db, () => {
       this.db.prepare(`
         INSERT INTO briefings (
           id, kind, window_start, cutoff, subject, html, text, status, token_hash,
@@ -1925,11 +1922,7 @@ export class PaperDatabase {
       )
       const insert = this.db.prepare('INSERT OR IGNORE INTO briefing_entries (briefing_id, entry_id, section) VALUES (?, ?, ?)')
       for (const entry of entries) insert.run(record.id, entry.id, entry.section)
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
-    }
+    })
   }
 
   getBriefing(id: string): BriefingRecord | null {

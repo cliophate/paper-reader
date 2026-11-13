@@ -99,10 +99,11 @@ npx playwright test --config playwright.routes.config.ts
 
 ## Docker integration test
 
-This test requires Docker and Python 3. Build the image, then run:
+This test requires Docker Compose and Python 3. Build both images, then run:
 
 ```sh
 docker build --target runtime -t paper-public:test .
+docker build --target ai -t paper-public:ai-test .
 python3 scripts/test-installation.py
 ```
 
@@ -110,3 +111,61 @@ The test creates disposable FreshRSS and Caddy containers with synthetic
 accounts and feeds. It checks two-way state sync, feed repair, connection
 settings, proxy authentication, and backup restoration. It removes its test
 containers and network when finished.
+
+## AI worker regression
+
+The AI override runs Paper's runtime image alongside the Codex worker image.
+The installation test also starts that Compose stack with a fake Codex binary
+and synthetic data. It verifies worker connectivity, container hardening,
+briefing/grouping/discussion requests and the unavailable message when the
+worker stops. No provider login is needed.
+
+To exercise the real pinned Codex CLI against a local scripted HTTP provider:
+
+```sh
+docker build --target runtime -t paper-public:test .
+docker build --target ai -t paper-public:ai-test .
+python3 scripts/test-ai-worker.py --real
+```
+
+CI runs this in `ai-image`; release publishing runs it before pushing the runtime
+and `-ai` worker images. Failure blocks either job. The fixture changes only the
+provider URL and authentication requirement. All normal runner sandbox and
+tool-disabling flags remain in effect. It forces direct `apply_patch` calls
+through both `codex exec` and the discussion app-server, and checks identical
+missing-file results with a synthetic file present and absent on Paper's side.
+It rejects any shared Paper/worker network and probes Paper from the worker by
+service name, every container IP and host gateways on the disposable published
+port. Every connection must fail. It verifies socket permissions, the socket
+healthcheck and restart after SIGKILL. It also checks that `/data` is absent and no readable worker process environment
+contains the synthetic Paper secret. Briefings, collections and discussions run
+through Paper and the worker with real CLI responses. The script removes its
+containers, networks and temporary state, even on failure. It keeps the images
+you supplied. Set `PAPER_TEST_IMAGE` and `PAPER_TEST_AI_IMAGE` to use other tags.
+
+The worker API listens only on `PAPER_AI_WORKER_SOCKET`, defaulting to
+`/run/paper-ai/worker.sock`, and requires `x-paper-ai-secret` on every request:
+
+- `GET /health` returns `{"status":"ok","cli":"ready"}` after a cached
+  startup `codex --version` check, or HTTP 503 with category `spawn`.
+- `POST /v1/codex` accepts `model`, `instruction`, `input`, `schema`, and optional
+  `reasoningEffort`, either `low` or `medium`. It returns `{"result":...}`.
+- `POST /v1/discussion` accepts `model` and `input`. It streams NDJSON records
+  `{"type":"delta","text":"..."}`, followed by `{"type":"done"}`. A failed
+  stream ends with `{"type":"error","category":"...","requestId":"..."}`.
+
+Requests are limited to 2 MiB and 15 seconds to send the body. Two runs execute
+at once and up to 16 wait in FIFO order for at most 300 seconds. A full queue or
+expired wait returns 503 with `Retry-After: 5` and category `busy`. Batch execution
+allows 300 seconds, discussions 120 seconds, starting after queue admission.
+The client allows 620 seconds for a batch and 440 for a discussion. Disconnects
+remove queued requests or abort the active CLI process group. Briefings share
+one generation per kind within the service. The ten-minute deadline covers all
+backend reads, pagination, coverage, model work and saving. Each caller can stop
+waiting independently. The last caller disconnecting, the deadline, or
+SIGINT/SIGTERM in the briefing CLI cancels and clears the job without waiting
+for backend cleanup. Late results cannot save a briefing.
+Slots are released after process exit. Failed runs produce one structured log line with timings,
+request ID, exit status and an allowlisted category. Error responses omit provider
+diagnostics and input text. Paper limits batch responses to 4 MiB and discussion replies to 24,000
+characters. A missing or unreachable worker never enables local execution.

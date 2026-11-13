@@ -1,9 +1,48 @@
 services:
   paper:
+    environment:
+      PAPER_AI_WORKER_SOCKET: /run/paper-ai/worker.sock
+      PAPER_AI_WORKER_SECRET: ${PAPER_AI_WORKER_SECRET:?Run setup or follow the AI upgrade steps in docs/integrations.md}
+    volumes:
+      - ./recap:/app/recap:ro
+      - ai-socket:/run/paper-ai:ro
+  paper-ai:
     image: ghcr.io/cliophate/paper-reader:0.1.0-alpha.3-ai
     build:
+      context: .
       target: ai
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION:-unknown}
+    command: [node, dist-server/ai-worker.js]
+    restart: unless-stopped
+    user: ${PAPER_UID:-1000}:${PAPER_GID:-1000}
+    environment:
+      HOME: /home/node
+      PAPER_AI_WORKER_SOCKET: /run/paper-ai/worker.sock
+      PAPER_AI_WORKER_SECRET: ${PAPER_AI_WORKER_SECRET:?Run setup or follow the AI upgrade steps in docs/integrations.md}
     volumes:
+      - ai-socket:/run/paper-ai
       - ./ai-auth/codex:/home/node/.codex
-      - ./ai-auth/opencode:/home/node/.local/share/opencode
       - ./recap:/app/recap:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777,size=512m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks:
+      - ai
+    healthcheck:
+      test: [CMD, node, -e, "require('node:http').get({socketPath:process.env.PAPER_AI_WORKER_SOCKET,path:'/health',headers:{'x-paper-ai-secret':process.env.PAPER_AI_WORKER_SECRET}},r=>{r.resume();if(r.statusCode!==200)process.exit(1)}).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+networks:
+  ai:
+volumes:
+  ai-socket:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=1m,uid=${PAPER_UID:-1000},gid=${PAPER_GID:-1000},mode=0700

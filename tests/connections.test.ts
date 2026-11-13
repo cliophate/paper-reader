@@ -14,7 +14,7 @@ beforeEach(() => {
     STATE_DIR: directory, FRESHRSS_BASE_URL: 'https://rss.example.test', FRESHRSS_USERNAME: 'fixture',
     FRESHRSS_API_PASSWORD: 'synthetic-password', PAPER_INTERNAL_SECRET: 'synthetic-internal', PAPER_SIGNING_SECRET: 'synthetic-signing',
     READWISE_TOKEN: 'synthetic-reader-token', READWISE_LOCATION: 'later', KIRBY_PUBLISH_TOKEN: 'synthetic-kirby-token', KIRBY_PUBLISH_URL: 'https://example.test/publish',
-    CODEX_ENABLED: 'true', OPENCODE_ENABLED: 'false', PAPER_CLEAR_HEADLINES: 'true', PAPER_COLLECTIONS_ENABLED: 'true',
+    CODEX_ENABLED: 'true', PAPER_CLEAR_HEADLINES: 'true', PAPER_COLLECTIONS_ENABLED: 'true',
   })) vi.stubEnv(key, value)
 })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); fs.rmSync(directory, { recursive: true, force: true }) })
@@ -25,7 +25,7 @@ describe('private connection settings', () => {
     const settings = new ConnectionSettings(config)
     const view = settings.view()
     expect(view.readwise).toMatchObject({ enabled: true, tokenConfigured: true, tokenSource: 'environment' })
-    expect(view.ai).toMatchObject({ enabled: true, codexEnabled: true, openCodeEnabled: false })
+    expect(view.ai).toMatchObject({ enabled: true, codexEnabled: true })
     expect(JSON.stringify(view)).not.toContain('synthetic-reader-token')
     expect(JSON.stringify(view)).not.toContain('synthetic-kirby-token')
     expect(fs.readdirSync(directory)).toEqual([])
@@ -33,12 +33,11 @@ describe('private connection settings', () => {
   })
 
   it('keeps every optional connection off for a new installation', () => {
-    for (const key of ['READWISE_TOKEN', 'KIRBY_PUBLISH_TOKEN', 'KIRBY_PUBLISH_URL', 'CODEX_ENABLED', 'OPENCODE_ENABLED']) vi.stubEnv(key, '')
+    for (const key of ['READWISE_TOKEN', 'KIRBY_PUBLISH_TOKEN', 'KIRBY_PUBLISH_URL', 'CODEX_ENABLED']) vi.stubEnv(key, '')
     const config = loadConfig()
     const view = new ConnectionSettings(config).view()
     expect([view.ai.enabled, view.readwise.enabled, view.kirby.enabled]).toEqual([false, false, false])
     expect(config.codex.enabled).toBe(false)
-    expect(config.openCode.enabled).toBe(false)
   })
 
   it('disables clients immediately, persists through restart, and retains tokens for re-enabling', () => {
@@ -47,7 +46,7 @@ describe('private connection settings', () => {
     const readwise = new ReadwiseClient(config.readwise)
     const kirby = new KirbyPublisher(config.kirby)
     settings.update({ ai: { enabled: false }, readwise: { enabled: false }, kirby: { enabled: false } })
-    expect([readwise.configured, kirby.configured, config.codex.enabled, config.openCode.enabled]).toEqual([false, false, false, false])
+    expect([readwise.configured, kirby.configured, config.codex.enabled]).toEqual([false, false, false])
     expect(settings.view().readwise.tokenConfigured).toBe(true)
     const restarted = loadConfig()
     const restored = new ConnectionSettings(restarted)
@@ -80,18 +79,29 @@ describe('private connection settings', () => {
     expect(restarted.kirby.token).toBe('')
   })
 
+  it('loads removed-provider settings without enabling Codex or keeping the old switch', () => {
+    vi.stubEnv('CODEX_ENABLED', 'false')
+    vi.stubEnv('OPENCODE_ENABLED', 'true')
+    fs.writeFileSync(path.join(directory, 'connections.json'), JSON.stringify({
+      ai: { enabled: true, codexEnabled: false, openCodeEnabled: true },
+    }))
+    const config = loadConfig()
+    const settings = new ConnectionSettings(config)
+    expect(config.codex.enabled).toBe(false)
+    expect(settings.view().ai).not.toHaveProperty('openCodeEnabled')
+    settings.update({ ai: { codexEnabled: true } })
+    expect(config.codex.enabled).toBe(true)
+  })
+
   it('applies feature and provider switches separately', () => {
     const config = loadConfig()
     const settings = new ConnectionSettings(config)
-    settings.update({ ai: { discussionEnabled: false, briefingsEnabled: false, headlinesEnabled: false, collectionsEnabled: false, codexEnabled: false, openCodeEnabled: true } })
+    settings.update({ ai: { discussionEnabled: false, briefingsEnabled: false, headlinesEnabled: false, collectionsEnabled: false, codexEnabled: false } })
     expect(config.ai).toEqual({ discussionEnabled: false, briefingsEnabled: false })
     expect(config.headlines.enabled).toBe(false)
     expect(config.collections.enabled).toBe(false)
     expect(config.codex.enabled).toBe(false)
-    expect(config.openCode.enabled).toBe(true)
     settings.update({ ai: { enabled: false } })
-    expect(config.openCode.enabled).toBe(false)
-    expect(settings.view().ai.openCodeEnabled).toBe(true)
   })
 
   it.each([
