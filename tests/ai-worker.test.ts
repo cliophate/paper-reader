@@ -379,6 +379,13 @@ describe('isolated AI protocol', () => {
   it('reports spawn and output limit failures with safe metadata', async () => {
     await expect(runModelProcess(path.join(directory, 'missing'), [], directory, 1000)).rejects.toMatchObject({ category: 'spawn' })
     await expect(runModelProcess(process.execPath, ['-e', "process.stdout.write('x'.repeat(5*1024*1024))"], directory, 1000)).rejects.toMatchObject({ category: 'output_limit' })
+    // Event mode reads the result from --output-last-message, so large JSONL message events don't count toward the limit.
+    const message = "process.stdout.write(JSON.stringify({ type: 'item.completed', item: { text: '\"'.repeat(3*1024*1024) } }) + '\\n')"
+    await expect(runModelProcess(process.execPath, ['-e', message], directory, 5000, undefined, undefined, true)).resolves.toBeDefined()
+    const failed = `${message}; process.stdout.write(JSON.stringify({ type: 'turn.failed', error: { message: 'invalid_api_key' } })); process.exitCode = 1`
+    await expect(runModelProcess(process.execPath, ['-e', failed], directory, 5000, undefined, undefined, true)).rejects.toMatchObject({ category: 'auth' })
+    const echoed = "process.stdout.write(JSON.stringify({ type: 'item.completed', item: { text: 'HTTP 401 unauthorized' } }) + '\\n'); process.exitCode = 1"
+    await expect(runModelProcess(process.execPath, ['-e', echoed], directory, 5000, undefined, undefined, true)).rejects.toMatchObject({ category: 'unknown' })
     await fs.chmod(bin, 0o600)
     const response = await post()
     expect((await response.json()).category).toBe('spawn')
