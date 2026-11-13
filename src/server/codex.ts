@@ -25,6 +25,8 @@ export async function runCodex(
       const child = spawn(config.bin, [
         'exec',
         '--ephemeral',
+        // Fail closed if a Codex upgrade stops recognizing one of the tool-disabling keys.
+        '--strict-config',
         '--ignore-user-config',
         '--ignore-rules',
         '--sandbox', 'read-only',

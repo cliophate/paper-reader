@@ -60,7 +60,7 @@ describe('Codex tool isolation', () => {
     const result = await runCodex(config, 'synthetic-model', 'Return a title.', input, schema, effort) as Capture
     expect(result.argv[0]).toBe('exec')
     expect(readConfig(result.argv)).toEqual({ ...expectedConfig, ...(effort ? { model_reasoning_effort: effort } : {}) })
-    for (const flag of ['--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check']) expect(result.argv).toContain(flag)
+    for (const flag of ['--ephemeral', '--strict-config', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check']) expect(result.argv).toContain(flag)
     expect(result.argv[result.argv.indexOf('--sandbox') + 1]).toBe('read-only')
     expect(result.argv[result.argv.indexOf('--model') + 1]).toBe('synthetic-model')
     expect(result.argv.at(-1)).toBe('-')
