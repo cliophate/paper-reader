@@ -5,6 +5,8 @@
     header {
         Cache-Control "private, no-store"
         X-Content-Type-Options "nosniff"
+        ?Content-Security-Policy "frame-ancestors 'none'"
+        ?X-Frame-Options "DENY"
         X-Robots-Tag "noindex, noarchive"
     }
     reverse_proxy paper:8080

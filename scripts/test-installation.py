@@ -172,6 +172,11 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         assert request(protected + '/api/navigation', headers={'Host': 'localhost'})[0] == 401
         assert request(protected + '/api/settings/connections', headers={'Host': 'localhost'})[0] == 401
         credentials = base64.b64encode(b'fixture:synthetic-proxy-password').decode()
+        with urllib.request.urlopen(urllib.request.Request(protected + '/api/navigation', headers={
+                'Host': 'localhost', 'Authorization': 'Basic ' + credentials})) as response:
+            assert response.status == 200
+            assert response.headers.get_all('Content-Security-Policy') == ["frame-ancestors 'none'"]
+            assert response.headers.get_all('X-Frame-Options') == ['DENY']
         assert request(protected + '/api/navigation', headers={'Host': 'localhost', 'Authorization': 'Basic ' + credentials})[0] == 200
         assert request(protected + '/api/settings/connections', headers={'Host': 'localhost', 'Authorization': 'Basic ' + credentials})[1]['readwise']['tokenConfigured']
         docker('exec', proxy, 'caddy', 'validate', '--config', '/etc/caddy/Caddyfile')
