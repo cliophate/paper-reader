@@ -379,11 +379,14 @@ for (const viewport of [{ width: 820, height: 1180 }, { width: 1180, height: 820
     await page.setViewportSize(viewport)
     await openReader(page)
     // Browsers can't emulate an iOS home-screen app, so set the band it would add.
-    await page.addStyleTag({ content: ':root { --top-inset: 40px; }' })
+    await page.addStyleTag({ content: ':root { --top-inset: 40px; --topbar-row: 44px; }' })
     const header = await page.locator('.topbar').boundingBox()
     expect(header!.y).toBe(0)
+    expect(header!.height).toBe(84)
     for (const control of [page.locator('.wordmark'), page.getByRole('textbox', { name: 'Search articles' })]) {
-      expect((await control.boundingBox())!.y).toBeGreaterThanOrEqual(40)
+      const box = (await control.boundingBox())!
+      expect(box.y).toBeGreaterThanOrEqual(40)
+      expect(box.y + box.height).toBeLessThanOrEqual(84)
     }
     const chrome = await page.locator('.reader-chrome').boundingBox()
     expect(chrome!.y).toBeGreaterThanOrEqual(header!.y + header!.height - 1)

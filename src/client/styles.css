@@ -122,15 +122,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, [tabindex]:focus-vis
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* iOS 26 home-screen apps blur the top ~40pt of the page, and no CSS or meta tag turns that off.
-   Top bars paint the extra band in their own color and keep their controls below it. */
-:root { --top-inset: env(safe-area-inset-top); }
+   Top bars paint the extra band in their own color and keep their controls below it, in a shorter row. */
+:root { --top-inset: env(safe-area-inset-top); --topbar-row: 56px; }
+@media (max-width: 1040px) { :root { --topbar-row: 52px; } }
 @supports (-webkit-touch-callout: none) {
-  @media (display-mode: standalone) and (min-height: 500px) { :root { --top-inset: calc(env(safe-area-inset-top) + 40px); } }
+  @media (display-mode: standalone) and (min-height: 500px) { :root { --top-inset: calc(env(safe-area-inset-top) + 40px); --topbar-row: 44px; } }
 }
 
 .app {
   display: grid;
-  grid-template: calc(56px + var(--top-inset)) minmax(0, 1fr) / 252px 410px minmax(480px, 1fr);
+  grid-template: calc(var(--topbar-row) + var(--top-inset)) minmax(0, 1fr) / 252px 410px minmax(480px, 1fr);
   grid-template-areas: 'top top top' 'side stories reader';
   width: 100%;
   height: 100%;
@@ -688,7 +689,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 @media (max-width: 1040px) {
   html, body, #root { overflow: hidden; }
   .app, .app.sidebar-hidden {
-    --mobile-topbar-height: calc(52px + var(--top-inset));
+    --mobile-topbar-height: calc(var(--topbar-row) + var(--top-inset));
     --mobile-tabs-height: calc(66px + env(safe-area-inset-bottom));
     height: 100dvh;
     display: grid;
