@@ -121,9 +121,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, [tabindex]:focus-vis
 .organization-drag-preview small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.4; white-space: normal; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
+/* iOS 26 home-screen apps blur the top ~40pt of the page, and no CSS or meta tag turns that off.
+   Top bars paint the extra band in their own color and keep their controls below it. */
+:root { --top-inset: env(safe-area-inset-top); }
+@supports (-webkit-touch-callout: none) {
+  @media (display-mode: standalone) and (min-height: 500px) { :root { --top-inset: calc(env(safe-area-inset-top) + 40px); } }
+}
+
 .app {
   display: grid;
-  grid-template: 56px minmax(0, 1fr) / 252px 410px minmax(480px, 1fr);
+  grid-template: calc(56px + var(--top-inset)) minmax(0, 1fr) / 252px 410px minmax(480px, 1fr);
   grid-template-areas: 'top top top' 'side stories reader';
   width: 100%;
   height: 100%;
@@ -141,7 +148,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, [tabindex]:focus-vis
   gap: 18px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
-  padding: 0 20px 0 24px;
+  padding: var(--top-inset) 20px 0 24px;
   z-index: 20;
 }
 
@@ -681,7 +688,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 @media (max-width: 1040px) {
   html, body, #root { overflow: hidden; }
   .app, .app.sidebar-hidden {
-    --mobile-topbar-height: calc(52px + env(safe-area-inset-top));
+    --mobile-topbar-height: calc(52px + var(--top-inset));
     --mobile-tabs-height: calc(66px + env(safe-area-inset-bottom));
     height: 100dvh;
     display: grid;
@@ -710,7 +717,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
     opacity: 0;
     pointer-events: none;
   }
-  .topbar { grid-area: top; grid-template-columns: auto minmax(0, 1fr); gap: 14px; padding: env(safe-area-inset-top) 14px 0; }
+  .topbar { grid-area: top; grid-template-columns: auto minmax(0, 1fr); gap: 14px; padding: var(--top-inset) 14px 0; }
   .wordmark, .brand-logo { width: 91px; height: 35px; }
   .search-box { justify-self: end; width: min(260px, 66vw); }
   .search-box kbd, .command-button { display: none; }
@@ -859,7 +866,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
   .font-choices { grid-template-columns: 1fr; }
   .appearance-popover { top: auto; right: 10px; bottom: calc(68px + env(safe-area-inset-bottom)); left: 10px; width: auto; max-height: calc(100vh - 90px); }
   .settings-modal-backdrop { place-items: stretch; padding: 0; background: var(--panel-strong); backdrop-filter: none; }
-  .settings-modal { width: 100%; height: 100dvh; max-height: none; border: 0; border-radius: 0; box-shadow: none; padding: 16px; }
+  .settings-modal { width: 100%; height: 100dvh; max-height: none; border: 0; border-radius: 0; box-shadow: none; padding: calc(16px + var(--top-inset)) 16px 16px; }
   .settings-modal > header { flex: 0 0 auto; margin-bottom: 16px; }
   .settings-layout { grid-template: auto minmax(0, 1fr) / 1fr; margin: 0 -16px -16px; }
   .settings-nav { display: flex; gap: 4px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 7px 10px; scrollbar-width: none; }
@@ -911,7 +918,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
 
-.discussion-panel { position: fixed; z-index: 150; inset: 0; background: var(--panel); color: var(--ink); display: flex; flex-direction: column; min-height: 0; overscroll-behavior: contain; padding-top: env(safe-area-inset-top); }
+.discussion-panel { position: fixed; z-index: 150; inset: 0; background: var(--panel); color: var(--ink); display: flex; flex-direction: column; min-height: 0; overscroll-behavior: contain; padding-top: var(--top-inset); }
 .discussion-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--line); gap: 12px; }
 .discussion-header div { display: flex; align-items: baseline; gap: 12px; }
 .discussion-header span, .discussion-source small { color: var(--muted); font-size: 12px; }
