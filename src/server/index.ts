@@ -16,7 +16,8 @@ import { asyncRoute, drainRequests } from './request-work.js'
 import { ConnectionSettings, SettingsValidationError } from './connections.js'
 import { KirbyPublisher } from './kirby.js'
 import { PaperRepository, switchingEntrySource } from './repository.js'
-import { requireSameOrigin } from './request-origin.js'
+import { requireAllowedHost, requireSameOrigin } from './request-origin.js'
+import { preventFraming } from './response-headers.js'
 import { previewFeed } from './feed-repair.js'
 import { FeedHttpError } from './feed-http.js'
 import { subscriptionToolsRoutes } from './subscription-tools-routes.js'
@@ -92,6 +93,8 @@ const memoryTimer = setInterval(() => logMemory('running'), 60_000)
 memoryTimer.unref()
 
 app.disable('x-powered-by')
+app.use(preventFraming)
+app.use(requireAllowedHost(config.publicUrl))
 app.use((_request, response, next) => {
   if (shuttingDown) return response.status(503).json({ error: 'Paper is shutting down.' })
   next()

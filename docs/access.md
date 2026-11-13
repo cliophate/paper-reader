@@ -4,6 +4,16 @@ The default Compose file binds Paper to 127.0.0.1:8080. There is no login in
 Paper. Every user allowed through a proxy shares the same reading account.
 Use a current Docker Compose version supporting !reset, version 2.24.4 or newer.
 
+Set `PUBLIC_URL` to the URL you use to open Paper. Requests must use its hostname
+and port, or `localhost`, `127.0.0.1`, or `[::1]` on any port. Hostnames are
+case-insensitive; an omitted port means the public URL's default HTTP or HTTPS
+port. Without `PUBLIC_URL`, only those loopback names are accepted. Other hosts
+receive HTTP 421, including on `/health`; the Compose healthcheck uses loopback.
+Proxies must preserve the original `Host` header. Paper ignores `X-Forwarded-Host`.
+The secret-protected `POST /api/internal/briefings/...` routes accept any host,
+so automation can call Paper by its container name.
+Paper blocks embedding in frames.
+
 ## Authenticated Caddy example
 
 Generate a password hash with the same Caddy image used by the example:
