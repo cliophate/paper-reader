@@ -33,7 +33,7 @@ address directly through its lookup callback, retaining the original HTTP Host
 and TLS hostname. A later DNS answer cannot redirect that connection. IPv4
 private, link-local, shared, multicast, reserved and documentation networks are
 blocked. IPv6 must be global unicast, excluding transition and special ranges.
-IPv4-mapped IPv6 addresses are rejected. Private services need an exact origin
+Private services need an exact origin
 in the administrator's allowlist, including scheme and port. Never derive this
 allowlist from a submitted feed URL, imported OPML or an HTTP redirect.
 
