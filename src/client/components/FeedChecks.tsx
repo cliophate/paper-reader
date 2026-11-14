@@ -36,14 +36,15 @@ export function FeedChecks({ children }: { children: ReactNode }) {
   const [view, setView] = useState<FeedChecksView | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [loadError, setLoadError] = useState('')
   const [message, setMessage] = useState('')
   const [folderId, setFolderId] = useState('')
   useEffect(() => {
     let disposed = false
     let timer: ReturnType<typeof setTimeout>
     const load = async () => {
-      try { const next = await api.feedChecks(); if (!disposed) setView(next) }
-      catch { if (!disposed) setError('Could not load feed checks. Reopen feed settings to retry.') }
+      try { const next = await api.feedChecks(); if (!disposed) { setView(next); setLoadError('') } }
+      catch { if (!disposed) setLoadError('Could not load feed checks. Retrying in a few seconds.') }
       if (!disposed) timer = setTimeout(() => void load(), 5000)
     }
     void load()
@@ -75,7 +76,7 @@ export function FeedChecks({ children }: { children: ReactNode }) {
         <p>Checks wait for the publisher's Retry-After and at least one minute between manual attempts. Failed feeds retry with a longer wait.</p>
       </>}
     </details>
-    {error && <p role="alert" className="form-error feed-check-message">{error}</p>}
+    {(error || loadError) && <p role="alert" className="form-error feed-check-message">{error || loadError}</p>}
     {message && <p role="status" className="feed-check-message">{message}</p>}
     {children}
   </FeedChecksContext.Provider>

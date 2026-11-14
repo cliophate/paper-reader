@@ -144,7 +144,9 @@ by the current FreshRSS adapter.
 
 ## Upgrade and recovery
 
-The current schema is v12. [Reader routes](reader-routes.md) documents the additive
+The current schema is v13. [Standalone feed scheduling](feed-scheduling.md#schema-v13-and-recovery)
+documents its check settings, Retry-After and attempt columns, and the
+`.before-feed-checks-v13` backup. [Reader routes](reader-routes.md) documents v12's additive
 link-number table, backfill and `.before-link-numbers-v12` backup. Article links
 reuse the existing arrival sequence without changing identity.
 [Search indexing](search-index.md) documents v11's durable row mapping, full-text
