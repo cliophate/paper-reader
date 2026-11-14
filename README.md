@@ -48,9 +48,12 @@ Setup creates private configuration with `PAPER_BACKEND=standalone`. Open
 and add an RSS or Atom feed, discover a feed from a website, or preview an OPML
 import. Paper fetches active feeds automatically. The default interval after a
 successful fetch is 15 minutes; `Retry-After` and failure backoff can delay the next fetch. Paper
-checks for due feeds every second. **Refresh** runs only feeds that are already
-due, so it does not force every feed to fetch again. Search and reading state
-work immediately.
+checks for due feeds every second. **Reload articles** shows what Paper already
+has. To request an upstream check, open **Settings > Feeds > Manage feeds** and
+select a feed for **Check now**. Open **Feed checks and intervals** to check a
+folder or change the default interval. Each feed can override that interval,
+from 5 minutes to one day. Manual checks respect publisher delays and a
+one-minute cooldown. Search and reading state work immediately.
 
 Use the sidebar **+** menu to add a feed or create a standalone folder. Select
 the **Edit feeds** pencil to show drag grips, selection checkboxes and row options.
@@ -111,10 +114,6 @@ and [security and privacy](SECURITY.md) for details about stored data and
 external services.
 
 ## Limits
-
-Clearer refresh controls and a visible feed-check schedule remain open in
-[#33](https://github.com/cliophate/paper-reader/issues/33). Refresh runs due feeds
-only, as described above.
 
 This is a 0.1 release. Keep backups before upgrading. Folders are flat, and OPML
 transfers subscriptions, not article history or settings. Offline browser copies

@@ -1,3 +1,4 @@
+import type { FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarget } from '../shared/feed-checks'
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
 import type { PulsePayload } from '../shared/pulse'
 import type { ConnectionsSettings, ConnectionsUpdate } from '../shared/connections'
@@ -24,6 +25,9 @@ function sourceRequestSignal(signal?: AbortSignal): AbortSignal | undefined {
 }
 
 export const api = {
+  feedChecks: () => request<FeedChecksView>('/api/feed-checks'),
+  checkFeeds: (body: FeedCheckRevision & FeedCheckTarget) => request<{ results: FeedCheckResult[]; snapshot: FeedChecksView }>('/api/feed-checks/now', { method: 'POST', body: JSON.stringify(body) }),
+  setCheckInterval: (body: FeedCheckRevision & { feedId?: string; intervalMinutes: number | null }) => request<{ snapshot: FeedChecksView }>('/api/feed-checks/interval', { method: 'POST', body: JSON.stringify(body) }),
   organization: (refresh = false, signal?: AbortSignal) => request<OrganizationView>(`/api/organization${refresh ? '?refresh=1' : ''}`, { signal: sourceRequestSignal(signal) }),
   organize: (requestBody: OrganizationRequest) => request<OrganizationResponse>('/api/organization/commands', { method: 'POST', body: JSON.stringify(requestBody) }),
   connections: () => request<ConnectionsSettings>('/api/settings/connections'),
@@ -64,7 +68,7 @@ export const api = {
     briefingConfigured: boolean
     sync: { lastCompletedAt: string | null; running?: boolean; lastError?: string | null }
   }>('/api/status', { signal: sourceRequestSignal(signal) }),
-  sync: () => request<{ ok: boolean }>('/api/sync', { method: 'POST' }),
+  reload: () => request<{ ok: boolean }>('/api/reload', { method: 'POST' }),
   setStreamOrder: (stream: StreamRef, order: 'newest' | 'oldest') => request<{ ok: boolean; order: 'newest' | 'oldest' }>('/api/streams/order', { method: 'POST', body: JSON.stringify({ stream, order }) }),
   entries: (stream: StreamRef, unread: boolean, query = '', continuation = '', signal?: AbortSignal, dates: { after?: string; before?: string } = {}) => {
     const params = new URLSearchParams({ kind: stream.kind, id: stream.id, title: stream.title, unread: unread ? '1' : '0' })

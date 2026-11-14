@@ -426,9 +426,9 @@ export default function App() {
   const refresh = useCallback(async () => {
     setRefreshing(true)
     try {
-      await api.sync()
+      await api.reload()
       await Promise.all([loadNavigation(), loadEntries(), loadStatus()])
-      notify('Reader refreshed')
+      notify('Articles reloaded')
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Paper could not refresh the reader')
     } finally {
@@ -1316,7 +1316,7 @@ export default function App() {
   }, [notify, selected, status.kirbyConfigured])
 
   const commands = useMemo(() => [
-    { label: 'Refresh reader', hint: 'r', run: refresh },
+    { label: 'Reload articles', hint: 'r', run: refresh },
     { label: unreadOnly ? 'Show all articles' : 'Show unread articles', hint: 'u', run: () => changeUnreadOnly(!unreadOnly) },
     { label: 'Mark this stream read', hint: 'Shift A', run: markAllRead },
     { label: 'Manage feeds', hint: '', run: () => { setSettingsSection('feeds'); setOverlays({ ...closedOverlays, settings: true }) } },
@@ -1457,7 +1457,7 @@ export default function App() {
         <div className="story-toolbar">
           <button className="mobile-back icon-button" onClick={() => changeMobilePane('sources')} aria-label="Back to sources"><Icon name="back" /></button>
           <div className="stream-title"><h1>{query ? 'Search' : libraryMode === 'recent' ? 'Continue reading' : libraryMode === 'offline' ? 'Offline articles' : stream.title}</h1><span>{visibleStreamTotal === null ? entries.length : `${visibleStreamTotal} unread`}</span></div>
-          <button className={`icon-button ${refreshing ? 'spinning' : ''}`} onClick={() => void refresh()} aria-label="Refresh"><Icon name="refresh" /></button>
+          <button className={`icon-button ${refreshing ? 'spinning' : ''}`} onClick={() => void refresh()} aria-label={status.backend === 'standalone' ? 'Reload articles' : 'Refresh'} title={status.backend === 'standalone' ? 'Reload articles Paper already has. Check feeds in Settings.' : 'Import articles from FreshRSS'}><Icon name="refresh" /></button>
           <button className="icon-button" disabled={!online || libraryMode !== 'stream'} onClick={() => void markAllRead()} aria-label={query ? "Mark search results read" : "Mark stream read"}><Icon name="check" /></button>
         </div>
         <div className="reader-status" role="status">{!online ? 'Offline. Saved articles are available below.' : (navigationError || statusError || syncError) ? `Sync needs attention: ${navigationError || statusError || syncError}` : lastSync ? `Last synced ${relativeDate(lastSync)}` : status.backend === 'standalone' ? 'Ready to fetch feeds' : 'Waiting for synchronization'}{(navigationError || statusError || syncError) && online && <button onClick={() => void refresh()}>Retry</button>}</div>
