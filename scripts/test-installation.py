@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from container_engine import container as docker
 
 ROOT = Path(__file__).resolve().parents[1]
 FRESHRSS = 'freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df'
@@ -20,13 +21,6 @@ CADDY = 'caddy:2.11.9@sha256:0c2243efcf437ab7f7a978f1027fcf0d4f9be8a75df27b1b3fb
 IMAGE = os.environ.get('PAPER_TEST_IMAGE', 'paper-public:test')
 PREFIX = 'paper-release-' + uuid.uuid4().hex[:10]
 containers = []
-
-
-def docker(*args, check=True):
-    result = subprocess.run(['docker', *args], capture_output=True, text=True, timeout=60)
-    if check and result.returncode:
-        raise RuntimeError('Docker test operation failed: ' + result.stderr.strip())
-    return (result.stdout + (result.stderr if args[0] == 'logs' else '')).strip()
 
 
 def run(name, *args):

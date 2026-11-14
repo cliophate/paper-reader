@@ -5,6 +5,7 @@
 
 # Dependencies and generated output
 node_modules/
+__pycache__/
 dist/
 dist-server/
 coverage/
