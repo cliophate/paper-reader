@@ -1,8 +1,11 @@
+import path from 'node:path'
+import { acquireStateLock } from './state-lock.js'
 import { PaperDatabase } from './db.js'
 import { scanFrom, where, type Query } from './greader-query.js'
 
 // One process owns the transaction. The parent can kill it to interrupt SQLite.
 process.once('message', (job: { path: string; kind?: string; query: Query; ts: string }) => {
+  const lock = acquireStateLock(path.dirname(job.path), 'shared')
   const db = new PaperDatabase(job.path)
   db.greaderDatabase.exec('PRAGMA busy_timeout = 50; PRAGMA wal_autocheckpoint = 0; PRAGMA cache_size = -262144')
   let message: { body?: string; error?: string; status?: number }
@@ -16,6 +19,6 @@ process.once('message', (job: { path: string; kind?: string; query: Query; ts: s
     }
     message = { body: 'OK' }
   } catch { message = { error: 'Reader writer is busy.', status: 503 } }
-  finally { db.close() }
+  finally { try { db.close() } finally { lock.release() } }
   process.send?.(message, () => process.disconnect())
 })

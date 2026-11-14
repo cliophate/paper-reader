@@ -1,8 +1,11 @@
+import path from 'node:path'
+import { acquireStateLock } from './state-lock.js'
 import { DatabaseSync } from 'node:sqlite'
 import { explicit, metadata, page, type Query } from './greader-query.js'
 import { ReaderError } from './greader-auth.js'
 
 process.once('message', (job: { path: string; kind: string; backend: string; query: Query; ids: string[]; order: string }) => {
+  const lock = acquireStateLock(path.dirname(job.path), 'shared')
   const db = new DatabaseSync(job.path, { readOnly: true, timeout: 50 })
   let message: { body?: string; error?: string; status?: number }
   try {
@@ -15,6 +18,6 @@ process.once('message', (job: { path: string; kind: string; backend: string; que
     if (Buffer.byteLength(body) > limit) throw new ReaderError('Response is too large.', 413)
     message = { body }
   } catch (error) { message = { error: error instanceof ReaderError ? error.message : 'Reader job failed.', status: error instanceof ReaderError ? error.status : 503 } }
-  finally { db.close() }
+  finally { try { db.close() } finally { lock.release() } }
   process.send?.(message, () => process.disconnect())
 })
