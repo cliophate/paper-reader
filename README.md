@@ -6,9 +6,9 @@ or connect it to FreshRSS to share subscriptions, read state, and stars.
 
 Entirely AI-coded. If this steals kittens, don't blame me.
 
-Paper 0.1.0 is the first stable release, intended for single-user use. It has no
+Paper 0.2.0-alpha.1 is an alpha release for single-user use. It has no
 built-in login. Keep it local or use an [authenticated HTTPS proxy](docs/access.md) for remote access.
-See the [changelog](CHANGELOG.md) for 0.1.0 changes and upgrade notes.
+See the [changelog](CHANGELOG.md) for 0.2.0-alpha.1 changes and upgrade notes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/desktop-dark.png">
@@ -25,14 +25,14 @@ See the [changelog](CHANGELOG.md) for 0.1.0 changes and upgrade notes.
 ## Quick start
 
 Start new installations in standalone mode. For an existing installation, follow
-the [upgrade guide](docs/recovery.md#upgrade-from-alpha4-to-010).
+the [upgrade guide](docs/recovery.md#upgrade-from-010-to-020-alpha1).
 
-You need Docker Compose 2.24.4 or newer. The 0.1.0 images support Linux amd64.
+You need Docker Compose 2.24.4 or newer. The 0.2.0-alpha.1 images support Linux amd64.
 Standalone mode needs one Paper container and a persistent data directory. No
 FreshRSS or optional integration credentials are needed.
 
 ```sh
-git clone --branch v0.1.0 --depth 1 https://github.com/cliophate/paper-reader.git
+git clone --branch v0.2.0-alpha.1 --depth 1 https://github.com/cliophate/paper-reader.git
 cd paper-reader
 sh scripts/setup.sh
 sh scripts/pull-image.sh
@@ -116,7 +116,7 @@ external services.
 
 ## Limits
 
-This is a 0.1 release. Keep backups before upgrading. Folders are flat, and OPML
+This is an alpha release. Keep backups before upgrading. Folders are flat, and OPML
 transfers subscriptions, not article history or settings. Offline browser copies
 are not server backups. Identity conflicts have no dedicated resolution UI.
 Broad searches can still take time, although they run outside the HTTP event

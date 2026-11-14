@@ -58,9 +58,9 @@ migrations. Use the matching pre-upgrade data backup if a migration is not
 backward compatible. Retain both the original database and backup until you have
 verified the restored application.
 
-Paper 0.1.0 uses database schema 12, unchanged since alpha.4.
-[Reader routes](reader-routes.md) describes its additive migration and
-`.before-link-numbers-v12` rollback backup.
+Paper 0.2.0-alpha.1 uses database schema v13.
+[Feed scheduling](feed-scheduling.md) describes the migration and automatic
+`.before-feed-checks-v13` backup.
 
 ### Upgrade from alpha.4 to 0.1.0
 
@@ -96,6 +96,45 @@ Include your usual proxy overrides in those Compose commands. Verify startup,
 articles, reading positions, saved state and AI availability when enabled.
 The pull helper's archive contains only the runtime image. Source installations
 can build the selected tag as described in the [README](../README.md#build-from-source).
+
+### Upgrade from 0.1.0 to 0.2.0-alpha.1
+
+Startup creates `<database-path>.before-feed-checks-v13` before migrating to
+schema v13. Keep this backup. It does not replace a full data and configuration
+backup. An image rollback does not undo the migration. Restore the matching
+pre-upgrade backup when downgrading.
+
+No configuration change is needed. Keep your backend, account, private
+configuration and Compose or proxy overrides. Existing Codex installations keep
+using Codex. The new API provider is optional; its environment variables are in
+`.env.example`. Do not rerun setup.
+
+Stop every briefing command and back up the full data directory and private
+configuration before updating. Without the Codex worker:
+
+```sh
+docker compose stop paper
+# Back up data and private configuration before continuing.
+git fetch origin tag v0.2.0-alpha.1
+git switch --detach v0.2.0-alpha.1
+sh scripts/pull-image.sh
+docker compose up -d --no-build --force-recreate paper
+```
+
+With the Codex worker, stop and recreate both services:
+
+```sh
+docker compose -f compose.yaml -f compose.ai.yaml stop paper paper-ai
+# Back up data, private configuration and ai-auth before continuing.
+git fetch origin tag v0.2.0-alpha.1
+git switch --detach v0.2.0-alpha.1
+docker compose -f compose.yaml -f compose.ai.yaml pull paper paper-ai
+docker compose -f compose.yaml -f compose.ai.yaml up -d --no-build --force-recreate paper paper-ai
+```
+
+Include your usual proxy overrides. Back up FreshRSS separately when used.
+Verify startup, articles, reading positions, saved state and AI availability
+when enabled. In standalone mode, check the feed schedule and Check now action.
 
 ### Upgrade from earlier alphas
 
