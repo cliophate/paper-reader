@@ -14,6 +14,7 @@ import { softwareAuthenticator } from './fixtures/software-authenticator'
 let db: DatabaseSync, store: AuthStore, server: ReturnType<ReturnType<typeof express>['listen']>, base: string
 let cookies = new Map<string, string>()
 let activeStreams: Response[] = []
+let pending: (() => void) | undefined
 const password = 'synthetic owner password'
 beforeEach(async () => {
   db = new DatabaseSync(':memory:'); migrateAuth(db); store = new AuthStore(db); cookies = new Map()
@@ -27,6 +28,7 @@ beforeEach(async () => {
     res.type('text/plain').write('initial\n')
   })
   app.get('/api/private', (_req, res) => res.json({ private: true }))
+  app.get('/api/slow', (_req, res) => { pending = () => res.json({ private: 'slow' }) })
   app.get('/health', (_req, res) => res.json({ status: 'ok' }))
   app.get('/login', (_req, res) => res.send('login'))
   app.get('/api/ip', (req, res) => res.json(req.ip))
@@ -232,6 +234,25 @@ it('checks the session when a streaming source registers outside the gate', asyn
     const response = await fetch(`http://127.0.0.1:${(listener.address() as AddressInfo).port}/stream`)
     expect(response.status).toBe(401); expect(await response.text()).not.toContain('private update')
   } finally { listener.closeAllConnections(); await new Promise<void>(resolve => listener.close(() => resolve())) }
+})
+
+it.each(['logout', 'first setup'])('replaces a pending private response after %s', async event => {
+  if (event === 'logout') await setup()
+  const response = call('/api/slow')
+  for (let i = 0; i < 100 && !pending; i++) await new Promise(resolve => setTimeout(resolve, 5))
+  if (event === 'logout') store.logout(cookies.get('paper_session')!)
+  else await store.setup(store.setupCode(), 'owner', password)
+  pending!()
+  const result = await response
+  expect(result.status).toBe(401)
+  expect(await result.text()).not.toContain('slow')
+  pending = undefined
+})
+
+it('lets logout and password changes answer after revoking their own session', async () => {
+  await setup()
+  expect((await call('/api/auth/password', { username: 'owner', password: 'another synthetic password' })).status).toBe(200)
+  expect((await call('/api/auth/logout', {})).status).toBe(200)
 })
 
 it('closes a revoked partial media or file response with Content-Length', async () => {

@@ -25,7 +25,13 @@ export class AuthConnections {
       // A partial Content-Length response must close its socket, otherwise the
       // client keeps waiting for bytes that revocation will never allow.
       if (response.headersSent && response.hasHeader('Content-Length')) { response.destroy(); return }
-      if (!response.headersSent) response.status(401)
+      if (!response.headersSent) {
+        // Replace a pending body, such as private JSON, with the login error.
+        response.removeHeader('Content-Length'); response.removeHeader('ETag')
+        response.status(401).set('Content-Type', 'application/json; charset=utf-8')
+        end(JSON.stringify({ error: 'Sign in to Paper.', code: 'login-required' }))
+        return
+      }
       end()
     }
     response.write = ((...args: Parameters<typeof write>) => {
@@ -33,9 +39,9 @@ export class AuthConnections {
       return write(...args)
     }) as typeof response.write
     response.end = ((...args: Parameters<typeof end>) => {
-      // An ordinary logout/password-change JSON response may finish after it
-      // revokes its own session. An already-started stream must drop its tail.
-      if (response.headersSent && !permitted()) { close(); return response }
+      // Logout and password changes revoke their own session before replying.
+      // Any other response, pending or streaming, stops once access is gone.
+      if (!response.locals.authSessionChange && !permitted()) { close(); return response }
       return end(...args)
     }) as typeof response.end
     this.connections.set(response, () => {

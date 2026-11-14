@@ -6,6 +6,7 @@ export const IDLE_MS = 7 * 86400_000
 export const ABSOLUTE_MS = 30 * 86400_000
 export const SETUP_MS = 15 * 60_000
 const LIMIT_MS = 15 * 60_000
+const LIMIT_ROWS = 1000
 const secret = () => randomBytes(32).toString('base64url')
 export const digest = (value: string) => createHash('sha256').update(value).digest('hex')
 export class AuthError extends Error {
@@ -78,6 +79,9 @@ export class AuthStore {
     const keys = ['global', digest(`${username.toLowerCase().slice(0, 80)}\0${ip}`)]
     const expires = transaction(this.db, () => {
       this.db.prepare('DELETE FROM auth_limits WHERE expires <= ?').run(this.now())
+      // Bound limiter storage even when hash capacity rejects attempts early.
+      if (!this.db.prepare('SELECT 1 FROM auth_limits WHERE key = ?').get(keys[1])
+        && Number(this.db.prepare('SELECT COUNT(*) AS n FROM auth_limits').get()!.n) >= LIMIT_ROWS) throw new AuthError('Too many attempts. Try again later.', 429, Math.ceil(LIMIT_MS / 1000))
       for (const [i, key] of keys.entries()) {
         const row = this.db.prepare('SELECT * FROM auth_limits WHERE key = ?').get(key)
         if (row && Number(row.count) >= (i ? 5 : 30)) throw new AuthError('Too many attempts. Try again later.', 429, Math.max(1, Math.ceil((Number(row.expires) - this.now()) / 1000)))
@@ -87,7 +91,10 @@ export class AuthStore {
         return Number(this.db.prepare('SELECT expires FROM auth_limits WHERE key = ?').get(key)!.expires)
       })
     })
-    const release = () => transaction(this.db, () => keys.forEach((key, i) => this.db.prepare('UPDATE auth_limits SET count = max(0, count - 1) WHERE key = ? AND expires = ?').run(key, expires[i])))
+    const release = () => transaction(this.db, () => keys.forEach((key, i) => {
+      this.db.prepare('UPDATE auth_limits SET count = max(0, count - 1) WHERE key = ? AND expires = ?').run(key, expires[i])
+      this.db.prepare('DELETE FROM auth_limits WHERE key = ? AND count <= 0').run(key)
+    }))
     try { const result = await work(); release(); return result }
     catch (error) { if (error instanceof AuthError && error.status === 429) release(); throw error }
   }

@@ -105,9 +105,10 @@ export function authRoutes(store: AuthStore, publicUrl: string) {
   router.get('/access', (req, res) => res.json({ username: store.owner()!.username, passwordEnabled: !!store.owner()!.password_enabled,
     passkeys: store.passkeys().map(({ id, name, created, used }) => ({ id, name, created, used })),
     sessions: store.sessions().map(item => ({ ...item, current: item.id === store.session(cookie(req))?.id })), apps: store.apps() }))
-  router.post('/logout', (req, res) => { store.logout(cookie(req)); res.clearCookie(sessionCookie, cookieOptions).json({ ok: true }) })
+  router.post('/logout', (req, res) => { res.locals.authSessionChange = true; store.logout(cookie(req)); res.clearCookie(sessionCookie, cookieOptions).json({ ok: true }) })
   router.post('/sessions/sign-out-others', (req, res) => { store.signOutOthers(cookie(req)); res.json({ ok: true }) })
   router.post('/password', async (req, res) => {
+    res.locals.authSessionChange = true
     const revision = await store.changePassword(cookie(req), req.body?.username, req.body?.password)
     session(req, res, revision)
   })

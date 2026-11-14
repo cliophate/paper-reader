@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
-import { AuthStore, ABSOLUTE_MS, IDLE_MS, SETUP_MS, digest } from '../src/server/auth-store'
+import { AuthError, AuthStore, ABSOLUTE_MS, IDLE_MS, SETUP_MS, digest } from '../src/server/auth-store'
 import { migrateAuth } from '../src/server/auth-schema'
 import { modelEnvironment } from '../src/server/model-process'
 
@@ -45,7 +45,19 @@ describe('owner credentials', () => {
     const results = await Promise.allSettled([1, 2, 3].map(() => store.passwordLogin('owner', password)))
     expect(results.filter(result => result.status === 'rejected' && result.reason.status === 429)).toHaveLength(1)
     for (let i = 0; i < 10; i++) await store.attempt('owner', 'ip', async () => true)
-    expect(Number(db.prepare("SELECT count FROM auth_limits WHERE key = 'global'").get()!.count)).toBe(0)
+    expect(Number(db.prepare("SELECT count FROM auth_limits WHERE key = 'global'").get()?.count ?? 0)).toBe(0)
+  })
+  it('drops released limiter rows and caps limiter storage during hash saturation', async () => {
+    await setup()
+    const busy = () => Promise.reject(new AuthError('Busy.', 429))
+    for (let i = 0; i < 200; i++) await expect(store.attempt(`user${i}`, 'ip', busy)).rejects.toMatchObject({ status: 429 })
+    expect(Number(db.prepare('SELECT COUNT(*) AS n FROM auth_limits').get()!.n)).toBe(0)
+    const failure = () => Promise.reject(new Error('failed'))
+    db.prepare('INSERT INTO auth_limits VALUES(?, 1, ?)').run('global', now + 900_000)
+    const filler = db.prepare('INSERT INTO auth_limits VALUES(?, 1, ?)')
+    for (let i = 0; i < 999; i++) filler.run(`filler${i}`, now + 900_000)
+    await expect(store.attempt('fresh', 'ip', failure)).rejects.toMatchObject({ status: 429 })
+    expect(Number(db.prepare('SELECT COUNT(*) AS n FROM auth_limits').get()!.n)).toBe(1000)
   })
   it('rotates sessions, expires idle and absolute sessions, logs out and signs out others', async () => {
     const first = await setup(), second = store.newSession(first, 'browser 2')

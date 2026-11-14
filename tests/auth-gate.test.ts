@@ -24,6 +24,7 @@ const files = [
 function inventory(extra = '') {
   const routes: string[] = []
   for (const [file, receiver, prefix] of files) {
+    let inlineCount = 0
     const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8') + (receiver === 'app' ? extra : ''), ts.ScriptTarget.Latest, true)
     const middleware = new Set(['preventFraming', 'requireAllowedHost', 'requireSameOrigin', 'authGate', 'express.json', 'express.urlencoded', 'json'])
     const fail = (node: ts.Node): never => { throw new Error(`Unclassified Express declaration in ${file}: ${node.getText(source)}`) }
@@ -42,7 +43,8 @@ function inventory(extra = '') {
         if (!['get', 'post', 'patch', 'delete', 'put', 'head', 'options', 'all', 'use'].includes(method) || !first) fail(node)
         if (method === 'use' && !ts.isStringLiteral(first) && !ts.isArrayLiteralExpression(first)) {
           for (const arg of node.arguments) {
-            if (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg)) continue
+            // Inline middleware can answer requests, so each one is part of the snapshot.
+            if (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg)) { routes.push(`USE ${prefix}(inline ${++inlineCount})`); continue }
             const name = ts.isCallExpression(arg) ? arg.expression.getText(source) : arg.getText(source)
             if (name === 'express.static') routes.push('STATIC /*')
             else if (!middleware.has(name)) fail(arg)
@@ -107,7 +109,7 @@ it('denies every session-protected API and page on the running server, including
   for (const [route, classification] of Object.entries(classifications)) {
     if (classification !== 'session') continue
     let [method, pathname] = route.split(' ')
-    if (['STATIC'].includes(method)) continue
+    if (['STATIC'].includes(method) || pathname.includes('(inline')) continue
     if (method === 'USE') method = 'GET'
     pathname = pathname.replace(/:[^/]+/g, 'fixture').replace('*splat', '/feeds/1/fixture')
     const response = await fetch(base + pathname, { method, redirect: 'manual', headers: { 'Content-Type': 'application/json' }, body: ['POST', 'PATCH', 'PUT'].includes(method) ? '{}' : undefined })
@@ -147,6 +149,7 @@ it.each([
   'app.get(/^\\/unclassified$/, handler)',
   "app.get('/unclassified', handler)",
   "app['post']('/unclassified', handler)",
+  "app.use((_req, res) => res.json({ private: true }))",
 ])('rejects an unclassified declaration: %s', declaration => {
   expect(() => expect(inventory(declaration)).toEqual(Object.keys(classifications).sort())).toThrow()
 })
