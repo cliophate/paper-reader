@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- Keyboard shortcuts no longer fire while Ctrl, Cmd or Alt is held, so Ctrl+F
+  opens the browser's Find again.
+- Previous into the preceding feed or folder opens its last article instead of
+  the last one on its first page. Refresh and reordering keep paging correct.
+- Bulk state changes over 1,000 articles are sent in batches. The server rejects
+  larger requests instead of silently changing only the first 1,000. Undo covers
+  every batch.
+- Headline cleanup skips old read articles again. Its seven-day cutoff compared
+  milliseconds with seconds.
+- Mute filters use the same Unicode matching for previews and ingestion.
+  Previews check the newest articles in the selected feed first and say
+  "At least" when limited. New filters return immediately and show "Matching..."
+  until the background scan finishes, and the reader refreshes when it does.
+  Existing filters gain missing matches after startup, and interrupted scans
+  resume after restart.
+- Discussions show the configured AI provider and model.
+
 ## 0.2.0-alpha.1
 
 An alpha release with changes since [0.1.0](https://github.com/cliophate/paper-reader/releases/tag/v0.1.0).
@@ -8,13 +27,6 @@ Adds standalone feed controls and an OpenAI-compatible API provider through
 [#65](https://github.com/cliophate/paper-reader/pull/65).
 
 ### Changes since 0.1.0
-
-- Mute filters use the same Unicode matching for previews and ingestion.
-  Previews check the newest articles in the selected feed first and say
-  "At least" when limited. New filters return immediately and show "Matching..."
-  until the background scan finishes. Existing filters gain missing matches
-  after startup, and interrupted scans resume after restart.
-- Refresh preserves the loaded article window after entering a feed backward.
 
 - Standalone feed settings show the last successful check, next scheduled check,
   errors, consecutive failures and publisher retry delays. Check a feed or folder
