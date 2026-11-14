@@ -96,19 +96,28 @@ export function item(db: DatabaseSync, row: Row) {
     categories: [READING, ...categories(db, String(row.feed_id)), ...(Number(row.read) ? [`${STATE}read`] : []), ...(Number(row.starred) ? [`${STATE}starred`] : [])] }
 }
 const CONTENT = 'e.id, e.feed_id, e.title, e.author, e.url, e.canonical_url, e.published_at, e.first_seen_at, e.read, e.starred, CAST(substr(CAST(e.content_html AS BLOB),1,65537) AS TEXT) AS content_html, substr(e.content_text,1,7000) AS content_text, a.sequence, f.title AS origin_title, f.site_url, (SELECT number FROM link_numbers WHERE kind = \'feed\' AND target_id = e.feed_id) AS feed_number'
-export function scanFrom(q: Query, contents = false) {
+export function scanFrom(q: Query, contents = false, arrivalFirst = false) {
   const streams = [q.stream, ...q.it]
   const unread = streams.some(s => s.kind === 'state' && s.id === 'unread') || q.xt.some(s => s.kind === 'state' && s.id === 'read')
   const starred = streams.some(s => s.kind === 'state' && s.id === 'starred')
   const tail = ' CROSS JOIN article_identities ai ON ai.id = e.id CROSS JOIN feeds f ON f.id = e.feed_id'
-  if (unread || starred) return { from: `FROM entries e INDEXED BY greader_${unread ? 'unread' : 'starred'} CROSS JOIN article_arrivals a ON a.entry_id = e.id${tail}`, extra: unread ? ' AND e.read = 0' : ' AND e.starred = 1' }
+  if ((unread || starred) && !arrivalFirst) return { from: `FROM entries e INDEXED BY greader_${unread ? 'unread' : 'starred'} CROSS JOIN article_arrivals a ON a.entry_id = e.id${tail}`, extra: unread ? ' AND e.read = 0' : ' AND e.starred = 1' }
   return { from: `FROM article_arrivals a CROSS JOIN entries e ${contents ? '' : 'INDEXED BY greader_scope'} ON e.id = a.entry_id${tail}`, extra: '' }
+}
+export function scanPageFrom(db: DatabaseSync, q: Query, contents = false) {
+  const scan = scanFrom(q, contents)
+  if (!scan.extra) return scan
+  const unread = scan.extra === ' AND e.read = 0'
+  // Small state sets need their partial index. Large sets page from arrivals so
+  // every continuation does not rescan and sort the entire unread/starred set.
+  const large = db.prepare(`SELECT 1 FROM entries INDEXED BY greader_${unread ? 'unread' : 'starred'} WHERE ${unread ? 'read = 0' : 'starred = 1'} LIMIT 1 OFFSET 1000`).get()
+  return large ? scanFrom(q, contents, true) : scan
 }
 export function page(db: DatabaseSync, q: Query, contents: boolean) {
   for (const stream of [q.stream, ...q.it, ...q.xt]) if (stream.kind === 'folder' && stream.id && !db.prepare('SELECT 1 FROM folders WHERE id = ?').get(stream.id)) throw new ReaderError('Unknown folder.', 404)
   const high = q.high || String(rows(db, 'SELECT coalesce(max(sequence),0) AS n FROM article_arrivals')[0].n)
   const filter = where({ ...q, high })
-  const scan = scanFrom(q, contents)
+  const scan = scanPageFrom(db, q, contents)
   const sql = `SELECT ${contents ? CONTENT : 'a.sequence'} ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY a.sequence ${q.order} LIMIT ?`
   const args = [...filter.args, q.n + 1]
   if (contents) return { high, ...contentRows(db, sql, args, q.n) }
