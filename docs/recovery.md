@@ -200,3 +200,14 @@ browser clears storage and are not a backup of the server database.
 
 Changing `PAPER_BACKEND` alone cannot switch ownership. After restoring, use the
 backend and account configuration that owns that backup.
+
+### Mute filter repair
+
+All existing filters gain missing Unicode matches after startup. The schema stays
+at v13. Each filter saves its row cursor and scan boundary in `sync_state` under
+`mute_unicode_v1:<filter-id>`, then records `done`. The `mute_js_v1` marker resets
+old ASCII checkpoints once to repair matches missed by SQLite's lowercase rules.
+Matches, progress and the final activity count commit in short transactions.
+Restarting resumes pending scans. Settings shows "Matching..." until completion;
+new ingestion applies the rule throughout. Deleting a filter removes its exact
+checkpoint too. Keep the database and its WAL together when backing up.

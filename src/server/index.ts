@@ -113,7 +113,7 @@ app.use('/api/settings/connections', (error: unknown, _request: Request, respons
 app.get('/health', (_request, response) => response.json({ status: 'ok' }))
 
 // Article discussion has no subscription, read-state or publishing capabilities.
-app.get('/api/discussion', (request, response) => response.json({ discussion: discussions.get(String(request.query.entryId || '')), enabled: discussionEnabled() }))
+app.get('/api/discussion', (request, response) => response.json({ discussion: discussions.get(String(request.query.entryId || '')), enabled: discussionEnabled(), provider: connectionSettings.discussionProvider() }))
 app.get('/api/discussion/events', (request, response) => {
   const id = String(request.query.entryId || '')
   response.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
@@ -261,7 +261,7 @@ app.get('/api/filters', (_request, response) => {
   response.json(database.muteFilters())
 })
 
-app.post('/api/filters', (request, response) => {
+app.post('/api/filters', asyncRoute(async (request, response) => {
   const phrase = String(request.body?.phrase || '').trim().slice(0, 240)
   const scope = String(request.body?.scope || 'title')
   const feedId = String(request.body?.feedId || '').trim()
@@ -272,10 +272,9 @@ app.post('/api/filters', (request, response) => {
     if (error instanceof BackendValidationError) return response.status(400).json({ error: 'Unknown feed' })
     throw error
   }
-  const filter = database.createMuteFilter(phrase, scope as import('./db.js').MuteFilterScope, feedId)
-  database.recordActivity({ kind: 'filter', origin: 'settings', summary: `Muted "${phrase}"`, count: filter.matchCount, details: { filterId: filter.id, scope, feedId } })
+  const filter = await database.createMuteFilter(phrase, scope as import('./db.js').MuteFilterScope, feedId)
   response.status(201).json(filter)
-})
+}))
 
 app.delete('/api/filters/:id', (request, response) => {
   const id = String(request.params.id)
@@ -285,12 +284,12 @@ app.delete('/api/filters/:id', (request, response) => {
   response.json({ ok: true })
 })
 
-app.post('/api/filters/preview', (request, response) => {
+app.post('/api/filters/preview', asyncRoute(async (request, response) => {
   const phrase = String(request.body?.phrase || '').trim().slice(0, 240)
   const scope = String(request.body?.scope || 'title')
   if (phrase.length < 2 || !['title', 'content', 'any'].includes(scope)) return response.status(400).json({ error: 'Enter a phrase and choose where to match it.' })
-  response.json(database.previewMuteFilter(phrase, scope as 'title' | 'content' | 'any', String(request.body?.feedId || '')))
-})
+  response.json(await database.previewMuteFilter(phrase, scope as 'title' | 'content' | 'any', String(request.body?.feedId || '')))
+}))
 
 app.get('/api/reading', (_request, response) => response.json(database.recentReading()))
 app.post('/api/reading', (request, response) => {
@@ -399,6 +398,8 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
   const unreadOnly = (stream.kind !== 'starred' || Boolean(request.query.q)) && request.query.unread !== '0'
   const query = String(request.query.q || '').trim().toLowerCase()
   let continuation = String(request.query.continuation || '')
+  const reverse = request.query.reverse === '1'
+  if (reverse && query) return response.status(400).json({ error: 'Backward paging is only available outside search.' })
   if (!localReadsActive && (request.query.after || request.query.before)) return response.status(409).json({ error: 'Date filters need the local Paper index.' })
   if (localReadsActive) {
     const order = database.streamOrder(stream)
@@ -418,6 +419,7 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
       const options = {
         unreadOnly,
         limit: ENTRY_PAGE_SIZE,
+        reverse,
         continuation,
         query,
         after: String(request.query.after || ''),
@@ -426,12 +428,14 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
       const page = query ? await search.search(stream, options, controller.signal) : await repository.entriesPage(stream, options)
       if (response.destroyed) return
       if (database.streamOrder(stream) !== order) return response.status(409).json({ error: 'Article order changed. Refresh this list to continue.' })
-      return response.json({ ...headlines.page(page), order, continuation: page.continuation ? `${order}|${page.continuation}` : '' })
+      const cursor = page.continuation ? `${order}|${page.continuation}` : ''
+      const decorated = headlines.page(page)
+      return response.json({ ...decorated, order, items: reverse ? decorated.items.reverse() : decorated.items, continuation: reverse ? '' : cursor, previousContinuation: reverse ? cursor : '' })
     } finally { response.removeListener('close', disconnected) }
   }
   if (!query) {
-    const page = await backend.entriesPage(stream, { unreadOnly, limit: ENTRY_PAGE_SIZE, continuation })
-    return response.json(headlines.page({ ...page, items: database.numberEntries(page.items) }))
+    const page = await backend.entriesPage(stream, { unreadOnly, limit: ENTRY_PAGE_SIZE, continuation, reverse })
+    return response.json({ ...headlines.page({ ...page, items: database.numberEntries(reverse ? page.items.reverse() : page.items) }), continuation: reverse ? '' : page.continuation, previousContinuation: reverse ? page.continuation : '' })
   }
 
   const items: Entry[] = []
@@ -465,7 +469,8 @@ app.post('/api/entries/item', asyncRoute(async (request, response) => {
 }))
 
 app.post('/api/entries/state', asyncRoute(async (request, response) => {
-  const ids = stringArray(request.body?.ids).slice(0, 1000)
+  const ids = stringArray(request.body?.ids)
+  if (ids.length > 1000) return response.status(400).json({ error: 'Send at most 1000 article IDs per state request.' })
   const operation = String(request.body?.operation || '')
   if (!['read', 'unread', 'star', 'unstar'].includes(operation)) return response.status(400).json({ error: 'Unknown state operation' })
   const origin = ['reader', 'pulse', 'automatic'].includes(String(request.body?.origin)) ? String(request.body.origin) : 'reader'
@@ -696,6 +701,7 @@ app.use((error: Error, request: Request, response: Response, _next: NextFunction
 const server = app.listen(config.port, config.host, () => {
   console.log(`Paper is listening on port ${config.port}`)
   logMemory('listening')
+  void database.backfillMuteFilters().catch(error => console.error('Mute filter backfill failed; it will resume after restart.', error))
 })
 
 function parseRevisions(value: unknown): Record<string, number> | undefined {

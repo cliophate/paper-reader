@@ -27,9 +27,11 @@ describe('digest candidate eligibility', () => {
     expect(db.briefingEntries(all, { before: new Date(now + 8 * DAY), unreadOnly: true })).toHaveLength(0)
   })
 
-  it('rotates past considered candidates and respects mute, read and delivered state', () => {
+  it('rotates past considered candidates and respects mute, read and delivered state', async () => {
     db.upsertEntries([entry('a'), entry('b'), entry('muted'), { ...entry('read'), read: true }])
-    db.createMuteFilter('feature muted', 'title')
+    const creating = db.createMuteFilter('feature muted', 'title')
+    await vi.runAllTimersAsync()
+    await creating
     const first = db.briefingEntries(all, { before: new Date(now + 1), unreadOnly: true, limit: 1 })
     db.recordBriefingConsidered(first.map(item => item.id), now)
     const second = db.briefingEntries(all, { before: new Date(now + 1), unreadOnly: true, limit: 1 })

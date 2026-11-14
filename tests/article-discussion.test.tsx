@@ -10,7 +10,7 @@ let root: Root | undefined
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; vi.unstubAllGlobals(); document.body.innerHTML = '' })
 
 describe('article discussion interface', () => {
-  it('opens without generating a reply, attaches selections, renders references safely and ignores stale HTTP responses', async () => {
+  it.each(['codex', 'openai'] as const)('shows the configured %s provider, opens without generating a reply, attaches selections, renders references safely and ignores stale HTTP responses', async provider => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
     const saved: Discussion = { entryId: 'one', revision: 1, source: { title: 'Article', author: 'Writer', url: 'https://example.com', kind: 'feed', warning: 'Feed text may be incomplete.', paragraphs: [{ id: 'P1', text: 'The chair has a low seat and no armrests.' }] }, messages: [] }
     let events: any
@@ -23,12 +23,14 @@ describe('article discussion interface', () => {
         events.onmessage({ data: JSON.stringify(current) })
         return new Response(JSON.stringify({ ...saved, revision: 2, messages: [{ ...current.messages[0], text: '', status: 'running' }] }))
       }
-      return new Response(JSON.stringify({ discussion: saved, enabled: true }))
+      return new Response(JSON.stringify({ discussion: saved, enabled: true, provider: { provider, model: 'configured-model' } }))
     })
     vi.stubGlobal('fetch', fetcher)
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
     await act(async () => root!.render(<ArticleDiscussion entry={{ id: 'one', title: 'Article' } as Entry} initialQuote="The chair has a low seat and no armrests." onClose={() => {}} />))
     expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('.discussion-header')?.textContent).toContain(`${provider === 'codex' ? 'Codex worker' : 'OpenAI-compatible API'} · configured-model`)
+    expect(container.querySelector('.discussion-empty')?.textContent).toContain(provider === 'codex' ? 'your Codex worker' : 'your configured OpenAI-compatible API')
     const textarea = container.querySelector('textarea')!
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, 'Explain?')

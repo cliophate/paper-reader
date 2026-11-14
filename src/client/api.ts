@@ -35,7 +35,7 @@ export const api = {
   updateConnections: (settings: ConnectionsUpdate) => request<ConnectionsSettings>('/api/settings/connections', { method: 'PATCH', body: JSON.stringify(settings) }),
   recentReading: () => request<Entry[]>('/api/reading'),
   saveProgress: (id: string, position: number) => request<{ ok: boolean }>('/api/reading', { method: 'POST', body: JSON.stringify({ id, position }), keepalive: true }),
-  previewFilter: (phrase: string, scope: string, feedId: string) => request<{ count: number; items: Entry[] }>('/api/filters/preview', { method: 'POST', body: JSON.stringify({ phrase, scope, feedId }) }),
+  previewFilter: (phrase: string, scope: string, feedId: string) => request<{ count: number; items: Entry[]; truncated: boolean }>('/api/filters/preview', { method: 'POST', body: JSON.stringify({ phrase, scope, feedId }) }),
   previewFeed: (url: string) => request<{ url: string; title: string; items: Array<{ title: string; date: string }> }>('/api/feeds/preview', { method: 'POST', body: JSON.stringify({ url }) }),
   repairFeed: (id: string, url: string, expectedUrl: string) => request<{ ok: boolean }>('/api/feeds/repair', { method: 'POST', body: JSON.stringify({ id, url, expectedUrl }) }),
   previewRead: (stream: StreamRef, query: string, after: string, before: string) => request<{ token: string; count: number }>('/api/streams/preview-read', { method: 'POST', body: JSON.stringify({ stream, query, after, before }) }),
@@ -71,8 +71,9 @@ export const api = {
   }>('/api/status', { signal: sourceRequestSignal(signal) }),
   reload: () => request<{ ok: boolean }>('/api/reload', { method: 'POST' }),
   setStreamOrder: (stream: StreamRef, order: 'newest' | 'oldest') => request<{ ok: boolean; order: 'newest' | 'oldest' }>('/api/streams/order', { method: 'POST', body: JSON.stringify({ stream, order }) }),
-  entries: (stream: StreamRef, unread: boolean, query = '', continuation = '', signal?: AbortSignal, dates: { after?: string; before?: string } = {}) => {
+  entries: (stream: StreamRef, unread: boolean, query = '', continuation = '', signal?: AbortSignal, dates: { after?: string; before?: string } = {}, reverse = false) => {
     const params = new URLSearchParams({ kind: stream.kind, id: stream.id, title: stream.title, unread: unread ? '1' : '0' })
+    if (reverse) params.set('reverse', '1')
     if (query) params.set('q', query)
     if (dates.after) params.set('after', dates.after)
     if (dates.before) params.set('before', dates.before)
@@ -81,8 +82,35 @@ export const api = {
   },
   entryByNumber: (number: number) => request<{ entry: Entry }>(`/api/entries/number/${number}`),
   entry: (id: string) => request<{ entry: Entry | null }>('/api/entries/item', { method: 'POST', body: JSON.stringify({ id }) }),
-  editState: (ids: string[], operation: 'read' | 'unread' | 'star' | 'unstar', origin: 'reader' | 'pulse' | 'automatic' = 'reader', options: { expectedRevisions?: Record<string, number>; undo?: boolean } = {}) =>
-    request<{ ok: boolean; revisions?: Record<string, number>; undoToken?: string }>('/api/entries/state', { method: 'POST', body: JSON.stringify({ ids, operation, origin, ...options }) }),
+  editState: async (ids: string[], operation: 'read' | 'unread' | 'star' | 'unstar', origin: 'reader' | 'pulse' | 'automatic' = 'reader', options: { expectedRevisions?: Record<string, number>; undo?: boolean } = {}) => {
+    const uniqueIds = [...new Set(ids)]
+    const revisions: Record<string, number> = {}
+    const undoTokens: string[] = []
+    let completed = 0
+    let canUndo = options.undo === true
+    try {
+      for (let offset = 0; offset < uniqueIds.length; offset += 1000) {
+        const batch = uniqueIds.slice(offset, offset + 1000)
+        const expectedRevisions = options.expectedRevisions && Object.fromEntries(batch.filter(id => Object.hasOwn(options.expectedRevisions!, id)).map(id => [id, options.expectedRevisions![id]]))
+        const result = await request<{ ok: boolean; revisions?: Record<string, number>; undoToken?: string }>('/api/entries/state', {
+          method: 'POST', body: JSON.stringify({ ids: batch, operation, origin, ...options, expectedRevisions }),
+        })
+        canUndo &&= result.revisions !== undefined
+        Object.assign(revisions, result.revisions)
+        if (result.undoToken) undoTokens.push(result.undoToken)
+        completed += batch.length
+      }
+    } catch (error) {
+      if (undoTokens.length) {
+        try { await api.undo(undoTokens) }
+        catch { throw new Error('Some articles changed, and Paper could not undo every completed batch. Refresh the list before retrying.') }
+      } else if (completed && !canUndo) {
+        throw new Error(`${completed} articles were updated before the request failed. Refresh the list before retrying.`)
+      }
+      throw error
+    }
+    return { ok: true, revisions, undoToken: undoTokens.length === 1 ? undoTokens[0] : undoTokens.length ? undoTokens : undefined }
+  },
   markStreamRead: (stream: StreamRef) =>
     request<{ ok: boolean; count: number; undoToken?: string }>('/api/streams/mark-read', { method: 'POST', body: JSON.stringify(stream) }),
   markRelativeRead: (stream: StreamRef, anchorId: string, direction: 'above' | 'below', unreadOnly: boolean, query: string, order?: 'newest' | 'oldest', dates: { after?: string; before?: string } = {}) =>
@@ -90,7 +118,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ stream, anchorId, direction, unreadOnly, query, order, ...dates }),
     }),
-  undo: (token: string) => request<{ ok: boolean; count: number }>('/api/undo', { method: 'POST', body: JSON.stringify({ token }) }),
+  undo: async (token: string | string[]): Promise<{ ok: boolean; count: number }> => {
+    let count = 0
+    let failed = false
+    for (const item of (Array.isArray(token) ? [...token].reverse() : [token])) {
+      try { count += (await request<{ ok: boolean; count: number }>('/api/undo', { method: 'POST', body: JSON.stringify({ token: item }) })).count }
+      catch (error) { if (!Array.isArray(token)) throw error; failed = true }
+    }
+    if (failed) throw new Error('Paper could not undo every batch. Some articles may have changed elsewhere. Refresh the list.')
+    return { ok: true, count }
+  },
   saveReadwise: (url: string, title: string) =>
     request<{ ok: boolean; savedAt: string }>('/api/readwise', { method: 'POST', body: JSON.stringify({ url, title }) }),
   createKirbyNote: (title: string, sourceUrl: string, quote: string) =>

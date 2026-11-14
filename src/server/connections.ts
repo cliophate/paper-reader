@@ -102,6 +102,11 @@ export class ConnectionSettings {
     return saved === null ? '' : saved ?? this.defaults[`${section}Token`]
   }
 
+  discussionProvider() {
+    const provider = this.config.ai.provider
+    return { provider, model: provider === 'openai' ? this.config.openai.discussionModel : provider === 'codex' ? this.config.codex.discussionModel : '' }
+  }
+
   view(): ConnectionsSettings {
     const ai = { ...this.defaults.ai, ...this.saved.ai }
     ai.codexEnabled = ai.provider === 'codex'

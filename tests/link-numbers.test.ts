@@ -29,10 +29,11 @@ beforeEach(() => {
 afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
 
 describe('reader link numbers', () => {
-  it('numbers remote reads without rewriting existing bodies, mute matches or search rows', () => {
+  it('numbers remote reads without rewriting existing bodies, mute matches or search rows', async () => {
     const existing = { ...article, contentHtml: '<p>Body-only mutephrase and searchneedle</p>' }
     db.upsertEntries([existing])
-    db.createMuteFilter('mutephrase', 'content')
+    await db.createMuteFilter('mutephrase', 'content')
+    await db.backfillMuteFilters()
     sql(connection => connection.prepare('UPDATE entries SET synced_at = ? WHERE id = ?').run('2020-01-01T00:00:00Z', article.id))
     const snapshot = () => sql(connection => ({
       entry: connection.prepare('SELECT * FROM entries WHERE id = ?').get(article.id),

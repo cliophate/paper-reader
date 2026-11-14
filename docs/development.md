@@ -3,7 +3,7 @@
 [Article identity and state ownership](article-identity.md) documents schema v7,
 the automatic pre-upgrade backup, account binding and recovery.
 [Feed ingestion](feed-ingestion.md) documents supported formats, identity matching
-and the successful-fetch contract for the future HTTP collector.
+and the successful-fetch contract for the HTTP collector.
 [Folder and subscription organization](organization.md) documents schema v8,
 revision-checked commands, collision rules and FreshRSS capability limits.
 [Feed discovery and OPML](subscription-tools.md) describes import identity policy,
@@ -60,6 +60,21 @@ checks concurrent state writes, cancellation, queue saturation, shutdown locks,
 retained state and checkpoints. It uses about 6 GiB of temporary storage
 while seeding its multi-KiB article bodies.
 
+After building, the mute-filter scale reproduction seeds 200,000 articles with
+10.6 KB bodies and measures preview time, creation response time, background
+completion, peak RSS/heap and concurrent writer latency. Creation returns a filter
+with `matching: true` and a partial `matchCount`. The filters list reports completion;
+Settings polls every two seconds while work is pending. One runner scans 256 rows
+at a time with the ingestion matcher, outside write transactions. Preview uses the
+existing timestamp/id indexes, applies feed scope first, and yields between batches
+until 10,240 rows or about one second. Incomplete counts are lower bounds.
+The script retains its synthetic database and results in a new temporary directory.
+Pass an optional path to a baseline module exporting `PaperDatabase` to compare it.
+
+```sh
+node scripts/mute-filter-scale-test.mjs
+```
+
 After building, run the article-cleanup collection regression separately:
 
 ```sh
@@ -96,6 +111,18 @@ build running at the same time:
 ```sh
 npx playwright test --config playwright.routes.config.ts
 ```
+
+## Bulk article state changes
+
+`/api/entries/state` rejects more than 1,000 IDs with HTTP 400. The shared client
+sends larger changes in sequential batches, including each batch's expected
+revisions. A successful standalone action retains every undo token and Undo
+restores every batch. If a later batch fails, the client attempts to undo the
+completed standalone batches. Concurrent edits or expired tokens can prevent
+part of an undo; Paper reports that failure and asks the reader to refresh.
+These requests are not one atomic transaction. FreshRSS has no conditional undo,
+so a failed action can leave completed batches applied; its Undo sends the
+inverse operation for all IDs.
 
 ## Docker integration test
 

@@ -20,6 +20,14 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); fs.rmSync(directory, { recursive: true, force: true }) })
 
 describe('private connection settings', () => {
+  it('exposes only the active discussion provider and model', () => {
+    vi.stubEnv('PAPER_DISCUSSION_MODEL', 'custom-codex-model')
+    const settings = new ConnectionSettings(loadConfig())
+    expect(settings.discussionProvider()).toEqual({ provider: 'codex', model: 'custom-codex-model' })
+    settings.update({ ai: { provider: 'openai' }, openai: { discussionModel: 'custom-api-model', token: 'synthetic-secret', baseUrl: 'https://provider.test/v1' } })
+    expect(settings.discussionProvider()).toEqual({ provider: 'openai', model: 'custom-api-model' })
+  })
+
   it('uses existing environment configuration without writing or exposing credentials', () => {
     const config = loadConfig()
     const settings = new ConnectionSettings(config)

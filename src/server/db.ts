@@ -66,6 +66,7 @@ export interface UndoRecord {
 export type BriefingFeedback = 'useful' | 'too_broad' | 'missed'
 
 export interface PageOptions {
+  reverse?: boolean
   unreadOnly?: boolean
   limit?: number
   query?: string
@@ -136,6 +137,7 @@ export interface MuteFilterRecord {
   feedId: string
   feedTitle: string
   matchCount: number
+  matching: boolean
   createdAt: string
 }
 
@@ -176,6 +178,8 @@ export class PaperDatabase {
   readonly organization: LocalOrganizationService
   readonly feedFetch: FeedFetchStore
   private activeBackendId = ''
+  private closed = false
+  private muteBackfill: Promise<void> | undefined
 
   constructor(databasePath: string, options: { readOnly?: boolean } = {}) {
     this.databasePath = databasePath
@@ -212,6 +216,7 @@ export class PaperDatabase {
   get searchDatabasePath() { return this.databasePath }
 
   close() {
+    this.closed = true
     this.db.close()
   }
 
@@ -1235,7 +1240,7 @@ export class PaperDatabase {
   }
 
   private pageCursor(stream: StreamRef, options: PageOptions) {
-    const ascending = this.streamOrder(stream) === 'oldest'
+    const ascending = (this.streamOrder(stream) === 'oldest') !== Boolean(options.reverse)
     const direction = ascending ? 'ASC' : 'DESC'
     const scope = crypto.createHash('sha256').update(JSON.stringify([stream.kind, stream.id, Boolean(options.unreadOnly), options.query || '', options.after || '', options.before || '', Boolean(options.includeMuted), direction])).digest('hex')
     let cursor: { scope?: string; boundary?: [number, number, string]; snapshot?: string; offset?: number } = {}
@@ -1337,15 +1342,124 @@ export class PaperDatabase {
     this.db.prepare('INSERT INTO readwise_saves VALUES (?, ?) ON CONFLICT(url) DO UPDATE SET saved_at=excluded.saved_at').run(url, new Date().toISOString())
   }
 
-  previewMuteFilter(phrase: string, scope: MuteFilterScope, feedId = '') {
-    const title = 'instr(lower(title), lower(?)) > 0'
-    const content = 'instr(lower(content_text), lower(?)) > 0 OR instr(lower(excerpt), lower(?)) > 0'
-    const match = scope === 'title' ? title : scope === 'content' ? content : `${title} OR ${content} OR instr(lower(feed_title), lower(?)) > 0 OR instr(lower(author), lower(?)) > 0`
-    const params = Array(scope === 'title' ? 1 : scope === 'content' ? 2 : 5).fill(phrase)
-    const where = `WHERE (? = '' OR feed_id = ?) AND (${match})`
-    const count = Number(this.db.prepare(`SELECT COUNT(*) AS count FROM entries ${where}`).get(feedId, feedId, ...params)?.count || 0)
-    const items = this.db.prepare(`SELECT * FROM entries ${where} ORDER BY timestamp DESC LIMIT 8`).all(feedId, feedId, ...params).map(row => this.numberEntry(entryFromRow(row as Record<string, string | number>)))
-    return { count, items }
+  async previewMuteFilter(phrase: string, scope: MuteFilterScope, feedId = '') {
+    const rule = { phrase, scope, feed_id: feedId }
+    const fields = muteFields(scope)
+    const started = performance.now()
+    let cursor: { timestamp: number; id: string } | undefined
+    let count = 0
+    let scanned = 0
+    let truncated = true
+    const samples: Array<{ id: string }> = []
+    while (scanned < 10_240 && performance.now() - started < 1000) {
+      const clauses: string[] = []
+      const parameters: Array<string | number> = []
+      if (feedId) { clauses.push('feed_id = ?'); parameters.push(feedId) }
+      if (cursor) { clauses.push('(timestamp, id) < (?, ?)'); parameters.push(cursor.timestamp, cursor.id) }
+      const rows = this.db.prepare(`SELECT id, timestamp, feed_id, ${fields.join(', ')} FROM entries
+        ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
+        ORDER BY timestamp DESC, id DESC LIMIT 256`).all(...parameters) as Array<Record<string, string | number>>
+      scanned += rows.length
+      for (const row of rows) {
+        if (!matchesMuteFields(rule, String(row.feed_id), fields.map(field => String(row[field])))) continue
+        count++
+        if (samples.length < 8) samples.push({ id: String(row.id) })
+      }
+      if (rows.length < 256) { truncated = false; break }
+      const last = rows.at(-1)!
+      cursor = { timestamp: Number(last.timestamp), id: String(last.id) }
+      await new Promise<void>(resolve => setImmediate(resolve))
+      if (this.closed) throw new Error('Database closed during filter preview')
+    }
+    if (truncated && cursor) {
+      truncated = Boolean(this.db.prepare(`SELECT 1 FROM entries
+        WHERE ${feedId ? 'feed_id = ? AND' : ''} (timestamp, id) < (?, ?) LIMIT 1`)
+        .get(...(feedId ? [feedId] : []), cursor.timestamp, cursor.id))
+    }
+    const items = samples.flatMap(({ id }) => {
+      const entry = this.localEntry(id)
+      return entry ? [entry] : []
+    })
+    return { count, items, truncated }
+  }
+
+  private muteScanEnd(): number {
+    return Number(this.db.prepare('SELECT MAX(rowid) AS last FROM entries').get()?.last || 0)
+  }
+
+  // Project only the fields needed for matching. No HTML bodies cross the
+  // SQLite/JS boundary, and each query releases its read snapshot before writing.
+  private scanMuteBatch(rule: MuteRule, cursor: number, end: number) {
+    const fields = muteFields(rule.scope)
+    const rows = this.db.prepare(`SELECT rowid AS scan_rowid, id, feed_id, ${fields.join(', ')}
+      FROM entries WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT 256`)
+      .all(cursor, end) as Array<Record<string, string | number>>
+    const matches = rows.filter(row => matchesMuteFields(rule, String(row.feed_id), fields.map(field => String(row[field]))))
+      .map(row => ({ id: String(row.id) }))
+    return { matches, cursor: rows.length < 256 ? end : Number(rows.at(-1)!.scan_rowid) }
+  }
+
+  // Share one runner across startup and concurrent creations. Re-query after
+  // each filter so rules added during a scan join the same queue.
+  backfillMuteFilters(): Promise<void> {
+    if (!this.muteBackfill) {
+      this.muteBackfill = this.runMuteBackfill().finally(() => { this.muteBackfill = undefined })
+    }
+    return this.muteBackfill
+  }
+
+  private async runMuteBackfill() {
+    await new Promise<void>(resolve => setImmediate(resolve))
+    if (this.closed) return
+    // Earlier builds also marked SQL-matched ASCII filters done. Reset their
+    // checkpoints once so they receive the shared JavaScript matcher too.
+    if (!this.getSyncValue('mute_js_v1')) {
+      transaction(this.db, () => {
+        const rules = this.db.prepare('SELECT id, phrase FROM mute_filters').all()
+        for (const rule of rules) {
+          if (/^[\x00-\x7f]*$/.test(String(rule.phrase))) {
+            this.db.prepare('DELETE FROM sync_state WHERE key = ?').run(`mute_unicode_v1:${rule.id}`)
+          }
+        }
+        this.setSyncValue('mute_js_v1', 'done')
+      })
+    }
+    while (!this.closed) {
+      const rule = this.db.prepare(`SELECT id, phrase, scope, feed_id FROM mute_filters
+        WHERE NOT EXISTS (SELECT 1 FROM sync_state WHERE key = 'mute_unicode_v1:' || mute_filters.id AND value = 'done')
+        ORDER BY created_at, id LIMIT 1`).get() as (MuteRule & { id: string }) | undefined
+      if (!rule) return
+      await this.backfillMuteFilter(rule)
+    }
+  }
+
+  private async backfillMuteFilter(rule: MuteRule & { id: string }) {
+    const key = `mute_unicode_v1:${rule.id}`
+    const progress = this.getSyncValue(key)
+    if (progress === 'done') return
+    const state = progress ? JSON.parse(progress) as { cursor: number; end: number } : { cursor: 0, end: this.muteScanEnd() }
+    do {
+      if (this.closed) return
+      const batch = this.scanMuteBatch(rule, state.cursor, state.end)
+      let exists = false
+      transaction(this.db, () => {
+        exists = Boolean(this.db.prepare('SELECT 1 FROM mute_filters WHERE id = ?').get(rule.id))
+        if (!exists) return
+        const insert = this.db.prepare(`INSERT OR IGNORE INTO muted_entries (filter_id, entry_id)
+          SELECT ?, id FROM entries WHERE id = ?`)
+        for (const match of batch.matches) insert.run(rule.id, match.id)
+        state.cursor = batch.cursor
+        const done = state.cursor >= state.end
+        this.setSyncValue(key, done ? 'done' : JSON.stringify(state))
+        if (done) {
+          const count = Number(this.db.prepare('SELECT COUNT(*) AS count FROM muted_entries WHERE filter_id = ?').get(rule.id)!.count)
+          this.recordActivity({ kind: 'filter', origin: 'settings', summary: `Matched mute filter "${rule.phrase}"`, count,
+            details: { filterId: rule.id, scope: rule.scope, feedId: rule.feed_id } })
+        }
+      })
+      if (!exists) return
+      await new Promise<void>(resolve => setImmediate(resolve))
+    } while (state.cursor < state.end)
   }
 
   localEntries(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; after?: Date; before?: Date } = {}): Entry[] {
@@ -1378,7 +1492,7 @@ export class PaperDatabase {
       WHERE source_domain IN ('androidpolice.com', 'www.androidpolice.com', 'androidauthority.com', 'www.androidauthority.com')
       AND (timestamp > ? OR read = 0 OR starred = 1)
       ORDER BY read ASC, timestamp DESC LIMIT 1000
-    `).all(Math.floor(Date.now() / 1000) - 7 * 86400)
+    `).all(Date.now() - 7 * 86400_000)
     // Finish the ID query before yielding so background work can checkpoint WAL.
     const lookup = this.db.prepare('SELECT * FROM entries WHERE id = ?')
     for (const candidate of rows) {
@@ -1592,31 +1706,19 @@ export class PaperDatabase {
     }))
   }
 
-  createMuteFilter(phrase: string, scope: MuteFilterScope, feedId = ''): MuteFilterRecord {
+  async createMuteFilter(phrase: string, scope: MuteFilterScope, feedId = ''): Promise<MuteFilterRecord> {
     const id = crypto.randomUUID()
     const createdAt = new Date().toISOString()
-    this.db.exec('BEGIN IMMEDIATE')
-    try {
+    // Publish the rule before scanning. Ingestion now applies it to new and
+    // updated entries while the scan covers the rows that already existed.
+    transaction(this.db, () => {
       this.db.prepare('INSERT INTO mute_filters (id, phrase, scope, feed_id, created_at) VALUES (?, ?, ?, ?, ?)')
         .run(id, phrase, scope, feedId, createdAt)
-      const titleMatch = 'instr(lower(entries.title), lower(?)) > 0'
-      const contentMatch = 'instr(lower(entries.content_text), lower(?)) > 0 OR instr(lower(entries.excerpt), lower(?)) > 0'
-      const anyMatch = `${titleMatch} OR ${contentMatch} OR instr(lower(entries.feed_title), lower(?)) > 0 OR instr(lower(entries.author), lower(?)) > 0`
-      const match = scope === 'title' ? titleMatch : scope === 'content' ? contentMatch : anyMatch
-      const parameters = scope === 'title' ? [phrase]
-        : scope === 'content' ? [phrase, phrase]
-        : [phrase, phrase, phrase, phrase, phrase]
-      this.db.prepare(`
-        INSERT OR IGNORE INTO muted_entries (filter_id, entry_id)
-        SELECT ?, entries.id FROM entries
-        WHERE (? = '' OR entries.feed_id = ?) AND (${match})
-      `).run(id, feedId, feedId, ...parameters)
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
-    }
-    return this.muteFilters().find(filter => filter.id === id)!
+      this.setSyncValue(`mute_unicode_v1:${id}`, JSON.stringify({ cursor: 0, end: this.muteScanEnd() }))
+    })
+    void this.backfillMuteFilters().catch(error => console.error('Mute filter matching failed; it will resume after restart.', error))
+    const feedTitle = String(this.db.prepare('SELECT title FROM feeds WHERE id = ?').get(feedId)?.title || '')
+    return { id, phrase, scope, feedId, feedTitle, createdAt, matchCount: 0, matching: true }
   }
 
   muteFilters(): MuteFilterRecord[] {
@@ -1635,12 +1737,16 @@ export class PaperDatabase {
       feedId: String(row.feed_id),
       feedTitle: String(row.feed_title),
       matchCount: Number(row.match_count),
+      matching: this.getSyncValue(`mute_unicode_v1:${row.id}`) !== 'done',
       createdAt: String(row.created_at),
     }))
   }
 
   deleteMuteFilter(id: string): boolean {
-    return Number(this.db.prepare('DELETE FROM mute_filters WHERE id = ?').run(id).changes) > 0
+    return transaction(this.db, () => {
+      this.db.prepare('DELETE FROM sync_state WHERE key = ?').run(`mute_unicode_v1:${id}`)
+      return Number(this.db.prepare('DELETE FROM mute_filters WHERE id = ?').run(id).changes) > 0
+    })
   }
 
   createArticleReport(input: {
@@ -2068,15 +2174,24 @@ function visibleEntryClause(alias: string): string {
   return `NOT EXISTS (SELECT 1 FROM muted_entries WHERE muted_entries.entry_id = ${alias}.id)`
 }
 
-function entryMatchesMuteFilter(entry: Entry, rule: { phrase: string; scope: MuteFilterScope; feed_id: string }): boolean {
-  if (rule.feed_id && rule.feed_id !== entry.feedId) return false
-  const phrase = rule.phrase.toLocaleLowerCase()
-  if (!phrase) return false
-  const title = entry.title.toLocaleLowerCase()
-  const content = `${entry.excerpt}\n${plainText(entry.contentHtml)}`.toLocaleLowerCase()
-  if (rule.scope === 'title') return title.includes(phrase)
-  if (rule.scope === 'content') return content.includes(phrase)
-  return `${title}\n${entry.feedTitle}\n${entry.author}\n${content}`.toLocaleLowerCase().includes(phrase)
+type MuteRule = { phrase: string; scope: MuteFilterScope; feed_id: string }
+
+function muteFields(scope: MuteFilterScope): string[] {
+  return scope === 'title' ? ['title'] : scope === 'content' ? ['excerpt', 'content_text']
+    : ['title', 'excerpt', 'content_text', 'feed_title', 'author']
+}
+
+function matchesMuteFields(rule: MuteRule, feedId: string, fields: string[]): boolean {
+  if (rule.feed_id && rule.feed_id !== feedId) return false
+  const phrase = rule.phrase.toLowerCase()
+  return Boolean(phrase) && fields.some(value => value.toLowerCase().includes(phrase))
+}
+
+function entryMatchesMuteFilter(entry: Entry, rule: MuteRule): boolean {
+  const fields = rule.scope === 'title' ? [entry.title]
+    : rule.scope === 'content' ? [entry.excerpt, plainText(entry.contentHtml)]
+    : [entry.title, entry.excerpt, plainText(entry.contentHtml), entry.feedTitle, entry.author]
+  return matchesMuteFields(rule, entry.feedId, fields)
 }
 
 function parseObject(value: string): Record<string, unknown> {

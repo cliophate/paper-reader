@@ -3,10 +3,11 @@ import { api } from '../api'
 import type { ActivityRecord, ArticleReport, Feed, MuteFilter } from '../types'
 import { Icon } from './Icon'
 
-export function FiltersSettings({ feeds, onChanged, notify }: {
+export function FiltersSettings({ feeds, onChanged, notify, onMatchingChange }: {
   feeds: Feed[]
   onChanged: () => Promise<unknown>
   notify: (message: string) => void
+  onMatchingChange?: (matching: boolean) => void
 }) {
   const [filters, setFilters] = useState<MuteFilter[]>([])
   const [preview, setPreview] = useState<Awaited<ReturnType<typeof api.previewFilter>> | null>(null)
@@ -22,6 +23,28 @@ export function FiltersSettings({ feeds, onChanged, notify }: {
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Paper could not load filters') }
   }
   useEffect(() => { void load() }, [])
+
+  const matching = filters.some(filter => filter.matching)
+  // The reader keeps watching after Settings closes, so it can refresh once matching ends.
+  useEffect(() => { onMatchingChange?.(matching) }, [matching, onMatchingChange])
+
+  useEffect(() => {
+    if (!matching) return
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      try {
+        const next = await api.filters()
+        if (cancelled) return
+        setFilters(next)
+        if (filters.some(filter => filter.matching && next.some(item => item.id === filter.id && !item.matching))) await onChanged()
+      } catch (reason) {
+        if (cancelled) return
+        setError(reason instanceof Error ? reason.message : 'Paper could not load filters')
+        setFilters(current => [...current])
+      }
+    }, 2000)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [filters, onChanged])
 
   useEffect(() => { setPreview(null) }, [phrase, scope, feedId])
   const check = async () => {
@@ -39,7 +62,7 @@ export function FiltersSettings({ feeds, onChanged, notify }: {
       setPhrase('')
       setFilters(current => [filter, ...current])
       await onChanged()
-      notify(`${filter.matchCount} existing ${filter.matchCount === 1 ? 'article matches' : 'articles match'} this filter`)
+      notify('Filter added. Matching existing articles...')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Paper could not add the filter')
     } finally { setBusy(false) }
@@ -66,11 +89,11 @@ export function FiltersSettings({ feeds, onChanged, notify }: {
       <label><span>Feed</span><select disabled={busy} value={feedId} onChange={event => setFeedId(event.target.value)}><option value="">Every feed</option>{feeds.map(feed => <option key={feed.id} value={feed.id}>{feed.title}</option>)}</select></label>
       <button type="button" disabled={busy || phrase.trim().length < 2} onClick={() => void check()}>{previewing ? "Checking..." : "Preview matches"}</button><button type="submit" disabled={busy || !preview}>Add filter</button>
     </form>
-    {preview && <div className="filter-preview"><p>{preview.count} matching articles. Starred matches stay visible in Starred.</p><ul>{preview.items.map(entry => <li key={entry.id}>{entry.title} <small>{entry.feedTitle}</small></li>)}</ul></div>}
+    {preview && <div className="filter-preview"><p>{preview.truncated ? 'At least ' : ''}{preview.count} matching articles.{preview.truncated && ' Preview stopped after a limited scan. Adding the filter checks every article.'} Starred matches stay visible in Starred.</p><ul>{preview.items.map(entry => <li key={entry.id}>{entry.title} <small>{entry.feedTitle}</small></li>)}</ul></div>}
     {error && <p className="form-error">{error}</p>}
     <div className="settings-list">
       {filters.map(filter => <article className="settings-list-row" key={filter.id}>
-        <div><strong>"{filter.phrase}"</strong><span>{scopeLabel(filter.scope)}{filter.feedTitle ? ` in ${filter.feedTitle}` : ' in every feed'} · {filter.matchCount} hidden</span></div>
+        <div><strong>"{filter.phrase}"</strong><span>{scopeLabel(filter.scope)}{filter.feedTitle ? ` in ${filter.feedTitle}` : ' in every feed'} · {filter.matching ? 'Matching...' : `${filter.matchCount} hidden`}</span></div>
         <button onClick={() => void remove(filter)} disabled={busy} aria-label={`Remove filter ${filter.phrase}`}><Icon name="close" /> Remove</button>
       </article>)}
       {!filters.length && <div className="settings-empty">No filters yet.</div>}

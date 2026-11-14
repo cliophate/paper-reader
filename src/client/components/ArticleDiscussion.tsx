@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Entry } from '../types'
-import type { Discussion } from '../../shared/discussion'
+import type { Discussion, DiscussionProvider } from '../../shared/discussion'
 
 async function request<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`/api/discussion${path}`, { method, signal, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
@@ -11,6 +11,7 @@ async function request<T>(path: string, method = 'GET', body?: unknown, signal?:
 
 export function ArticleDiscussion({ entry, initialQuote, onClose }: { entry: Entry; initialQuote: string; onClose: () => void }) {
   const [discussion, setDiscussion] = useState<Discussion | null>(null)
+  const [provider, setProvider] = useState<DiscussionProvider | null>(null)
   const [question, setQuestion] = useState('')
   const [quote, setQuote] = useState(initialQuote)
   const [error, setError] = useState('')
@@ -34,8 +35,10 @@ export function ArticleDiscussion({ entry, initialQuote, onClose }: { entry: Ent
     input.current?.focus()
     void (async () => {
       try {
-        const state = await request<{ discussion: Discussion | null; enabled: boolean }>(`?entryId=${encodeURIComponent(entry.id)}`, 'GET', undefined, controller.signal)
-        if (!state.enabled) throw new Error('The Codex connection is not enabled.')
+        const state = await request<{ discussion: Discussion | null; enabled: boolean; provider: DiscussionProvider }>(`?entryId=${encodeURIComponent(entry.id)}`, 'GET', undefined, controller.signal)
+        if (!alive.current) return
+        setProvider(state.provider)
+        if (!state.enabled) throw new Error('Article discussions are not enabled.')
         const value = state.discussion || await request<Discussion>('', 'POST', { entryId: entry.id, fullText: Boolean(entry.fullText) }, controller.signal)
         if (!alive.current) return
         setDiscussion(value); setReady(true)
@@ -104,12 +107,12 @@ export function ArticleDiscussion({ entry, initialQuote, onClose }: { entry: Ent
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
     }
   }}>
-    <header className="discussion-header"><div><strong>Discuss</strong><span>Sol · medium</span></div><button onClick={onClose} aria-label="Return to article">Back to article</button></header>
+    <header className="discussion-header"><div><strong>Discuss</strong><span>{provider ? `${provider.provider === 'codex' ? 'Codex worker' : provider.provider === 'openai' ? 'OpenAI-compatible API' : 'AI off'}${provider.model ? ` · ${provider.model}` : ''}` : 'Loading provider...'}</span></div><button onClick={onClose} aria-label="Return to article">Back to article</button></header>
     <div className="discussion-source"><strong>{discussion?.source.title || entry.title}</strong><small>{discussion?.source.warning || 'Preparing article text...'}</small>
       {discussion && discussion.source.kind !== (entry.fullText ? 'fulltext' : 'feed') && <small>This conversation uses a different article version. Delete it to start with the version currently open.</small>}
     </div>
     <div className="discussion-messages" ref={list} onScroll={() => { const el = list.current!; nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }}>
-      {ready && !discussion?.messages.length && <p className="discussion-empty">Ask a question about the article, or bring your own interpretation. Sending shares the article text and this conversation with OpenAI through your Codex connection.</p>}
+      {ready && !discussion?.messages.length && <p className="discussion-empty">Ask a question about the article, or bring your own interpretation. Sending shares the article text and this conversation with {provider?.provider === 'codex' ? 'your Codex worker' : 'your configured OpenAI-compatible API' }.</p>}
       {discussion?.messages.map(message => <article key={message.id} className={`discussion-message ${message.role}`}><small>{message.role === 'user' ? 'You' : 'Paper'}</small>
         {message.quote && <blockquote>{message.quote}</blockquote>}
         <div>{renderText(message.text)}</div>

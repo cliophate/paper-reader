@@ -125,7 +125,7 @@ describe('Paper read model', () => {
     expect(result.uncategorized.map(feed => feed.id)).toEqual(['feed/two'])
   })
 
-  it('keeps search filters and complete paginated membership with mapped metadata lookups', () => {
+  it('keeps search filters and complete paginated membership with mapped metadata lookups', async () => {
     database.replaceNavigation(navigation)
     database.upsertEntries([
       entry({ id: 'unread', title: 'The synthetic story', contentHtml: '<p>Commonneedle</p>', timestamp: 40 }),
@@ -133,7 +133,8 @@ describe('Paper read model', () => {
       entry({ id: 'other', feedId: 'feed/two', title: 'The synthetic story', contentHtml: '<p>Commonneedle</p>', timestamp: 20 }),
       entry({ id: 'star', title: 'The muted synthetic story', contentHtml: '<p>Commonneedle</p>', starred: true, timestamp: 10 }),
     ])
-    database.createMuteFilter('muted synthetic', 'title')
+    await database.createMuteFilter('muted synthetic', 'title')
+    await database.backfillMuteFilters()
     const cases = [
       { kind: 'all' as const, id: 'all', unreadOnly: false, expected: ['unread', 'read', 'other'] },
       { kind: 'all' as const, id: 'all', unreadOnly: true, expected: ['unread', 'other'] },
@@ -347,7 +348,7 @@ describe('Paper read model', () => {
     expect(database.getSyncValue('coverage_generated_at')).toBe('2026-09-03T10:00:00.000Z')
   })
 
-  it('hides muted matches without changing read state and keeps stars accessible', () => {
+  it('hides muted matches without changing read state and keeps stars accessible', async () => {
     database.replaceNavigation(navigation)
     database.upsertEntries([
       entry({ id: 'sponsor', title: 'Thanks to 1Password for sponsoring the blog', read: false }),
@@ -355,8 +356,10 @@ describe('Paper read model', () => {
       entry({ id: 'story', title: 'A useful Linux story', read: false }),
     ])
 
-    const filter = database.createMuteFilter('sponsoring the blog', 'title')
-    database.createMuteFilter('New podcast episode', 'title')
+    const filter = await database.createMuteFilter('sponsoring the blog', 'title')
+    await database.backfillMuteFilters()
+    await database.createMuteFilter('New podcast episode', 'title')
+    await database.backfillMuteFilters()
 
     expect(database.localNavigation().unread).toBe(1)
     expect(database.localEntry('sponsor')?.read).toBe(false)

@@ -9,7 +9,7 @@ const title = 'Samsung Notes keeps me using Samsung phones for its S Pen support
 const entry = (overrides: Partial<Entry> = {}): Entry => ({
   id: 'one', feedId: 'feed/ap', feedTitle: 'Android Police', feedUrl: 'https://www.androidpolice.com/feed/',
   url: 'https://www.androidpolice.com/samsung-notes/', title: original, contentHtml: `<p>${body}</p>`,
-  author: 'Author', excerpt: '', timestamp: Math.floor(Date.now() / 1000), publishedAt: new Date().toISOString(),
+  author: 'Author', excerpt: '', timestamp: Date.now(), publishedAt: new Date().toISOString(),
   read: false, starred: true, readingMinutes: 2, thumbnailUrl: '', kind: 'article', ...overrides,
 })
 let db: PaperDatabase
@@ -28,6 +28,17 @@ beforeEach(() => {
 afterEach(() => { service.stop(); db.close(); vi.restoreAllMocks() })
 
 describe('clear headlines', () => {
+  it('excludes old read unstarred articles using millisecond timestamps', () => {
+    const old = Date.now() - 8 * 86400_000
+    db.upsertEntries([
+      entry({ id: 'old-read', timestamp: old, read: true, starred: false }),
+      entry({ id: 'old-unread', timestamp: old, read: false, starred: false }),
+      entry({ id: 'old-starred', timestamp: old, read: true, starred: true }),
+      entry({ id: 'recent-read', read: true, starred: false }),
+    ])
+    expect([...db.headlineCandidates()].map(item => item.id).sort()).toEqual(['old-starred', 'old-unread', 'one', 'recent-read'])
+  })
+
   it('does not start a review or decorate titles when disabled during a model request', async () => {
     model.mockImplementationOnce(async () => {
       service.setEnabled(false)

@@ -1,3 +1,8 @@
+export interface DiscussionProvider {
+  provider: 'none' | 'codex' | 'openai'
+  model: string
+}
+
 export interface DiscussionSource {
   title: string
   author: string

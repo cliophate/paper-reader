@@ -127,6 +127,7 @@ export default function App() {
   entryOrderRef.current = entryOrder
   const [loadingMore, setLoadingMore] = useState(false)
   const [continuation, setContinuation] = useState('')
+  const [previousContinuation, setPreviousContinuation] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [topicsRefreshKey, setTopicsRefreshKey] = useState(0)
   const [fetchingFullTextId, setFetchingFullTextId] = useState('')
@@ -190,8 +191,8 @@ export default function App() {
   const selected = entries.find(entry => entry.id === selectedId) || null
   const readerGeneration = useRef(0)
   useLayoutEffect(() => { readerGeneration.current += 1 }, [view, stream.kind, stream.id, unreadOnly, query, libraryMode, searchStream.kind, searchStream.id, searchUnread, after, before, pulseContext?.id])
-  const currentReader = useRef({ stream, selected })
-  currentReader.current = { stream, selected }
+  const currentReader = useRef({ stream, selected, previousContinuation, entries })
+  currentReader.current = { stream, selected, previousContinuation, entries }
   const selectedIndex = selected ? entries.findIndex(entry => entry.id === selected.id) : -1
   const adjacentSources = stream.kind === 'category' ? navigation?.folders || [] : stream.kind === 'feed' ? navigationFeeds(navigation) : []
   const currentFolderIndex = adjacentSources.findIndex(source => source.id === stream.id)
@@ -201,10 +202,10 @@ export default function App() {
   const previousFolderAvailable = Boolean(previousFolder)
   const nextFolderAvailable = Boolean(nextFolder)
   const atStreamEnd = selectedIndex >= 0 && selectedIndex === entries.length - 1 && !continuation
-  const atStreamStart = selectedIndex === 0
-  const previousArticleAvailable = pulseContext && selected ? pulseContext.ids.indexOf(selected.id) > 0 : selectedIndex > 0 || previousFolderAvailable
+  const atStreamStart = selectedIndex === 0 && !previousContinuation
+  const previousArticleAvailable = pulseContext && selected ? pulseContext.ids.indexOf(selected.id) > 0 : selectedIndex > 0 || Boolean(previousContinuation) || previousFolderAvailable
   const nextArticleAvailable = pulseContext && selected ? pulseContext.ids.indexOf(selected.id) < pulseContext.ids.length - 1 : (selectedIndex >= 0 && selectedIndex < entries.length - 1) || Boolean(continuation) || nextFolderAvailable
-  const previousArticleTitle = pulseContext ? 'Previous article in collection' : selectedIndex > 0 ? entries[selectedIndex - 1].title : 'Beginning'
+  const previousArticleTitle = pulseContext ? 'Previous article in collection' : selectedIndex > 0 ? entries[selectedIndex - 1].title : previousContinuation ? 'Previous article' : 'Beginning'
   const nextArticleTitle = pulseContext ? 'Next article in collection' : selectedIndex >= 0 && selectedIndex < entries.length - 1 ? entries[selectedIndex + 1].title : continuation ? 'Next article' : 'End'
   const starredView = !query && stream.kind === 'starred'
   const streamUnreadOnly = query ? searchUnread : unreadOnly && !starredView
@@ -302,25 +303,34 @@ export default function App() {
       if (libraryMode !== 'stream') {
         const items = libraryMode === 'recent' ? await api.recentReading() : await offlineArticles()
         if (serial !== requestSerial.current) return
-        setEntries(items); setContinuation(''); return
+        setEntries(items); setContinuation(''); setPreviousContinuation(''); return
       }
-      const result = await api.entries(query ? searchStream : target, query ? searchUnread : unreadOnly && target.kind !== 'starred', query, '', undefined, query ? dates : {})
+      // Refresh a tail-loaded stream from the same end, so the first page
+      // cannot introduce a gap ahead of the article being read.
+      const current = currentReader.current
+      const keepWindow = background === 'replace-in-place' || (!background && select === 'keep' && loadedEntriesScope.current === scope)
+      const reverse = Boolean((background || keepWindow) && !query && current.previousContinuation && current.stream.kind === target.kind && current.stream.id === target.id)
+      const result = await api.entries(query ? searchStream : target, query ? searchUnread : unreadOnly && target.kind !== 'starred', query, '', undefined, query ? dates : {}, reverse)
       // A bulk action must not collapse a paginated list back to page one.
-      const loadedCount = storyRowRefs.current.size
+      const loadedCount = current.entries.length
       const seenPages = new Set<string>()
-      while (background === 'replace-in-place' && result.continuation && result.items.length < loadedCount) {
-        if (serial !== requestSerial.current || seenPages.has(result.continuation)) break
-        seenPages.add(result.continuation)
-        const page = await api.entries(query ? searchStream : target, query ? searchUnread : unreadOnly && target.kind !== 'starred', query, result.continuation, undefined, query ? dates : {})
-        result.items.push(...page.items)
+      let cursor = reverse ? result.previousContinuation : result.continuation
+      while (keepWindow && cursor && result.items.length < loadedCount) {
+        if (serial !== requestSerial.current || seenPages.has(cursor)) break
+        seenPages.add(cursor)
+        const page = await api.entries(query ? searchStream : target, query ? searchUnread : unreadOnly && target.kind !== 'starred', query, cursor, undefined, query ? dates : {}, reverse)
+        if (reverse) result.items.unshift(...page.items)
+        else result.items.push(...page.items)
         result.continuation = page.continuation
+        result.previousContinuation = page.previousContinuation
+        cursor = reverse ? page.previousContinuation : page.continuation
       }
       if (serial !== requestSerial.current) return
       const scopeChanged = loadedEntriesScope.current !== scope
       loadedEntriesScope.current = scope
       const orderChanged = Boolean(result.order && result.order !== entryOrderRef.current)
       setEntryOrder(result.order || 'newest')
-      if (background === 'replace-in-place' && listRef.current) {
+      if (keepWindow && listRef.current) {
         const list = listRef.current
         const top = list.getBoundingClientRect().top
         pendingListScroll.current = { top: list.scrollTop, anchors: [...list.querySelectorAll<HTMLElement>('.story-row')]
@@ -329,7 +339,7 @@ export default function App() {
       }
       setEntries(current => {
         if (scopeChanged) return result.items
-        if (background === 'replace-in-place') {
+        if (keepWindow && !orderChanged) {
           const next = result.items.map(item => item.id === selectedIdRef.current && current.find(old => old.id === item.id)?.fullText ? { ...item, ...articleContent(current.find(old => old.id === item.id)!) } : item)
           const selectedIndex = current.findIndex(item => item.id === selectedIdRef.current)
           const selectedEntry = current[selectedIndex]
@@ -351,6 +361,7 @@ export default function App() {
         return query ? merged : merged.sort((a, b) => (result.order === 'oldest' ? 1 : -1) * (a.timestamp - b.timestamp || (a.crawledAt || 0) - (b.crawledAt || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)))
       })
       setContinuation(result.continuation)
+      setPreviousContinuation(result.previousContinuation || '')
       setSelectedId(current => {
         if (select === 'first') return result.items[0]?.id || ''
         if (select === 'last') return result.items.at(-1)?.id || ''
@@ -376,6 +387,9 @@ export default function App() {
         setSelectedId('')
         setMobilePane('stories')
         pushLocation({ selectedId: '', mobilePane: 'stories' })
+        // A new order starts from its first page, even after entering this stream backward.
+        currentReader.current = { ...currentReader.current, previousContinuation: '' }
+        setPreviousContinuation('')
         await loadEntries(stream)
       }
     } catch (error) {
@@ -399,6 +413,23 @@ export default function App() {
     setTopicsRefreshKey(current => current + 1)
     return result
   }, [loadEntries, loadNavigation, stream])
+
+  // Filter settings poll while open. Once closed, finish watching a pending
+  // filter here so its matches leave the list and unread counts.
+  const [filtersMatching, setFiltersMatching] = useState(false)
+  useEffect(() => {
+    if (!filtersMatching || overlays.settings) return
+    let cancelled = false
+    const timer = setInterval(async () => {
+      try {
+        const filters = await api.filters()
+        if (cancelled || filters.some(filter => filter.matching)) return
+        setFiltersMatching(false)
+        await reloadFilteredLibrary()
+      } catch { /* Try again on the next tick. */ }
+    }, 2000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [filtersMatching, overlays.settings, reloadFilteredLibrary])
 
   const loadMore = useCallback(async (): Promise<Entry[]> => {
     if (!continuation || loadingMore) return []
@@ -924,7 +955,7 @@ export default function App() {
       : { starred: false }
     setActionError(null)
     updateEntry(entry.id, patch)
-    let undoToken = ''
+    let undoToken: string | string[] = ''
     let revision = entry.stateRevision
     try {
       const result = await api.editState([entry.id], operation, origin, {
@@ -1069,23 +1100,25 @@ export default function App() {
 
     // Fetch without changing the current list. The navigation controller only
     // commits a result if the user is still here and the request has not expired.
-    let cursor = direction > 0 ? continuation : ''
+    let cursor = direction > 0 ? continuation : previousContinuation
     const seen = new Set<string>()
     while (cursor && !seen.has(cursor)) {
       seen.add(cursor)
-      const result = await api.entries(query ? searchStream : stream, streamUnreadOnly, query, cursor, signal, query ? dates : {})
+      const result = await api.entries(query ? searchStream : stream, streamUnreadOnly, query, cursor, signal, query ? dates : {}, direction < 0)
       if (signal.aborted) return null
       const known = new Set(entries.map(entry => entry.id))
       const more = result.items.filter(entry => !known.has(entry.id))
       if (more[0]) return () => {
         setEntries(current => {
           const currentIds = new Set(current.map(entry => entry.id))
-          return [...current, ...more.filter(entry => !currentIds.has(entry.id))]
+          const added = more.filter(entry => !currentIds.has(entry.id))
+          return direction > 0 ? [...current, ...added] : [...added, ...current]
         })
-        setContinuation(result.continuation)
-        commitEntry(more[0])
+        if (direction > 0) setContinuation(result.continuation)
+        else setPreviousContinuation(result.previousContinuation || '')
+        commitEntry(direction > 0 ? more[0] : more.at(-1)!)
       }
-      cursor = result.continuation
+      cursor = direction > 0 ? result.continuation : result.previousContinuation || ''
     }
     if (libraryMode !== 'stream' || query || pulseContext || !['category', 'feed'].includes(stream.kind) || !navigation) return null
     const sources = stream.kind === 'category' ? navigation.folders : navigationFeeds(navigation)
@@ -1096,18 +1129,20 @@ export default function App() {
       const source = sources[candidateIndex]
       if (!unreadOnly || source.unread > 0) {
         const target: StreamRef = { kind: stream.kind, id: source.id, title: source.title }
-        const result = await api.entries(target, unreadOnly, '', '', signal)
+        const result = await api.entries(target, unreadOnly, '', '', signal, {}, direction < 0)
         if (signal.aborted) return null
         if (result.items.length) return () => {
           const destination = direction > 0 ? result.items[0] : result.items.at(-1)!
           // Invalidate old list requests and avoid fetching this folder twice.
           requestSerial.current += 1
           preparedStreamLoad.current = target
+          loadedEntriesScope.current = JSON.stringify([libraryMode, target.kind, target.id, unreadOnly && target.kind !== 'starred', '', {}])
           pushLocation({ stream: target, selectedId: destination.id, query: '', mobilePane: 'article' })
           setStream(target)
           setEntries(result.items)
           setEntryOrder(result.order || 'newest')
           setContinuation(result.continuation)
+          setPreviousContinuation(result.previousContinuation || '')
           setSelectedId(destination.id)
           setQuery('')
           setMobilePane('article')
@@ -1121,7 +1156,7 @@ export default function App() {
     }
     return null
   }, setArticleNavigationBusy, error => notify(error instanceof Error ? error.message : 'Paper could not open the next article')),
-  [articleBoundaryStore, articleNavigation, continuation, entries, navigation, notify, openEntry, pushLocation, query, selected, stream, unreadOnly, streamUnreadOnly, pulseContext, searchStream, dates, libraryMode, loading])
+  [articleBoundaryStore, articleNavigation, continuation, previousContinuation, entries, navigation, notify, openEntry, pushLocation, query, selected, stream, unreadOnly, streamUnreadOnly, pulseContext, searchStream, dates, libraryMode, loading])
 
   const settleArticleBoundary = useCallback((direction: ArticleBoundaryDirection | null, smooth = true) => {
     const scroll = articleRef.current?.querySelector<HTMLElement>('.article-scroll')
@@ -1163,7 +1198,7 @@ export default function App() {
       if (stillHere && streamUnreadOnly) {
         articleNavigation.cancel()
         requestSerial.current += 1
-        setContinuation('')
+        setContinuation(''); setPreviousContinuation('')
         setLoadingMore(false)
         setLoading(false)
       }
@@ -1200,7 +1235,7 @@ export default function App() {
       if (stillHere && unreadOnly) {
         articleNavigation.cancel()
         requestSerial.current += 1
-        setContinuation(''); setLoadingMore(false); setLoading(false); setSelectedId('')
+        setContinuation(''); setPreviousContinuation(''); setLoadingMore(false); setLoading(false); setSelectedId('')
       }
       await loadNavigation()
       if (result.count && result.undoToken) {
@@ -1231,7 +1266,7 @@ export default function App() {
       if (stillHere && unreadOnly) {
         articleNavigation.cancel()
         requestSerial.current += 1
-        setContinuation(''); setLoadingMore(false); setLoading(false); setSelectedId('')
+        setContinuation(''); setPreviousContinuation(''); setLoadingMore(false); setLoading(false); setSelectedId('')
       }
       await loadNavigation()
       if (result.count && result.undoToken) {
@@ -1339,6 +1374,7 @@ export default function App() {
         setOverlays({ ...closedOverlays, command: true })
         return
       }
+      if (event.metaKey || event.ctrlKey || event.altKey) return
       if (typing || overlays.command || overlays.help || overlays.settings || overlays.appearance) return
       const key = event.key
       const direction = movementDirection(key)
@@ -1586,7 +1622,7 @@ export default function App() {
       {entryContext && <EntryContextMenu key={entryContext.entry.id} state={entryContext} unsubscribeAvailable={Boolean(organization?.capabilities.unsubscribe && uniqueFeeds(navigation).some(feed => feed.id === entryContext.entry.feedId))} relativeAvailable={libraryMode === 'stream' && online} onClose={() => setEntryContext(null)} onOpen={() => { setEntryContext(null); openEntry(entryContext.entry) }} onCopyUrl={() => { void copyArticleUrl(entryContext.entry); setEntryContext(null) }} onToggleRead={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.read ? 'unread' : 'read') }} onToggleStar={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.starred ? 'unstar' : 'star') }} onReport={() => { setReportEntry(entryContext.entry); setEntryContext(null) }} onMarkAbove={() => void markRelativeRead(entryContext.entry, 'above')} onMarkBelow={() => void markRelativeRead(entryContext.entry, 'below')} onUnsubscribe={() => void unsubscribeFeed({ id: entryContext.entry.feedId, title: entryContext.entry.feedTitle })} />}
       {selectionContext && (status.kirbyConfigured || status.discussionConfigured) && <SelectionContextMenu state={selectionContext} kirbyConfigured={status.kirbyConfigured} discussionConfigured={status.discussionConfigured} onClose={() => setSelectionContext(null)} onCreate={() => void createKirbyNote(selectionContext.quote)} onDiscuss={() => { if (!status.discussionConfigured) return notify('Article discussion is not configured'); if (selected) setDiscussionTarget({ entry: selected, quote: selectionContext.quote }); setSelectionContext(null) }} />}
       {discussionTarget && <ArticleDiscussion key={discussionTarget.entry.id} entry={discussionTarget.entry} initialQuote={discussionTarget.quote} onClose={() => setDiscussionTarget(null)} />}
-      {overlays.settings && <Settings backend={status.backend} section={settingsSection} setSection={setSettingsSection} initialFeedId={settingsFeedId} initialFeedView={settingsFeedView} navigation={navigation} onChanged={loadNavigation} onFiltersChanged={reloadFilteredLibrary} notify={notify} onConnectionsChanged={loadStatus} autoRead={autoRead} setAutoRead={value => { setAutoRead(value); localStorage.setItem('paper-auto-read', value ? 'automatic' : 'manual') }} onOpenEntry={id => { setOverlays(closedOverlays); void openTopicEntry(id) }} onClose={() => { setOverlays(closedOverlays); setSettingsFeedView('manage') }} />}
+      {overlays.settings && <Settings backend={status.backend} section={settingsSection} setSection={setSettingsSection} initialFeedId={settingsFeedId} initialFeedView={settingsFeedView} navigation={navigation} onChanged={loadNavigation} onFiltersChanged={reloadFilteredLibrary} onFiltersMatching={setFiltersMatching} notify={notify} onConnectionsChanged={loadStatus} autoRead={autoRead} setAutoRead={value => { setAutoRead(value); localStorage.setItem('paper-auto-read', value ? 'automatic' : 'manual') }} onOpenEntry={id => { setOverlays(closedOverlays); void openTopicEntry(id) }} onClose={() => { setOverlays(closedOverlays); setSettingsFeedView('manage') }} />}
       {overlays.appearance && <AppearancePopover theme={theme} setTheme={setTheme} readerFont={readerFont} setReaderFont={setReaderFont} readerSize={readerSize} setReaderSize={setReaderSize} readerSpacing={readerSpacing} setReaderSpacing={setReaderSpacing} readerWidth={readerWidth} setReaderWidth={setReaderWidth} onClose={() => setOverlays(closedOverlays)} />}
       {reportEntry && <ReportProblemModal entry={reportEntry} onClose={() => setReportEntry(null)} onSaved={() => { setReportEntry(null); notify('Problem reported') }} />}
       {toast && <div className="toast" role="status"><span>{toast.message}</span>{toast.action && <button onClick={() => { toast.action?.(); setToast(null) }}>{toast.actionLabel}</button>}</div>}
@@ -2262,12 +2298,12 @@ function CommandPalette({ commands, onClose }: { commands: Array<{ label: string
 
 function ShortcutHelp({ onClose }: { onClose: () => void }) {
   const shortcuts = [
-    ['j / ↓', 'Next article'], ['k / ↑', 'Previous article'], ['Ctrl K', 'Open commands'], ['Enter', 'Open selected article'], ['o', 'Open original'], ['b', 'Open original in a background tab'], ['q', 'Save to Readwise'], ['f', 'Fetch full article'], ['m', 'Toggle read'], ['s', 'Toggle star'], ['Shift A', 'Mark this stream read'], ['r', 'Refresh'], ['u / Esc', 'Close article'], ['[', 'Toggle sidebar'], [',', 'Open settings'], ['?', 'Show shortcuts'],
+    ['j / ↓', 'Next article'], ['k / ↑', 'Previous article'], ['Ctrl / Cmd K', 'Open commands'], ['Enter', 'Open selected article'], ['o', 'Open original'], ['b', 'Open original in a background tab'], ['q', 'Save to Readwise'], ['f', 'Fetch full article'], ['m', 'Toggle read'], ['s', 'Toggle star'], ['Shift A', 'Mark this stream read'], ['r', 'Refresh'], ['u / Esc', 'Close article'], ['[', 'Toggle sidebar'], [',', 'Open settings'], ['?', 'Show shortcuts'], ['/', 'Search'],
   ]
   return <Modal title="Keyboard shortcuts" onClose={onClose} className="help-modal"><dl>{shortcuts.map(([key, label]) => <div key={key}><dt>{key}</dt><dd>{label}</dd></div>)}</dl></Modal>
 }
 
-function Settings({ backend, section, setSection, initialFeedId, initialFeedView, navigation, onChanged, onFiltersChanged, notify, onConnectionsChanged, autoRead, setAutoRead, onOpenEntry, onClose }: {
+function Settings({ backend, section, setSection, initialFeedId, initialFeedView, navigation, onChanged, onFiltersChanged, onFiltersMatching, notify, onConnectionsChanged, autoRead, setAutoRead, onOpenEntry, onClose }: {
   backend: 'standalone' | 'freshrss'
   section: SettingsSection
   setSection: (value: SettingsSection) => void
@@ -2276,6 +2312,7 @@ function Settings({ backend, section, setSection, initialFeedId, initialFeedView
   navigation: NavigationPayload | null
   onChanged: () => Promise<unknown>
   onFiltersChanged: () => Promise<unknown>
+  onFiltersMatching: (matching: boolean) => void
   notify: (message: string) => void
   autoRead: boolean
   setAutoRead: (value: boolean) => void
@@ -2286,7 +2323,7 @@ function Settings({ backend, section, setSection, initialFeedId, initialFeedView
   const content = section === 'backend' ? <BackendSettings backend={backend} /> : section === 'feeds'
     ? <FeedSettings initialView={initialFeedView} onChanged={onChanged}><FeedManager initialFeedId={initialFeedId} navigation={navigation} onChanged={onChanged} notify={notify} /></FeedSettings>
     : section === 'filters'
-      ? <FiltersSettings feeds={uniqueFeeds(navigation)} onChanged={onFiltersChanged} notify={notify} />
+      ? <FiltersSettings feeds={uniqueFeeds(navigation)} onChanged={onFiltersChanged} notify={notify} onMatchingChange={onFiltersMatching} />
       : section === 'reports'
         ? <ReportsSettings onOpenEntry={onOpenEntry} notify={notify} />
         : section === 'activity'

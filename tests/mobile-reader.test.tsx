@@ -9,9 +9,9 @@ import { offlineArticles } from '../src/client/offline'
 import type { Entry, EntryPage, Feed } from '../src/client/types'
 
 vi.mock('../src/client/api', async () => ({ ...await vi.importActual('../src/client/api'), api: {
-  organization: vi.fn(), organize: vi.fn(), recentReading: vi.fn(), navigation: vi.fn(), status: vi.fn(), entries: vi.fn(), entry: vi.fn(), editState: vi.fn(), markStreamRead: vi.fn(),
+  reload: vi.fn(), organization: vi.fn(), organize: vi.fn(), recentReading: vi.fn(), navigation: vi.fn(), status: vi.fn(), entries: vi.fn(), entry: vi.fn(), editState: vi.fn(), markStreamRead: vi.fn(),
   markRelativeRead: vi.fn(), undo: vi.fn(),
-  setStreamOrder: vi.fn(), removeFeed: vi.fn(), fullText: vi.fn(), previewRead: vi.fn(), confirmRead: vi.fn(),
+  setStreamOrder: vi.fn(), removeFeed: vi.fn(), fullText: vi.fn(), previewRead: vi.fn(), confirmRead: vi.fn(), filters: vi.fn(),
 } }))
 
 vi.mock('../src/client/offline', () => ({ offlineArticles: vi.fn(), saveOffline: vi.fn(), removeOffline: vi.fn() }))
@@ -81,6 +81,139 @@ async function edge(target = 'video', cancel = false, release = true) {
 }
 
 describe('mobile reader switching', () => {
+  it('leaves browser modifiers untouched while preserving Shift+A, help and command shortcuts', async () => {
+    initialPage.items[0] = { ...post('a'), kind: 'article' }
+    await mount()
+    for (const modifier of ['ctrlKey', 'metaKey', 'altKey']) {
+      for (const key of ['f', 'A', 'j', '/', '?']) {
+        const event = new KeyboardEvent('keydown', { key, [modifier]: true, shiftKey: key === 'A', bubbles: true, cancelable: true })
+        await act(async () => { window.dispatchEvent(event) })
+        expect(event.defaultPrevented).toBe(false)
+      }
+    }
+    expect(api.fullText).not.toHaveBeenCalled()
+    expect(api.markStreamRead).not.toHaveBeenCalled()
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    vi.mocked(api.markStreamRead).mockResolvedValue({ ok: true, count: 0 })
+    const shiftA = new KeyboardEvent('keydown', { key: 'A', shiftKey: true, cancelable: true })
+    await act(async () => { window.dispatchEvent(shiftA) })
+    expect(shiftA.defaultPrevented).toBe(true)
+    expect(api.markStreamRead).toHaveBeenCalledOnce()
+    await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true })) })
+    expect(container.textContent).toContain('Keyboard shortcuts')
+    await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+    const command = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, cancelable: true })
+    await act(async () => { window.dispatchEvent(command) })
+    expect(command.defaultPrevented).toBe(true)
+  })
+
+  it.each([false, true])('enters the preceding folder at its last article and continues paging backward, sync=%s', async sync => {
+    const events = new Map<string, EventListener>()
+    vi.stubGlobal('EventSource', class {
+      addEventListener(name: string, listener: EventListener) { events.set(name, listener) }
+      removeEventListener() {}
+      close() {}
+    })
+    history.replaceState(null, '', '/?kind=category&id=tech&title=Tech&entry=c&pane=article&unread=0')
+    vi.mocked(api.entry).mockResolvedValue({ entry: post('c') })
+    vi.mocked(api.entries).mockImplementation(async (target, unread, query, cursor, signal, dates, reverse) => {
+      if (target.id === 'tech') return { items: [post('c')], continuation: '' }
+      if (!reverse) return { items: [post('first'), post('80')], continuation: 'forward' }
+      return cursor ? { items: [post('80')], continuation: '' } : { items: [post('99'), post('100')], continuation: '', previousContinuation: 'backward' }
+    })
+    await mount()
+    const previous = async () => { await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k' })) }) }
+    await previous()
+    expect(container.querySelector('.article-title')?.textContent || container.textContent).toContain('Post 100')
+    if (sync) {
+      await act(async () => { events.get('sync')!(new Event('sync')) })
+      expect(container.textContent).not.toContain('Post first')
+    }
+    await previous()
+    await previous()
+    expect(api.entries).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'instagram' }), false, '', 'backward', expect.any(AbortSignal), {}, true)
+    expect(container.textContent).toContain('Post 80')
+  })
+
+  it('keeps the reverse window on foreground Refresh, then Next enters the following feed', async () => {
+    const feeds = ['instagram', 'tech'].map(id => feed(id, 0))
+    vi.mocked(api.navigation).mockResolvedValue({ unread: 0, starred: 0, uncategorized: feeds, folders: [] })
+    history.replaceState(null, '', '/?kind=feed&id=tech&title=tech&entry=c&pane=article&unread=0')
+    vi.mocked(api.entry).mockResolvedValue({ entry: { ...post('c'), feedId: 'tech', kind: 'article' } })
+    const posts = Array.from({ length: 100 }, (_, i) => ({ ...post(String(i + 1)), kind: 'article' as const, feedId: 'instagram', timestamp: 100 - i }))
+    vi.mocked(api.entries).mockImplementation(async (target, unread, query, cursor, signal, dates, reverse) => {
+      if (target.id === 'tech') return { items: [{ ...post('c'), feedId: 'tech', kind: 'article' }], continuation: '' }
+      if (!reverse) return { items: posts.slice(0, 80), continuation: 'forward' }
+      return cursor ? { items: posts.slice(0, 20), continuation: '' }
+        : { items: posts.slice(20), continuation: '', previousContinuation: 'backward' }
+    })
+    await mount()
+    const key = async (key: string) => { await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) }) }
+    await key('k')
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 100')
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Refresh"]')!.click() })
+    expect(api.reload).toHaveBeenCalledOnce()
+    expect(api.entries).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'instagram' }), false, '', '', undefined, {}, true)
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 100')
+    await key('j')
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post c')
+    await key('k')
+    // Expand the reverse window, then refresh without discarding its first page.
+    for (let i = 0; i < 80; i++) await key('k')
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 20')
+    await key('r')
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 20')
+    await key('k')
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 19')
+    await key('j')
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 20')
+  })
+
+  it('starts a reordered stream from its first forward page after entering it backward', async () => {
+    const feeds = ['instagram', 'tech'].map(id => feed(id, 0))
+    vi.mocked(api.navigation).mockResolvedValue({ unread: 0, starred: 0, uncategorized: feeds, folders: [] })
+    history.replaceState(null, '', '/?kind=feed&id=tech&title=tech&entry=c&pane=article&unread=0')
+    vi.mocked(api.entry).mockResolvedValue({ entry: { ...post('c'), feedId: 'tech', kind: 'article' } })
+    const posts = Array.from({ length: 100 }, (_, i) => ({ ...post(String(i + 1)), kind: 'article' as const, feedId: 'instagram', timestamp: 100 - i }))
+    vi.mocked(api.entries).mockImplementation(async (target, _unread, _query, cursor, _signal, _dates, reverse) => {
+      if (target.id === 'tech') return { items: [{ ...post('c'), feedId: 'tech', kind: 'article' }], continuation: '' }
+      if (!reverse) return { items: posts.slice(0, 80), continuation: 'forward' }
+      return cursor ? { items: posts.slice(0, 20), continuation: '' }
+        : { items: posts.slice(20), continuation: '', previousContinuation: 'backward' }
+    })
+    vi.mocked(api.setStreamOrder).mockImplementation(async (_stream, order) => ({ ok: true, order }))
+    await mount()
+    await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true })) })
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 100')
+    const select = container.querySelector<HTMLSelectElement>('[aria-label="Article order"]')!
+    await act(async () => { select.value = 'oldest'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(api.setStreamOrder).toHaveBeenCalledWith(expect.objectContaining({ id: 'instagram' }), 'oldest')
+    expect(api.entries).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'instagram' }), false, '', '', undefined, {}, false)
+  })
+
+  it('refreshes the reader when a pending filter finishes after Settings closes', async () => {
+    const pending = { id: 'filter', phrase: 'kelvin', scope: 'title' as const, feedId: '', feedTitle: '', matchCount: 0, matching: true, createdAt: '2026-01-01' }
+    vi.mocked(api.filters).mockResolvedValue([pending])
+    await mount()
+    await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: ',', bubbles: true })) })
+    const filtersTab = [...container.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find(button => button.textContent === 'Filters')!
+    await act(async () => { filtersTab.click() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(container.textContent).toContain('Matching...')
+    await act(async () => { container.querySelector<HTMLButtonElement>('[role="dialog"][aria-label="Settings"] [aria-label="Close"]')!.click() })
+    const loads = vi.mocked(api.entries).mock.calls.length
+    const navigations = vi.mocked(api.navigation).mock.calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    expect(api.entries).toHaveBeenCalledTimes(loads)
+    vi.mocked(api.filters).mockResolvedValue([{ ...pending, matching: false, matchCount: 3 }])
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    expect(api.navigation.mock.calls.length).toBeGreaterThan(navigations)
+    expect(vi.mocked(api.entries).mock.calls.length).toBeGreaterThan(loads)
+    const polls = vi.mocked(api.filters).mock.calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(api.filters).toHaveBeenCalledTimes(polls)
+  })
+
   it.each([true, false])('counts loaded rows using the active unread filter, unread=%s', async unreadOnly => {
     history.replaceState(null, '', `/?kind=category&id=instagram&title=Instagram&pane=stories&unread=${unreadOnly ? '1' : '0'}`)
     initialPage.items = Array.from({ length: 9 }, (_, index) => ({ ...post(String(index)), read: index === 0 }))
@@ -826,7 +959,7 @@ describe('reader workflow improvements', () => {
     vi.mocked(api.previewRead).mockResolvedValue({ token: 'reviewed', count: 2 })
     await mount()
     await act(async () => { await vi.advanceTimersByTimeAsync(300) })
-    expect(api.entries).toHaveBeenCalledWith(expect.objectContaining({ kind: 'all' }), false, 'design', '', undefined, { after: '', before: '' })
+    expect(api.entries).toHaveBeenCalledWith(expect.objectContaining({ kind: 'all' }), false, 'design', '', undefined, { after: '', before: '' }, false)
     await click(container.querySelector('[aria-label="Mark search results read"]'))
     expect(api.previewRead).toHaveBeenCalledWith(expect.objectContaining({ kind: 'all' }), 'design', '', '')
     expect(api.markStreamRead).not.toHaveBeenCalled()

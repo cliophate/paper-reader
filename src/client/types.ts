@@ -66,6 +66,7 @@ export interface Entry {
 }
 
 export interface EntryPage {
+  previousContinuation?: string
   order?: 'newest' | 'oldest'
   items: Entry[]
   continuation: string
@@ -141,6 +142,7 @@ export interface MuteFilter {
   feedId: string
   feedTitle: string
   matchCount: number
+  matching: boolean
   createdAt: string
 }
 
