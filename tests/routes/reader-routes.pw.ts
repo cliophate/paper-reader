@@ -81,6 +81,32 @@ test('replaces old bookmarks, corrects slugs and falls back for missing numbers'
   await expect(page.getByText('Article not found', { exact: true })).toBeVisible()
 })
 
+test('a folder deep link waits for organization data', async ({ page }) => {
+  const { folder } = await fixture(page)
+  const path = `/folder/${folder.linkNumber}/a?unread=0&pane=stories`
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const entryRequests: string[] = []
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/entries') entryRequests.push(request.url())
+  })
+  await page.route('**/api/organization', async route => {
+    await gate
+    await route.continue()
+  })
+  await page.goto(path)
+  await expect(page.locator('.app')).toBeVisible()
+  // Let startup effects run while the organization response is held.
+  await expect(page.locator('.story-row.skeleton').first()).toBeVisible()
+  expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe(path)
+  expect(entryRequests).toEqual([])
+  release()
+  await ready(page, path)
+  await expect(page.locator('.stream-title h1')).toHaveText(folder.title)
+  await expect(page.locator('.story-row')).toHaveCount(3)
+  expect(entryRequests.every(url => new URL(url).searchParams.get('kind') === 'category')).toBe(true)
+})
+
 test('mobile panes survive back, forward and refresh', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   const { folder, article } = await fixture(page)
@@ -90,11 +116,10 @@ test('mobile panes survive back, forward and refresh', async ({ page }) => {
   const articlePath = `/folder/${folder.linkNumber}/a/a/${article.linkNumber}?unread=0`
   await ready(page, articlePath)
   await expect(page.locator('.app')).toHaveAttribute('data-mobile-pane', 'article')
-  // These are same-document transitions; ready waits for the destination state.
-  await page.evaluate(() => history.back())
+  await page.goBack()
   await ready(page, `/folder/${folder.linkNumber}/a?unread=0&pane=stories`)
   await expect(page.locator('.app')).toHaveAttribute('data-mobile-pane', 'stories')
-  await page.evaluate(() => history.forward())
+  await page.goForward()
   await ready(page, articlePath)
   await page.reload()
   await ready(page, articlePath)
@@ -102,7 +127,7 @@ test('mobile panes survive back, forward and refresh', async ({ page }) => {
   await page.getByRole('button', { name: 'Sources', exact: true }).click()
   await ready(page, `/folder/${folder.linkNumber}/a?unread=0`)
   await expect(page.locator('.app')).toHaveAttribute('data-mobile-pane', 'sources')
-  await page.evaluate(() => history.back())
+  await page.goBack()
   await ready(page, articlePath)
   await expect(page.locator('.app')).toHaveAttribute('data-mobile-pane', 'article')
 })
