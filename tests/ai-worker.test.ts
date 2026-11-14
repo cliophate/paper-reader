@@ -76,7 +76,7 @@ describe('isolated AI protocol', () => {
     await start({ concurrency: 1, queueCapacity: 1 })
     await fs.writeFile(path.join(directory, 'editorial-profile.md'), 'Synthetic editorial profile.')
     const db = new PaperDatabase(path.join(directory, 'briefing.sqlite'))
-    const service = new BriefingService({ codex: { ...config(), shortlistModel: 'hang' }, ai: { briefingsEnabled: true }, briefing: {} } as Config, db, {
+    const service = new BriefingService({ codex: { ...config(), shortlistModel: 'hang' }, ai: { enabled: true, provider: 'codex', briefingsEnabled: true }, briefing: {} } as Config, db, {
       navigation: async () => ({ folders: [], uncategorized: [], unread: 0, starred: 0 }),
       entries: async () => [], entriesPage: async () => ({ items: [], continuation: '' }), entry: async () => null, entryIds: async () => [],
     })
@@ -118,7 +118,7 @@ describe('isolated AI protocol', () => {
   it('shares a briefing job until its last caller disconnects', async () => {
     await fs.writeFile(path.join(directory, 'editorial-profile.md'), 'Synthetic editorial profile.')
     const db = new PaperDatabase(path.join(directory, 'joined.sqlite'))
-    const service = new BriefingService({ codex: { ...config(), shortlistModel: 'hang' }, ai: { briefingsEnabled: true }, briefing: {} } as Config, db, {
+    const service = new BriefingService({ codex: { ...config(), shortlistModel: 'hang' }, ai: { enabled: true, provider: 'codex', briefingsEnabled: true }, briefing: {} } as Config, db, {
       navigation: async () => ({ folders: [], uncategorized: [], unread: 0, starred: 0 }),
       entries: async () => [], entriesPage: async () => ({ items: [], continuation: '' }), entry: async () => null, entryIds: async () => [],
     })
@@ -159,7 +159,7 @@ describe('isolated AI protocol', () => {
   it('returns the same completed briefing to concurrent callers and rolls back failed persistence', async () => {
     await fs.writeFile(path.join(directory, 'editorial-profile.md'), 'Synthetic editorial profile.')
     const db = new PaperDatabase(path.join(directory, 'complete.sqlite'))
-    const service = new BriefingService({ codex: config(), ai: { briefingsEnabled: true }, briefing: {}, publicUrl: 'http://fixture.test', timeZone: 'UTC' } as Config, db, {
+    const service = new BriefingService({ codex: config(), ai: { enabled: true, provider: 'codex', briefingsEnabled: true }, briefing: {}, publicUrl: 'http://fixture.test', timeZone: 'UTC' } as Config, db, {
       navigation: async () => ({ folders: [], uncategorized: [], unread: 0, starred: 0 }),
       entries: async () => [], entriesPage: async () => ({ items: [], continuation: '' }), entry: async () => null, entryIds: async () => [],
     })

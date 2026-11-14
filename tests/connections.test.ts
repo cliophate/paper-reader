@@ -32,6 +32,81 @@ describe('private connection settings', () => {
     expect(config.readwise.token).toBe('synthetic-reader-token')
   })
 
+  it('keeps API keys private, persists them, and removes environment fallback', () => {
+    vi.stubEnv('PAPER_OPENAI_API_KEY', 'synthetic-api-environment')
+    const config = loadConfig()
+    const settings = new ConnectionSettings(config)
+    expect(settings.view().openai).toMatchObject({ tokenConfigured: true, tokenSource: 'environment' })
+    settings.update({ ai: { enabled: true, provider: 'openai' }, openai: { token: 'synthetic-api-saved', discussionModel: 'local/model', baseUrl: 'http://localhost:11434/v1' } })
+    expect(config.codex.enabled).toBe(false)
+    expect(config.ai.provider).toBe('openai')
+    expect(settings.view().openai).toMatchObject({ tokenConfigured: true, tokenSource: 'settings', discussionModel: 'local/model' })
+    expect(JSON.stringify(settings.view())).not.toContain('synthetic-api')
+    settings.update({ openai: { token: '' } })
+    expect(config.openai.token).toBe('synthetic-api-saved')
+    const restoredConfig = loadConfig()
+    const restored = new ConnectionSettings(restoredConfig)
+    expect(restoredConfig.openai.token).toBe('synthetic-api-saved')
+    expect(restoredConfig.ai.provider).toBe('openai')
+    expect(fs.statSync(path.join(directory, 'connections.json')).mode & 0o777).toBe(0o600)
+    restored.update({ ai: { enabled: false } })
+    expect(restored.view().openai.tokenConfigured).toBe(true)
+    restored.update({ openai: { token: null }, ai: { enabled: true, provider: 'codex' } })
+    expect(restoredConfig.codex.enabled).toBe(true)
+    expect(restoredConfig.openai.token).toBe('')
+    const clearedConfig = loadConfig()
+    expect(new ConnectionSettings(clearedConfig).view().openai).toMatchObject({ tokenConfigured: false, tokenSource: null })
+    expect(clearedConfig.openai.token).toBe('')
+  })
+
+  it('tests form values without saving or changing credentials and switches', () => {
+    vi.stubEnv('PAPER_OPENAI_API_KEY', 'synthetic-api-environment')
+    const config = loadConfig()
+    const settings = new ConnectionSettings(config)
+    const original = settings.view()
+    expect(settings.openaiTestConfig({ token: 'synthetic-unsaved', discussionModel: 'local' })).toMatchObject({ token: 'synthetic-unsaved', discussionModel: 'local' })
+    expect(settings.openaiTestConfig({ token: '' }).token).toBe('synthetic-api-environment')
+    expect(settings.openaiTestConfig({ token: null }).token).toBe('')
+    expect(() => settings.openaiTestConfig({ trustedOrigins: ['http://localhost'] })).toThrow('Unknown connection setting')
+    expect(settings.view()).toEqual(original)
+    expect(config.openai.token).toBe('synthetic-api-environment')
+    expect(fs.readdirSync(directory)).toEqual([])
+  })
+
+  it('keeps a saved key on its origin', () => {
+    vi.stubEnv('PAPER_OPENAI_API_KEY', 'synthetic-api-environment')
+    const config = loadConfig()
+    const settings = new ConnectionSettings(config)
+    const moved = { openai: { baseUrl: 'https://models.example.test/v1' } }
+    expect(() => settings.openaiTestConfig(moved.openai)).toThrow('Enter the API key again')
+    expect(() => settings.update(moved)).toThrow('Enter the API key again')
+    expect(settings.openaiTestConfig({ baseUrl: 'https://api.openai.com/other' }).token).toBe('synthetic-api-environment')
+    expect(settings.openaiTestConfig({ ...moved.openai, token: 'synthetic-new' }).token).toBe('synthetic-new')
+    settings.update({ openai: { ...moved.openai, token: null } })
+    expect(config.openai).toMatchObject({ baseUrl: 'https://models.example.test/v1', token: '' })
+    settings.update({ openai: { baseUrl: 'https://other.example.test/v1' } })
+    expect(config.openai.token).toBe('')
+  })
+
+  it('requires explicit provider selection on a new installation', () => {
+    vi.stubEnv('CODEX_ENABLED', 'false')
+    const config = loadConfig()
+    const settings = new ConnectionSettings(config)
+    settings.update({ ai: { enabled: true } })
+    expect(settings.view().ai.provider).toBe('none')
+    expect(config.codex.enabled).toBe(false)
+    settings.update({ ai: { provider: 'openai' } })
+    expect(config.ai.provider).toBe('openai')
+    settings.update({ ai: { provider: 'none' } })
+    expect(new ConnectionSettings(loadConfig()).view().ai.provider).toBe('none')
+  })
+
+  it('does not expose malformed API environment configuration', () => {
+    vi.stubEnv('PAPER_OPENAI_BASE_URL', 'https://user:synthetic-secret@example.test/v1')
+    expect(() => new ConnectionSettings(loadConfig())).toThrow('Invalid OpenAI-compatible API configuration')
+    try { new ConnectionSettings(loadConfig()) } catch (error) { expect(String(error)).not.toContain('synthetic-secret') }
+  })
+
   it('keeps every optional connection off for a new installation', () => {
     for (const key of ['READWISE_TOKEN', 'KIRBY_PUBLISH_TOKEN', 'KIRBY_PUBLISH_URL', 'CODEX_ENABLED']) vi.stubEnv(key, '')
     const config = loadConfig()
@@ -97,7 +172,7 @@ describe('private connection settings', () => {
     const config = loadConfig()
     const settings = new ConnectionSettings(config)
     settings.update({ ai: { discussionEnabled: false, briefingsEnabled: false, headlinesEnabled: false, collectionsEnabled: false, codexEnabled: false } })
-    expect(config.ai).toEqual({ discussionEnabled: false, briefingsEnabled: false })
+    expect(config.ai).toMatchObject({ discussionEnabled: false, briefingsEnabled: false })
     expect(config.headlines.enabled).toBe(false)
     expect(config.collections.enabled).toBe(false)
     expect(config.codex.enabled).toBe(false)
@@ -105,6 +180,10 @@ describe('private connection settings', () => {
   })
 
   it.each([
+    { openai: { trustedOrigins: ['http://localhost'] } }, { ai: { provider: 'unsupported' } },
+    { openai: { token: 'synthetic-secret\nheader' } }, { openai: { token: 42 } },
+    { openai: { baseUrl: 'https://user:synthetic-secret@example.test/v1' } }, { openai: { baseUrl: 'https://example.test/?token=synthetic-secret' } },
+    { openai: { baseUrl: 'file:///tmp/fixture' } }, { openai: { editorModel: '' } }, { openai: { groupingModel: 'bad\nmodel' } },
     null, [], { unknown: {} }, { ai: { enabled: 'false' } }, { ai: { bin: '/bin/sh' } },
     { readwise: { location: 'invalid' } }, { readwise: { token: 42 } }, { readwise: { token: 'synthetic-secret\nheader' } },
     { kirby: { publishUrl: 'file:///tmp/publish' } }, { kirby: { publishUrl: 'https://user:synthetic-secret@example.test/publish' } },

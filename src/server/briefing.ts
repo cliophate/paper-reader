@@ -3,7 +3,7 @@ import { abortable } from './abort.js'
 import { AiError } from './ai-errors.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { runCodex } from './codex.js'
+import { runAiBatch, aiEnabled } from './ai-provider.js'
 import type { Config } from './config.js'
 import type { PaperDatabase, BriefingRecord } from './db.js'
 import type { EntrySource } from './repository.js'
@@ -161,7 +161,7 @@ export class BriefingService {
 
   private async generateEdition(kind: 'morning' | 'evening', force: boolean, signal: AbortSignal): Promise<BriefingRecord> {
     signal.throwIfAborted()
-    if (!this.config.ai.briefingsEnabled || !this.config.codex.enabled) throw new Error('Briefing generation is disabled. Enable it in Settings.')
+    if (!this.config.ai.briefingsEnabled || !aiEnabled(this.config)) throw new Error('Briefing generation is disabled. Enable it in Settings.')
     const recent = force ? null : this.db.recentGeneratedBriefing(kind, new Date(Date.now() - 15 * 60_000))
     if (recent) return recent
 
@@ -372,7 +372,7 @@ export class BriefingService {
     signal.throwIfAborted()
     if (!this.config.ai.briefingsEnabled) throw new Error('Briefing generation is disabled.')
     const model = stage === 'shortlist' ? this.config.codex.shortlistModel : this.config.codex.editorModel
-    return abortable(() => runCodex(this.config.codex, model, instruction, input, schema, undefined, signal), signal)
+    return abortable(() => runAiBatch(this.config, stage, model, instruction, input, schema, undefined, signal), signal)
   }
 
   private async enrichEntries(writerIds: string[], clusters: NewsCluster[], entries: Map<string, Entry>, signal: AbortSignal) {

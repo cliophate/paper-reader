@@ -59,3 +59,8 @@ protect them along with the configuration when backing up the deployment.
 
 All client connections must preserve server-sent events for sync and discussion
 updates. Do not cache API responses or buffer event streams.
+
+Private AI endpoints need an exact origin in `PAPER_TRUSTED_AI_ORIGINS`.
+Settings cannot grant private-network access. API keys stay on the Paper server,
+so only trusted users should have access to connection settings. See
+[AI providers](ai-providers.md).

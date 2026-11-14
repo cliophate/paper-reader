@@ -51,7 +51,7 @@ describe('briefing candidate reads', () => {
       entry: async () => null, entryIds: async () => [],
       ...(local ? { briefingEntries: read } : {}),
     }
-    const config = { ai: { briefingsEnabled: true }, codex: { enabled: true }, briefing: { includeReadUntil: '' } } as Config
+    const config = { ai: { enabled: true, provider: 'codex', briefingsEnabled: true }, codex: { enabled: true }, briefing: { includeReadUntil: '' } } as Config
     return { service: new BriefingService(config, db, source), getNavigation, read }
   }
 

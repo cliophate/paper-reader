@@ -8,7 +8,7 @@ tokens, or a real .env. Open Settings > Reading & connections to enable or disab
 AI, Readwise Reader, and Kirby notes. Changes take effect without restarting
 Paper. The same settings apply to every device using this server.
 
-Settings accepts Readwise and Kirby tokens. Password fields stay blank after
+Settings accepts Readwise and Kirby tokens and OpenAI-compatible API keys. Password fields stay blank after
 saving; blank means keep the current token. Remove token clears it when you
 save and prevents fallback to an environment token. Turning a connection off
 keeps its credentials so you can enable it again later.
@@ -80,16 +80,18 @@ and full-text requests reject private network destinations.
 
 ## AI
 
-CODEX_ENABLED defaults to false. Settings provides a master
-AI switch, a Codex switch, and individual switches for discussions, headline
-cleanup, Pulse grouping, and briefing generation. Turning AI off stops new model
-requests and cancels active discussions. A batch request already running may
-finish; disabled features do not start its next review or batch. Existing
-discussions, briefings, and collections remain stored. There are no AI credentials
-or CLI tools in the default reader image. AI model calls send article text to
-the selected provider. Enabling grouping or headline cleanup can make background
-requests after synchronization. Enabling a CLI does not itself enable every
-model on an account. Set model names that your account can access.
+AI is off by default. Settings provides a master switch, a provider selector,
+and switches for discussions, headline cleanup, Pulse grouping, and briefings.
+Choose None, Codex worker, or OpenAI-compatible API. See
+[AI providers](ai-providers.md) for API setup, model names, keys and private URLs.
+Existing Codex configuration keeps working after an upgrade.
+
+Turning AI off stops new model requests and cancels active discussions. A batch
+request already running may finish. Disabled features do not start its next
+review or batch. Existing discussions, briefings and collections remain stored.
+Model calls send article text to the selected provider. Grouping and headline
+cleanup can make background requests after synchronization and may incur charges.
+Choose models your account can access.
 
 ### Isolated Codex worker
 
@@ -135,7 +137,7 @@ match the owner of the auth directory and must not use UID 0. Setup records the
 current user's IDs. Run setup and login as a non-root user.
 
 Complete the device login in your own browser, then enable Codex and the desired
-features in Settings. Settings never accepts or returns AI tokens. Keep the
+features in Settings. Codex login stays in the worker; API keys use Settings. Keep the
 Codex directory dedicated to Paper's login. Do not copy a host Codex home with
 AGENTS.md, skills or other instructions into it. Codex may load files from its
 login directory despite the tool-disabling flags.
@@ -234,7 +236,7 @@ from util-linux. Socket paths must be absolute and at most 103 UTF-8 bytes.
 
 ### Native development
 
-Use the worker for real feeds, including when running Paper natively. Configure
+Use the worker for Codex with real feeds, including when running Paper natively. Configure
 `PAPER_AI_WORKER_SOCKET` and the same `PAPER_AI_WORKER_SECRET`. Mount a dedicated
 host directory into the worker at `/run/paper-ai`, with mode 0700 and the same
 non-root UID as native Paper. Point native Paper at `worker.sock` in that host
@@ -242,7 +244,7 @@ directory. Keep the worker off Paper's networks and never mount Paper's data or
 environment file into it. For synthetic development fixtures only, install and log in
 to Codex, set `CODEX_BIN`, and explicitly set `PAPER_AI_LOCAL=unsafe`. This logs a
 warning at startup. It allows the CLI to read Paper files and process secrets,
-and is unsafe for real feeds. Without either configuration, AI stays unavailable.
+and is unsafe for real feeds. Without either configuration, Codex stays unavailable.
 A configured worker always takes precedence over the unsafe opt-in.
 
 Official setup and authentication guidance:

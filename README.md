@@ -94,7 +94,8 @@ Open **Settings > Reading & connections** to enable:
 - Kirby note drafts through a compatible publishing plugin.
 
 Each connection has setup instructions. Readwise and Kirby tokens can be saved
-in Settings. AI requires the isolated Codex worker and a CLI login. AI installs
+in Settings. AI supports an OpenAI-compatible API or the isolated Codex worker
+with a ChatGPT login. See [AI providers](docs/ai-providers.md) for setup. AI installs
 from before alpha.4 must follow the
 [worker upgrade steps](docs/integrations.md#upgrade-an-existing-ai-installation).
 Reading works without any of these connections.

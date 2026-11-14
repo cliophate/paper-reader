@@ -235,7 +235,8 @@ it('keeps legacy provider installs readable and reports the removed provider onc
   await ready(number)
   const settings = await (await fetch(`http://127.0.0.1:${number}/api/settings/connections`)).json()
   expect(settings.aiRuntime.available).toBe(false)
-  expect(settings.aiRuntime.message).toContain('AI is unavailable')
+  expect(settings.aiRuntime.message).toContain('AI is off')
+  expect(settings.ai.provider).toBe('none')
   expect(settings.ai).not.toHaveProperty('openCodeEnabled')
   server.child.kill('SIGTERM')
   const result = await server.exited

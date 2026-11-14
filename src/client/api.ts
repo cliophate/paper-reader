@@ -30,6 +30,7 @@ export const api = {
   setCheckInterval: (body: FeedCheckRevision & { feedId?: string; intervalMinutes: number | null }) => request<{ snapshot: FeedChecksView }>('/api/feed-checks/interval', { method: 'POST', body: JSON.stringify(body) }),
   organization: (refresh = false, signal?: AbortSignal) => request<OrganizationView>(`/api/organization${refresh ? '?refresh=1' : ''}`, { signal: sourceRequestSignal(signal) }),
   organize: (requestBody: OrganizationRequest) => request<OrganizationResponse>('/api/organization/commands', { method: 'POST', body: JSON.stringify(requestBody) }),
+  testAiConnection: (openai: ConnectionsUpdate['openai']) => request<{ available: boolean; message: string }>('/api/settings/connections/test-ai', { method: 'POST', body: JSON.stringify({ openai }) }),
   connections: () => request<ConnectionsSettings>('/api/settings/connections'),
   updateConnections: (settings: ConnectionsUpdate) => request<ConnectionsSettings>('/api/settings/connections', { method: 'PATCH', body: JSON.stringify(settings) }),
   recentReading: () => request<Entry[]>('/api/reading'),

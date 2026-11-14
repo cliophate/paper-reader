@@ -25,7 +25,7 @@ export function ConnectionSettings({ onChanged }: { onChanged: () => Promise<voi
     {error && <p role="alert">{error} <button onClick={() => setAttempt(value => value + 1)}>Retry</button></p>}
     {!settings && !error && <p role="status">Loading connections...</p>}
     {settings && <>
-      <AiConnection runtime={settings.aiRuntime} settings={settings.ai} onSave={save} />
+      <AiConnection runtime={settings.aiRuntime} settings={settings.ai} openai={settings.openai} onSave={save} />
       <TokenConnection kind="readwise" settings={settings} onSave={save} />
       <TokenConnection kind="kirby" settings={settings} onSave={save} />
       <p className="connection-help">Tokens stay on the server and are never returned by Settings. Stored tokens are private files, without encryption at rest. Use HTTPS for remote access and protect Paper with your proxy login. Anyone with access to Paper can change these settings.</p>
@@ -56,33 +56,67 @@ function ConnectionForm({ title, children, onSave }: { title: string; children: 
   </form>
 }
 
-function AiConnection({ settings, runtime, onSave }: { settings: AiSettings; runtime?: ConnectionsSettings['aiRuntime']; onSave: (patch: ConnectionsUpdate) => Promise<void> }) {
+function AiConnection({ settings, openai, runtime, onSave }: { settings: AiSettings; openai: ConnectionsSettings['openai']; runtime?: ConnectionsSettings['aiRuntime']; onSave: (patch: ConnectionsUpdate) => Promise<void> }) {
   const [ai, setAi] = useState(settings)
   const toggle = (key: keyof AiSettings) => (value: boolean) => setAi(previous => ({ ...previous, [key]: value }))
-  const provider = ai.codexEnabled
-  return <ConnectionForm title="AI features" onSave={() => onSave({ ai })}>
+  const [models, setModels] = useState(() => {
+    const { tokenConfigured: _configured, tokenSource: _source, ...fields } = openai
+    return fields
+  })
+  const [token, setToken] = useState('')
+  const [removeToken, setRemoveToken] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState('')
+  const provider = ai.provider !== 'none'
+  const apiSettings = () => ({ ...models, ...(removeToken ? { token: null } : token.trim() ? { token: token.trim() } : {}) })
+  async function save() {
+    await onSave({ ai, ...(ai.provider === 'openai' ? { openai: apiSettings() } : {}) })
+    setToken(''); setRemoveToken(false)
+  }
+  async function test() {
+    setTesting(true); setTestResult('')
+    try { setTestResult((await api.testAiConnection(apiSettings())).message) }
+    catch (error) { setTestResult(error instanceof Error ? error.message : 'Could not test the connection.') }
+    finally { setTesting(false) }
+  }
+  return <ConnectionForm title="AI features" onSave={save}>
     {runtime && <p role="status" className="connection-help">{runtime.message}</p>}
     <Toggle label="Enable AI features" checked={ai.enabled} onChange={toggle('enabled')} />
     <p className="connection-help">AI sends article text to your chosen provider. Pulse grouping and headline cleanup can run in the background after a sync and may incur charges. Turning AI off stops new requests. Requests already running may finish.</p>
     <fieldset disabled={!ai.enabled}>
       <legend>Providers</legend>
-      <Toggle label="Use Codex" checked={ai.codexEnabled} onChange={toggle('codexEnabled')} />
+      <label className="connection-field">AI provider<select value={ai.provider} onChange={event => { setAi(previous => ({ ...previous, provider: event.target.value as AiSettings['provider'] })); setTestResult('') }}>
+        <option value="none">None</option><option value="codex">Codex worker</option><option value="openai">OpenAI-compatible API</option>
+      </select></label>
       {!provider && <p className="connection-help">Select a provider to run AI features.</p>}
     </fieldset>
     <fieldset disabled={!ai.enabled}>
       <legend>Features</legend>
-      <Toggle label="Article discussions" checked={ai.discussionEnabled} disabled={!ai.codexEnabled} onChange={toggle('discussionEnabled')} />
-      <Toggle label="Clearer headlines" checked={ai.headlinesEnabled} disabled={!ai.codexEnabled} onChange={toggle('headlinesEnabled')} />
+      <Toggle label="Article discussions" checked={ai.discussionEnabled} disabled={!provider} onChange={toggle('discussionEnabled')} />
+      <Toggle label="Clearer headlines" checked={ai.headlinesEnabled} disabled={!provider} onChange={toggle('headlinesEnabled')} />
       <Toggle label="Pulse story grouping" checked={ai.collectionsEnabled} disabled={!provider} onChange={toggle('collectionsEnabled')} />
       <Toggle label="Briefing generation" checked={ai.briefingsEnabled} disabled={!provider} onChange={toggle('briefingsEnabled')} />
     </fieldset>
-    <details className="connection-setup"><summary>How to set up AI</summary>
+    {ai.provider === 'openai' && <fieldset disabled={testing}>
+      <legend>OpenAI-compatible API</legend>
+      <p className="connection-help">Enter a Chat Completions base URL, including /v1 if your server uses it. Paper sends requests directly from this server. No AI worker or CLI is needed. Choose models your provider supports.</p>
+      <label className="connection-field">Base URL<input type="url" value={models.baseUrl} onChange={event => { setModels(previous => ({ ...previous, baseUrl: event.target.value })); setTestResult('') }} autoComplete="off" /></label>
+      <label className="connection-field">API key<input type="password" value={token} onChange={event => { setToken(event.target.value); setRemoveToken(false); setTestResult('') }} placeholder={openai.tokenConfigured && !removeToken ? 'Key saved. Leave blank to keep it.' : 'Optional for servers without authentication'} autoComplete="new-password" spellCheck={false} maxLength={4096} /></label>
+      {openai.tokenConfigured && !removeToken && <p className="connection-help">Key {openai.tokenSource === 'environment' ? 'provided by the server environment' : 'saved on the server'}. <button type="button" onClick={() => { setRemoveToken(true); setToken(''); setTestResult('') }}>Remove key</button></p>}
+      {removeToken && <p className="connection-help">Saving removes the key and disables any environment key. <button type="button" onClick={() => { setRemoveToken(false); setTestResult('') }}>Keep key</button></p>}
+      {([['discussionModel', 'Discussion model'], ['headlinesModel', 'Headlines model'], ['groupingModel', 'Grouping model'], ['shortlistModel', 'Briefing shortlist model'], ['editorModel', 'Briefing editor model']] as const).map(([key, label]) => <label className="connection-field" key={key}>{label}<input value={models[key]} onChange={event => { setModels(previous => ({ ...previous, [key]: event.target.value })); setTestResult('') }} maxLength={200} autoComplete="off" /></label>)}
+      <p className="connection-help">Public HTTPS works by default. For localhost, LAN or Docker hosts, the administrator must add the exact origin, including scheme and port, to PAPER_TRUSTED_AI_ORIGINS in the server environment. This cannot be changed in Settings. Localhost refers to Paper's container when using Docker.</p>
+      <p className="connection-help">Test connection sends one tiny request using this form without saving or enabling AI. It uses the discussion model. It may incur a charge. Keys stay on the server and never reach the Codex worker. See docs/ai-providers.md for setup examples.</p>
+      <button type="button" disabled={testing} onClick={() => void test()}>{testing ? 'Testing...' : 'Test connection'}</button>
+      {testResult && <p role="status">{testResult}</p>}
+    </fieldset>}
+    <details className="connection-setup"><summary>How to set up the Codex worker</summary>
       <p>Paper runs the Codex CLI in a separate AI worker. The worker connects through a private Unix socket and has no Paper network access, data or service tokens. For Docker, run these commands from your Paper checkout:</p>
       <pre><code>{`mkdir -p ai-auth/codex\nchmod 700 ai-auth/codex\ndocker compose -f compose.yaml -f compose.ai.yaml build paper paper-ai\ndocker compose -f compose.yaml -f compose.ai.yaml run --rm --no-deps paper-ai codex login --device-auth\ndocker compose -f compose.yaml -f compose.ai.yaml up -d paper paper-ai`}</code></pre>
       <p>Complete the login link and one-time code in your own browser. Device login may need enabling in your ChatGPT security or workspace settings. See <a href="https://learn.chatgpt.com/docs/auth" target="_blank" rel="noreferrer">Codex authentication</a>.</p>
-      <p>New installs generate the worker secret during setup. Existing installs must follow the AI upgrade steps in <code>docs/integrations.md</code> to add it, remove the old auth mounts and shared worker network from Paper, and configure the socket volume. Both containers must use the same UID and GID. Without the worker, AI stays unavailable. Native development can use <code>PAPER_AI_LOCAL=unsafe</code> only with synthetic feeds. This lets model processes read Paper data and secrets.</p>
-      <p>Model names come from your server's <code>.env</code>. Set <code>PAPER_DISCUSSION_MODEL</code> for discussions, <code>PAPER_COLLECTION_MODEL</code> for Pulse, and <code>PAPER_HEADLINE_WRITER_MODEL</code> / <code>PAPER_HEADLINE_REVIEWER_MODEL</code> for headlines. Briefings use <code>CODEX_SHORTLIST_MODEL</code> / <code>CODEX_EDITOR_MODEL</code>. Choose models your provider account can access, then restart Paper after changing the environment.</p>
-      <p>AI credentials remain in the CLI login store. Paper does not accept AI tokens in this form. Existing briefings and discussions remain saved when AI is off. Briefing schedules require separate automation.</p>
+      <p>New installs generate the worker secret during setup. Existing installs must follow the AI upgrade steps in <code>docs/integrations.md</code> to add it, remove the old auth mounts and shared worker network from Paper, and configure the socket volume. Both containers must use the same UID and GID. The Codex option requires the worker. Native development can use <code>PAPER_AI_LOCAL=unsafe</code> only with synthetic feeds. This lets model processes read Paper data and secrets.</p>
+      <p>Codex model names come from your server's <code>.env</code>. Set <code>PAPER_DISCUSSION_MODEL</code> for discussions, <code>PAPER_COLLECTION_MODEL</code> for Pulse, and <code>PAPER_HEADLINE_WRITER_MODEL</code> / <code>PAPER_HEADLINE_REVIEWER_MODEL</code> for headlines. Briefings use <code>CODEX_SHORTLIST_MODEL</code> / <code>CODEX_EDITOR_MODEL</code>. Choose models your provider account can access, then restart Paper after changing the environment.</p>
+      <p>Codex credentials remain in the CLI login store. API keys use the private connection settings file. Existing briefings and discussions remain saved when AI is off. Briefing schedules require separate automation.</p>
     </details>
   </ConnectionForm>
 }

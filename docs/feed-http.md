@@ -65,3 +65,8 @@ error message, without feed paths, credentials or query strings.
 `POST /api/fulltext` permits four active requests. Additional requests receive
 503 with a retry message. Disconnects cancel the page fetch and optional reader
 fallback. A slot stays occupied until the work finishes or fails.
+
+The OpenAI-compatible adapter shares `network-policy.ts` and pins DNS results
+the same way. It uses a separate POST/SSE transport because feed requests never
+accept credentials or arbitrary headers. Its administrator allowlist is
+`PAPER_TRUSTED_AI_ORIGINS`. See [AI providers](ai-providers.md) for its limits.
