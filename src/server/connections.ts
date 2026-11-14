@@ -126,13 +126,25 @@ export class ConnectionSettings {
     }
   }
 
+  // A key only goes to the origin it was saved for. A new scheme, host or port
+  // needs the key again or an explicit removal, so the environment key can't return either.
+  private requireKeyForOrigin(patch: ConnectionsUpdate['openai']) {
+    if (patch?.baseUrl === undefined || patch.token !== undefined || !this.token('openai')) return
+    const origin = (value: string) => { try { return new URL(value).origin } catch { return '' } }
+    if (origin(patch.baseUrl) !== origin(this.config.openai.baseUrl)) {
+      throw new SettingsValidationError('Enter the API key again for the new base URL, or remove the saved key.')
+    }
+  }
+
   openaiTestConfig(input: unknown): Config['openai'] {
     const patch = validate({ openai: input }).openai!
+    this.requireKeyForOrigin(patch)
     return { ...this.config.openai, ...patch, token: patch.token === null ? '' : patch.token ?? this.token('openai') }
   }
 
   update(input: unknown): ConnectionsSettings {
     const patch = validate(input)
+    this.requireKeyForOrigin(patch.openai)
     if (patch.ai?.provider === undefined && patch.ai?.codexEnabled !== undefined) {
       patch.ai.provider = patch.ai.codexEnabled ? 'codex' : 'none'
     }

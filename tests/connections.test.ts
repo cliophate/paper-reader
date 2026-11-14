@@ -73,6 +73,21 @@ describe('private connection settings', () => {
     expect(fs.readdirSync(directory)).toEqual([])
   })
 
+  it('keeps a saved key on its origin', () => {
+    vi.stubEnv('PAPER_OPENAI_API_KEY', 'synthetic-api-environment')
+    const config = loadConfig()
+    const settings = new ConnectionSettings(config)
+    const moved = { openai: { baseUrl: 'https://models.example.test/v1' } }
+    expect(() => settings.openaiTestConfig(moved.openai)).toThrow('Enter the API key again')
+    expect(() => settings.update(moved)).toThrow('Enter the API key again')
+    expect(settings.openaiTestConfig({ baseUrl: 'https://api.openai.com/other' }).token).toBe('synthetic-api-environment')
+    expect(settings.openaiTestConfig({ ...moved.openai, token: 'synthetic-new' }).token).toBe('synthetic-new')
+    settings.update({ openai: { ...moved.openai, token: null } })
+    expect(config.openai).toMatchObject({ baseUrl: 'https://models.example.test/v1', token: '' })
+    settings.update({ openai: { baseUrl: 'https://other.example.test/v1' } })
+    expect(config.openai.token).toBe('')
+  })
+
   it('requires explicit provider selection on a new installation', () => {
     vi.stubEnv('CODEX_ENABLED', 'false')
     const config = loadConfig()

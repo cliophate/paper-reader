@@ -147,7 +147,7 @@ describe('OpenAI-compatible HTTP provider', () => {
   it('tests the discussion model with exactly one tiny request', async () => {
     expect(await testOpenaiConnection(config.openai)).toMatchObject({ available: true })
     expect(fixture.requests).toHaveLength(1)
-    expect(fixture.requests[0].body).toEqual({ model: config.openai.discussionModel, max_tokens: 8, messages: [{ role: 'user', content: 'Reply OK.' }] })
+    expect(fixture.requests[0].body).toEqual({ model: config.openai.discussionModel, messages: [{ role: 'user', content: 'Reply OK.' }] })
   })
 
   it('routes every feature to its saved API model even with a worker configured', async () => {

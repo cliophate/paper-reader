@@ -148,7 +148,7 @@ export async function openaiChat(config: Options, model: string, instruction: st
 
 export async function testOpenaiConnection(config: Options, signal?: AbortSignal) {
   return run(15_000, signal, async signal => {
-    const response = await request(config, { model: config.discussionModel, max_tokens: 8, messages: [{ role: 'user', content: 'Reply OK.' }] }, signal)
+    const response = await request(config, { model: config.discussionModel, messages: [{ role: 'user', content: 'Reply OK.' }] }, signal)
     if (response.status !== 200) throw statusError(response.status)
     const content = JSON.parse(response.text)?.choices?.[0]?.message?.content
     if (typeof content !== 'string' || !content.trim()) throw new AiError('schema')

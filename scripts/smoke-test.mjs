@@ -167,7 +167,7 @@ try {
   const tested = await request('/api/settings/connections/test-ai', {})
   assert.equal(tested.data.available, true)
   assert.equal(openai.requests.length, 2)
-  assert.equal(openai.requests[0].body.max_tokens, 8)
+  assert.equal(openai.requests[0].body.max_tokens, undefined)
   assert.equal(openai.requests[0].authorization, 'Bearer synthetic-smoke-api-key')
   await patchSettings({ openai: { discussionModel: 'status-401' } })
   const rejectedKey = await request('/api/settings/connections/test-ai', {})

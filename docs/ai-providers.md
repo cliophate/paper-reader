@@ -10,7 +10,7 @@ any provider. Changing providers affects new requests. A running batch may finis
 Select OpenAI-compatible API. Enter the base URL, API key and model names. Paper
 adds `/chat/completions` to the base URL. Include `/v1` when your server uses it.
 The default URL is `https://api.openai.com/v1`; all five model fields default to
-`gpt-4.1-mini`. Change them for your provider. A model must support Chat
+`gpt-6-luna`. Change them for your provider. A model must support Chat
 Completions and the feature's output format.
 
 | Server | Example base URL | Models |
@@ -27,13 +27,16 @@ and membership review use the grouping model. All batch results pass through the
 same feature validation as Codex, including source IDs and evidence checks.
 
 Test connection uses the form values without saving or enabling AI. It sends
-one request using the discussion model, with a limit of eight output tokens.
-A blank key uses the saved key, or the environment key if none was saved. It reports a fixed success or error message;
+one short request using the discussion model, without an output limit, so
+reasoning models can reply. A blank key uses the saved key, or the environment
+key if none was saved. It reports a fixed success or error message;
 it never displays the provider's reply or error body. It does not test the other
 models, JSON support or streaming. The request may incur a charge.
 
 Leave the key blank to keep the saved value. Remove key clears it on save and
-prevents fallback to an environment key. A local server without authentication
+prevents fallback to an environment key. A key only goes to the origin it was
+saved for. If you change the base URL's scheme, host or port, enter the key again
+or remove it. Otherwise Paper rejects the change and the test. A local server without authentication
 can use an empty key. Turning AI off keeps the key for later. Paper stores it in
 `data/connections.json` with mode 0600, like Readwise and Kirby tokens. It is not
 encrypted at rest. Settings returns only whether a key is configured and whether
@@ -94,11 +97,11 @@ CLI. The following names configure the API provider:
 PAPER_AI_PROVIDER=openai
 PAPER_OPENAI_BASE_URL=https://api.openai.com/v1
 PAPER_OPENAI_API_KEY=
-PAPER_OPENAI_DISCUSSION_MODEL=gpt-4.1-mini
-PAPER_OPENAI_HEADLINES_MODEL=gpt-4.1-mini
-PAPER_OPENAI_GROUPING_MODEL=gpt-4.1-mini
-PAPER_OPENAI_SHORTLIST_MODEL=gpt-4.1-mini
-PAPER_OPENAI_EDITOR_MODEL=gpt-4.1-mini
+PAPER_OPENAI_DISCUSSION_MODEL=gpt-6-luna
+PAPER_OPENAI_HEADLINES_MODEL=gpt-6-luna
+PAPER_OPENAI_GROUPING_MODEL=gpt-6-luna
+PAPER_OPENAI_SHORTLIST_MODEL=gpt-6-luna
+PAPER_OPENAI_EDITOR_MODEL=gpt-6-luna
 PAPER_TRUSTED_AI_ORIGINS=
 ```
 
