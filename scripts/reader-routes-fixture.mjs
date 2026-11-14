@@ -3,7 +3,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import crypto from 'node:crypto'
 import { PaperDatabase } from '../dist-server/db.js'
+import { renderBriefing } from '../dist-server/email.js'
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'paper-reader-routes-'))
 const state = path.join(temporary, 'data')
@@ -28,6 +30,16 @@ const members = articles.filter(article => article.feedId === feedId)
 db.savePulseBatch([{ id: 'collection-fixture', headline: 'Synthetic collection', scope: 'Synthetic route testing', entryIds: members.map(article => article.id) }], members.map(article => article.id), now)
 db.commitLocalEntryState(backend.id, [members[0].id], 'star')
 db.saveReadingProgress(members[0].id, .25)
+const briefingSelection = { news: [{ headline: 'Synthetic briefing story', summary: 'Two source stories cover a synthetic development.',
+  entryIds: members.slice(0, 2).map(article => article.id), backgroundEntryIds: [members[2].id] }], worthNoticing: [], social: [] }
+const briefingToken = 'synthetic-route-briefing-token'
+const rendered = renderBriefing({ kind: 'morning', cutoff: new Date(now), selection: briefingSelection,
+  entries: new Map(articles.map(article => [article.id, article])),
+  confirmUrl: `http://127.0.0.1:4318/briefings/route-briefing/confirm?token=${briefingToken}` })
+db.createBriefing({ id: 'route-briefing', kind: 'morning', windowStart: now, cutoff: now, createdAt: now,
+  ...rendered, status: 'generated', tokenHash: crypto.createHash('sha256').update(briefingToken).digest('hex'),
+  selection: briefingSelection, deliveredAt: null, acknowledgedAt: null },
+  members.slice(0, 2).map(article => ({ id: article.id, section: 'news' })))
 db.close()
 const child = spawn(process.execPath, [path.resolve('dist-server/index.js')], { stdio: 'inherit', env: {
   PATH: process.env.PATH, NODE_NO_WARNINGS: '1', STATE_DIR: state, PAPER_BACKEND: 'standalone', PAPER_SYNC_ENABLED: 'false',

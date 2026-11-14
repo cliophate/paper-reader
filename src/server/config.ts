@@ -1,5 +1,6 @@
 import path from 'node:path'
 import type { AiProvider } from '../shared/connections.js'
+import { minifluxBaseUrl } from './miniflux-url.js'
 
 function value(name: string, fallback = ''): string {
   return process.env[name]?.trim() || fallback
@@ -57,7 +58,7 @@ export function loadConfig(secrets?: { internalSecret: string; signingSecret: st
     warnedOpenCode = true
   }
   const backend = value('PAPER_BACKEND', 'freshrss')
-  if (backend !== 'freshrss' && backend !== 'standalone') throw new Error('PAPER_BACKEND must be freshrss or standalone')
+  if (backend !== 'freshrss' && backend !== 'standalone' && backend !== 'miniflux') throw new Error('PAPER_BACKEND must be freshrss, standalone or miniflux')
   if (backend === 'standalone' && value('PAPER_LOCAL_READS', 'true') !== 'true') throw new Error('Standalone mode requires PAPER_LOCAL_READS=true')
   const provider = value('PAPER_AI_PROVIDER', value('CODEX_ENABLED') === 'true' ? 'codex' : 'none') as AiProvider
   if (!['none', 'codex', 'openai'].includes(provider)) throw new Error('PAPER_AI_PROVIDER must be none, codex or openai')
@@ -86,6 +87,10 @@ export function loadConfig(secrets?: { internalSecret: string; signingSecret: st
       baseUrl: (backend === 'freshrss' ? required('FRESHRSS_BASE_URL') : '').replace(/\/$/, ''),
       username: backend === 'freshrss' ? required('FRESHRSS_USERNAME') : '',
       apiPassword: backend === 'freshrss' ? required('FRESHRSS_API_PASSWORD') : '',
+    },
+    miniflux: {
+      baseUrl: backend === 'miniflux' ? minifluxBaseUrl(required('MINIFLUX_BASE_URL')) : '',
+      apiKey: backend === 'miniflux' ? required('MINIFLUX_API_KEY') : '',
     },
     rssHub: {
       baseUrl: value('RSSHUB_BASE_URL').replace(/\/$/, ''),

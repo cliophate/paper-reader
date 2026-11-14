@@ -1,4 +1,5 @@
-import { DATABASE_VERSION, migrateFeedCheckSettings } from './feed-check-settings.js'
+import { DATABASE_VERSION } from './database-version.js'
+import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -12,7 +13,8 @@ import { FeedFetchStore, migrateFeedFetchState } from './feed-fetch-state.js'
 import { migrateStandaloneSetup } from './migration-schema.js'
 import { migrateSearchRows } from './search-schema.js'
 import { migrateLinkNumbers } from './link-numbers.js'
-import { FRESHRSS_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
+import { migrateBackendKinds } from './backend-schema.js'
+import { FRESHRSS_ORGANIZATION_CAPABILITIES, MINIFLUX_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
 import type { BriefingSelection, Entry, Feed, Folder, NavigationPayload, StreamRef } from './types.js'
@@ -167,7 +169,7 @@ export interface CoverageFeedbackRecord {
 
 // Wait briefly for another process to finish writing instead of failing at once.
 const BUSY_TIMEOUT_MS = 5000
-const BACKEND_CHECKPOINTS = new Set(['backfill_complete', 'backfill_continuation', 'last_sync_started_at', 'last_sync_completed_at', 'last_sync_error', 'navigation_synced_at', 'state_synced_at', 'source_content_restored_v6', 'last_deep_sync_at'])
+const BACKEND_CHECKPOINTS = new Set(['backfill_complete', 'backfill_continuation', 'last_sync_started_at', 'last_sync_completed_at', 'last_sync_error', 'navigation_synced_at', 'state_synced_at', 'source_content_restored_v6', 'last_deep_sync_at', 'native_import_before', 'native_import_after', 'native_import_continuation', 'native_changed_until'])
 
 export class PaperDatabase {
   private readonly db: DatabaseSync
@@ -194,10 +196,12 @@ export class PaperDatabase {
         this.backupBeforeMigration(11, 'search-rows')
         this.backupBeforeMigration(12, 'link-numbers')
         this.backupBeforeMigration(13, 'feed-checks')
+        this.backupBeforeMigration(14, 'miniflux')
         const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
         // Current-schema participants must not drop/recreate triggers on every
         // open. Coordinated bootstrap performs upgrades under exclusive access.
         if (version < DATABASE_VERSION || this.getSyncValue('fulltext_search_v1') !== 'true') this.migrate()
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 14) migrateBackendKinds(this.db)
       }
       this.identities = new IdentityStore(this.db)
       this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
@@ -216,8 +220,9 @@ export class PaperDatabase {
   }
 
   get organizationCapabilities() {
-    return this.activeBackendId && this.identities.backend(this.activeBackendId).kind === 'standalone'
-      ? LOCAL_ORGANIZATION_CAPABILITIES : FRESHRSS_ORGANIZATION_CAPABILITIES
+    const kind = this.activeBackendId && this.identities.backend(this.activeBackendId).kind
+    return kind === 'standalone' ? LOCAL_ORGANIZATION_CAPABILITIES
+      : kind === 'miniflux' ? MINIFLUX_ORGANIZATION_CAPABILITIES : FRESHRSS_ORGANIZATION_CAPABILITIES
   }
 
   private backupBeforeMigration(target: number, name: string) {
@@ -247,6 +252,9 @@ export class PaperDatabase {
     transaction(this.db, () => {
       const active = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
       if (active && active !== backend.id) throw new Error('This database belongs to another backend. Use its original configuration or a separate data directory.')
+      if (!active && backend.kind === 'miniflux' && (this.entryCount() || this.db.prepare('SELECT 1 FROM feeds LIMIT 1').get())) {
+        throw new Error('Miniflux requires a new data directory; existing data cannot be adopted into this account')
+      }
       this.identities.registerBackend(backend)
       if (active) return
       if (backend.kind === 'standalone' && (this.entryCount() || this.db.prepare('SELECT 1 FROM feeds LIMIT 1').get())) {
@@ -339,7 +347,11 @@ export class PaperDatabase {
     if (!this.activeBackendId) return
     const owner = this.identities.article(entry.id)
     if (owner && (owner.backendId !== this.activeBackendId || owner.subscriptionId !== entry.feedId)) throw new Error('Content import cannot change article ownership')
-    if (this.identities.backend(this.activeBackendId).kind === 'freshrss') {
+    const kind = this.identities.backend(this.activeBackendId).kind
+    if (kind !== 'standalone') {
+      if (kind === 'miniflux' && (!entry.id.startsWith(`${this.activeBackendId}:entry:`) || !entry.feedId.startsWith(`${this.activeBackendId}:feed:`))) {
+        throw new Error('Miniflux content belongs to another account')
+      }
       this.identities.subscription(this.activeBackendId, entry.feedId, entry.feedId)
       this.identities.adoptArticle(this.activeBackendId, entry.feedId, entry.id)
     } else if (!owner) throw new Error('Resolve local article identity before importing content')
@@ -860,6 +872,14 @@ export class PaperDatabase {
           if (entryMatchesMuteFilter(entry, rule)) addMuteMatch.run(rule.id, entry.id)
         }
       }
+    })
+  }
+
+  saveRemotePage(entries: Entry[], checkpoints: Record<string, string>) {
+    if (!this.activeBackendId || this.identities.backend(this.activeBackendId).kind === 'standalone') throw new Error('Remote import requires a bound remote backend')
+    transaction(this.db, () => {
+      this.upsertEntries(entries)
+      for (const [key, value] of Object.entries(checkpoints)) this.setSyncValue(key, value)
     })
   }
 
@@ -1955,8 +1975,17 @@ export class PaperDatabase {
   }
 
   entryIdsForBriefing(id: string): string[] {
-    const rows = this.db.prepare('SELECT entry_id FROM briefing_entries WHERE briefing_id = ?').all(id) as Array<{ entry_id: string }>
+    const rows = this.db.prepare('SELECT DISTINCT entry_id FROM briefing_entries WHERE briefing_id = ?').all(id) as Array<{ entry_id: string }>
     return rows.map(row => row.entry_id)
+  }
+
+  briefingReadCounts(id: string): { entryCount: number; unreadCount: number; missingCount: number } {
+    const row = this.db.prepare(`SELECT COUNT(DISTINCT briefing_entries.entry_id) AS total,
+      COUNT(DISTINCT CASE WHEN entries.read = 0 THEN briefing_entries.entry_id END) AS unread,
+      COUNT(DISTINCT CASE WHEN entries.id IS NULL THEN briefing_entries.entry_id END) AS missing
+      FROM briefing_entries LEFT JOIN entries ON entries.id = briefing_entries.entry_id
+      WHERE briefing_id = ?`).get(id)!
+    return { entryCount: Number(row.total), unreadCount: Number(row.unread), missingCount: Number(row.missing) }
   }
 
   markDelivered(id: string) {

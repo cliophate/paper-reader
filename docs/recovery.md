@@ -1,13 +1,13 @@
 # Backup and restore
 
 Standalone Paper stores subscriptions, articles and read/star state itself. In
-FreshRSS mode, FreshRSS stores subscriptions and upstream read/star state while
+FreshRSS or Miniflux mode, that backend stores subscriptions and upstream read/star state while
 Paper stores additional user state. Back up each application you use.
 
 Paper's data directory contains paper.sqlite and potentially its SQLite WAL
 and shared-memory files. It includes reading positions, cached full text,
 discussions, filters, briefing history, Pulse collections, and feedback.
-An empty FreshRSS cache can resync articles but cannot recover that additional
+An empty remote-backend cache can resync articles but cannot recover that additional
 state. An empty standalone database cannot recover subscriptions or reading state.
 The same directory also holds connections.json when connections have been edited
 in Settings. It contains enable switches and any Readwise or Kirby tokens saved
@@ -47,7 +47,7 @@ Check connection switches after restoring connections.json. Restore its owner-on
 permissions and keep the service's data directory private.
 
 Test restoration in a separate directory and on another port. Do not point a
-restore test at a production FreshRSS account, because user actions in the test
+restore test at a production FreshRSS or Miniflux account, because user actions in the test
 would change that account's read and subscription state.
 
 ## Upgrades and rollback
@@ -61,6 +61,15 @@ verified the restored application.
 Paper 0.2.0-alpha.1 uses database schema v13.
 [Feed scheduling](feed-scheduling.md) describes the migration and automatic
 `.before-feed-checks-v13` backup.
+
+### Miniflux-capable source builds
+
+Builds containing Miniflux support use schema 14 and retain a consistent private
+`paper.sqlite.before-miniflux-v14` backup when upgrading an existing database.
+Keep the original backend configuration during an application upgrade. Adding
+Miniflux support does not authorize changing the database's owning account.
+See [Miniflux schema and recovery](miniflux.md#schema-upgrade-and-recovery) for
+the new backend and rollback rules.
 
 ### Upgrade from alpha.4 to 0.1.0
 

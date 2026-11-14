@@ -7,7 +7,7 @@ import type { ImportChoice, ImportPreview, ImportResult, ImportRow } from '../sh
 export interface ImportSnapshot { navigation: NavigationPayload; revision: number | null; capabilities: Readonly<OrganizationCapabilities> }
 export interface SubscriptionImportStore {
   backendId: string
-  kind: 'freshrss' | 'standalone'
+  kind: 'freshrss' | 'standalone' | 'miniflux'
   snapshot(): Promise<ImportSnapshot>
   create(row: Pick<ImportRow, 'title' | 'url'>, folders: string[], expectedRevision: number | null): Promise<string | { id?: string; refreshError?: string } | undefined>
   setFolders(id: string, folders: string[], expectedRevision: number | null): Promise<{ refreshError?: string } | void>
@@ -34,10 +34,11 @@ export class SubscriptionImporter {
     const value: ImportPreview = {
       token: randomUUID(), rows: previewOpml(document, snapshot.navigation, this.store.backendId),
       folders: snapshot.navigation.folders.map(folder => folder.title), warnings: [...document.warnings],
-      multipleMemberships: snapshot.capabilities.multipleMemberships,
+      multipleMemberships: snapshot.capabilities.multipleMemberships, backend: this.store.kind,
     }
-    if (this.store.kind === 'freshrss') value.warnings.push('FreshRSS applies one subscription at a time and cannot guarantee atomic imports. A failed request may have changed the remote account. Refresh and preview again before retrying.')
-    if (!value.multipleMemberships) value.warnings.push('Choose one folder per imported subscription. FreshRSS does not support multiple memberships through Paper. Keep existing folders leaves a reused subscription unchanged. Reused feeds can move to existing folders; new folder names can accompany new subscriptions.')
+    const provider = this.store.kind === 'miniflux' ? 'Miniflux' : 'FreshRSS'
+    if (this.store.kind !== 'standalone') value.warnings.push(`${provider} applies one subscription at a time and cannot guarantee atomic imports. A failed request may have changed the remote account. Refresh and preview again before retrying.`)
+    if (!value.multipleMemberships) value.warnings.push(`Choose one folder per imported subscription. ${provider} does not support multiple memberships through Paper. Keep existing folders leaves a reused subscription unchanged. Reused feeds can move to existing folders; new folder names can accompany new subscriptions.`)
     for (const [token, preview] of this.previews) if (preview.expires <= this.now()) this.previews.delete(token)
     while (this.previews.size >= 8) this.previews.delete(this.previews.keys().next().value!)
     this.previews.set(value.token, { value, fingerprint: signature(snapshot), expires: this.now() + 10 * 60_000 })
@@ -66,7 +67,7 @@ export class SubscriptionImporter {
           validateFolderNames(choice.folders, snapshot.navigation)
           if (choice.action === 'create') {
             if (choice.folders === null) throw new SubscriptionInputError('Choose a folder or Uncategorized for a new subscription.')
-            if (this.store.kind === 'freshrss' && subscriptionList(snapshot.navigation).some(({ feed }) => subscriptionUrl(feed.url) === row.url)) throw new SubscriptionInputError('FreshRSS cannot create a distinct subscription at this URL. Choose an existing subscription explicitly or skip this row.')
+            if (this.store.kind !== 'standalone' && subscriptionList(snapshot.navigation).some(({ feed }) => subscriptionUrl(feed.url) === row.url)) throw new SubscriptionInputError(`${this.store.kind === 'miniflux' ? 'Miniflux' : 'FreshRSS'} cannot create a distinct subscription at this URL. Choose an existing subscription explicitly or skip this row.`)
             const created = await this.store.create(row, choice.folders, snapshot.revision)
             const id = typeof created === 'string' ? created : created?.id
             const warning = typeof created === 'object' ? created.refreshError : undefined

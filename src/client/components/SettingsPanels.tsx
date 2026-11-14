@@ -164,7 +164,7 @@ function activityDetail(event: ActivityRecord): string {
   const duration = Number(details.durationMs || 0)
   const parts = [event.origin]
   if (duration > 0) parts.push(`${Math.max(1, Math.round(duration / 1000))}s`)
-  if (changes > 0) parts.push(`${changes} restored to unread by FreshRSS`)
+  if (changes > 0) parts.push(`${changes} restored to unread by the backend`)
   return parts.join(' · ')
 }
 

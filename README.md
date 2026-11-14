@@ -2,7 +2,7 @@
 
 A self-hosted feed reader with full-text articles, search, filters, keyboard
 shortcuts, and offline reading. Works on desktop and mobile. Run Paper on its own
-or connect it to FreshRSS to share subscriptions, read state, and stars.
+or connect it to FreshRSS or Miniflux to share subscriptions, read state, and stars.
 
 Entirely AI-coded. If this steals kittens, don't blame me.
 
@@ -59,7 +59,7 @@ Use the sidebar **+** menu to add a feed or create a standalone folder. Select
 the **Edit feeds** pencil to show drag grips, selection checkboxes and row options.
 Changes save immediately; **Done** leaves edit mode. Row options support rename,
 move and confirmed unsubscribe. Standalone also supports folder management and
-ordering; FreshRSS offers its supported feed operations. See
+ordering; FreshRSS and Miniflux offer their supported feed operations. See
 [sidebar controls](docs/organization.md#sidebar-controls).
 
 For a source image outside Compose, set `PAPER_BACKEND=standalone`, mount a
@@ -81,6 +81,31 @@ container refers to Paper itself. Use a shared Docker network or reachable URL.
 The database binds to one backend instance. Changing the backend or FreshRSS
 account in configuration does not transfer its data. Use a separate data directory
 for a different backend or account. Settings > Backend & data shows the current mode.
+
+### Miniflux mode
+
+Native Miniflux support is available in source builds containing this change;
+use the build-from-source instructions below.
+
+Start with a new Paper data directory and Miniflux **2.3.2 or newer**. Set
+`PAPER_BACKEND=miniflux`, `MINIFLUX_BASE_URL` and `MINIFLUX_API_KEY` in private
+configuration. Generate a dedicated key in Miniflux **Settings > API Keys**.
+The URL is the server root, including any subpath, without `/v1` at the end.
+FreshRSS credentials are unnecessary in this mode. Paper uses Miniflux's native
+API directly.
+
+Paper imports articles and synchronizes read state and stars in both directions.
+Miniflux continues fetching feeds. Paper's **Refresh** imports Miniflux's current
+data; it does not force publishers to be fetched. Add, rename, move and
+unsubscribe are supported. Choose a real category when moving a feed; adding
+without one uses Miniflux's default category. Category management, reordering
+and feed URL repair are currently unavailable in Paper.
+
+Miniflux must be reachable when Paper or its briefing CLI starts. Existing
+cached articles remain readable during a later outage. Token rotation preserves
+the account binding. A different server, account or backend needs a separate
+data directory.
+See [Miniflux setup and behavior](docs/miniflux.md).
 
 To use a different local port, change `PAPER_PORT` and `PUBLIC_URL` in `.env`.
 For access from other devices, follow the [remote access guide](docs/access.md).
@@ -107,8 +132,8 @@ See the [integration guide](docs/integrations.md) for full setup instructions.
 Back up `./data` and your private `.env`. The data directory holds reading
 positions, discussions, filters, saved briefings, and any connection tokens
 entered in Settings and generated signing secrets. Standalone
-subscriptions and article state also live there. In FreshRSS mode, back up
-FreshRSS separately.
+subscriptions and article state also live there. With a remote backend, back up
+FreshRSS or Miniflux separately.
 
 See [backup, restore, and upgrades](docs/recovery.md) before updating Paper,
 and [security and privacy](SECURITY.md) for details about stored data and

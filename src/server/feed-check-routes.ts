@@ -9,7 +9,7 @@ import { MANUAL_CHECK_COOLDOWN_MS } from './feed-check-settings.js'
 export function feedCheckRouter(database: PaperDatabase, backend: BackendIdentity, runtime?: StandaloneRuntime) {
   const router = Router()
   const snapshot = (): FeedChecksView => {
-    if (!runtime) return { backend: 'freshrss', enabled: false, revision: 0, organizationRevision: 0, intervalMinutes: 15, feeds: [], folders: [] }
+    if (!runtime) return { backend: backend.kind, enabled: false, revision: 0, organizationRevision: 0, intervalMinutes: 15, feeds: [], folders: [] }
     const organization = database.organization.snapshot(backend.id)
     const feeds = [...new Map([...organization.navigation.uncategorized, ...organization.navigation.folders.flatMap(folder => folder.feeds)].map(feed => [feed.id, feed])).values()]
     return { backend: 'standalone', enabled: runtime.checksEnabled(), ...database.feedFetch.settings(backend.id),
@@ -28,7 +28,7 @@ export function feedCheckRouter(database: PaperDatabase, backend: BackendIdentit
   router.get('/', (_request, response) => response.json(snapshot()))
   router.post('/:action', (request, response) => {
     try {
-      if (!runtime) { response.status(400).json({ error: 'FreshRSS manages feed checks and intervals.' }); return }
+      if (!runtime) { response.status(400).json({ error: `${backend.kind === 'miniflux' ? 'Miniflux' : 'FreshRSS'} manages feed checks and intervals.` }); return }
       const results = database.transaction(() => {
         const view = snapshot()
         const body = request.body

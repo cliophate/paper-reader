@@ -14,16 +14,24 @@ import urllib.request
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-FRESHRSS = 'freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df'
-NODE = 'node:24.22.2-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9'
-CADDY = 'caddy:2.11.9@sha256:0c2243efcf437ab7f7a978f1027fcf0d4f9be8a75df27b1b3fbc5dbe0ffa8cf0'
+FRESHRSS = 'docker.io/freshrss/freshrss:1.30.4@sha256:af44385229541bee24aa9148d0ff8f3b40e095373c63a2c0f74e09a27d3c59df'
+NODE = 'docker.io/library/node:24.22.2-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9'
+CADDY = 'docker.io/library/caddy:2.11.9@sha256:0c2243efcf437ab7f7a978f1027fcf0d4f9be8a75df27b1b3fbc5dbe0ffa8cf0'
 IMAGE = os.environ.get('PAPER_TEST_IMAGE', 'paper-public:test')
+ENGINE = os.environ.get('PAPER_CONTAINER_ENGINE', 'docker')
 PREFIX = 'paper-release-' + uuid.uuid4().hex[:10]
 containers = []
 
 
 def docker(*args, check=True):
-    result = subprocess.run(['docker', *args], capture_output=True, text=True, timeout=60)
+    args = list(args)
+    if Path(ENGINE).name == 'podman' and args[0] == 'run':
+        if '--user' in args:
+            args.insert(1, '--userns=keep-id')
+        for index, value in enumerate(args):
+            if index and args[index - 1] == '-v':
+                args[index] = value + (',z' if value.endswith(':ro') else ':Z')
+    result = subprocess.run([ENGINE, *args], capture_output=True, text=True, timeout=180)
     if check and result.returncode:
         raise RuntimeError('Docker test operation failed: ' + result.stderr.strip())
     return (result.stdout + (result.stderr if args[0] == 'logs' else '')).strip()
@@ -239,4 +247,7 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
             docker('rm', '-f', name, check=False)
         docker('network', 'rm', PREFIX, check=False)
 
-subprocess.run(["python3", str(ROOT / "scripts/test-ai-worker.py")], check=True)
+if Path(ENGINE).name == 'docker':
+    subprocess.run(["python3", str(ROOT / "scripts/test-ai-worker.py")], check=True)
+else:
+    print('AI Compose checks require Docker Compose; run scripts/test-ai-worker.py separately.')

@@ -85,10 +85,10 @@ it('reloads a stale revision after an error and shows the error', async () => {
   expect(api.checkFeeds).toHaveBeenLastCalledWith({ expectedRevision: 8, expectedOrganizationRevision: 7, feedId: 'feed-1' })
 })
 
-it('hides standalone controls for FreshRSS with an explanation', async () => {
-  view.backend = 'freshrss'; view.enabled = false; view.feeds = []
+it.each(['freshrss', 'miniflux'] as const)('hides standalone controls for %s with an explanation', async backend => {
+  view.backend = backend; view.enabled = false; view.feeds = []
   await render()
-  expect(container.textContent).toContain('FreshRSS manages feed checks and intervals')
+  expect(container.textContent).toContain(`${backend === 'miniflux' ? 'Miniflux' : 'FreshRSS'} manages feed checks and intervals`)
   expect(container.querySelector('input')).toBeNull()
   expect(button('Check folder now')).toBeUndefined()
   expect(button('Check now')).toBeUndefined()

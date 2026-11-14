@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { DATABASE_VERSION } from '../src/server/database-version.js'
 import os from 'node:os'
 import path from 'node:path'
 import { createServer, type Server, type RequestListener } from 'node:http'
@@ -407,7 +408,7 @@ describe('schema v13 recovery', () => {
     expect(connection.prepare('PRAGMA user_version').get()?.user_version).toBe(12)
     expect(connection.prepare('SELECT etag FROM feed_fetch_state').get()?.etag).toBe('"saved"')
     connection.close()
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(13)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
   })
   it('rolls back a failed migration and reuses the original backup', () => {
     save('https://example.test/feed'); downgrade()
@@ -441,7 +442,7 @@ describe('schema v9 recovery', () => {
     expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
     const connection = new DatabaseSync(backup, { readOnly: true })
     expect(connection.prepare('PRAGMA user_version').get()?.user_version).toBe(8); connection.close()
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(13)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
   })
   it('rolls back migration failures and reuses its pre-upgrade backup', () => {
     downgrade()
@@ -451,7 +452,7 @@ describe('schema v9 recovery', () => {
     const backup = fs.readFileSync(`${file}.before-feed-fetch-v9`)
     sql(c => c.exec('DROP VIEW feed_fetch_state'))
     const migrated = new PaperDatabase(file); extras.push(migrated)
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(13)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
     expect(fs.readFileSync(`${file}.before-feed-fetch-v9`)).toEqual(backup)
   })
 })

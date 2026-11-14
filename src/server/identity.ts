@@ -1,8 +1,9 @@
 import crypto from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { transaction } from './transaction.js'
+import type { BackendKind } from '../shared/backend.js'
 
-export interface BackendIdentity { id: string; kind: 'freshrss' | 'standalone' }
+export interface BackendIdentity { id: string; kind: BackendKind }
 export interface SourceItemIdentity {
   externalId?: string
   previousExternalIds?: string[]
@@ -20,6 +21,11 @@ export function freshRssIdentity(baseUrl: string, username: string): BackendIden
   const url = new URL(baseUrl)
   url.username = ''; url.password = ''; url.hash = ''
   return { id: `freshrss:${hash([url.href.replace(/\/$/, ''), username])}`, kind: 'freshrss' }
+}
+
+export function minifluxIdentity(baseUrl: string, accountId: number): BackendIdentity {
+  if (!Number.isSafeInteger(accountId) || accountId <= 0) throw new Error('Miniflux returned an invalid account ID')
+  return { id: `miniflux:${hash([baseUrl.replace(/\/+$/, ''), String(accountId)])}`, kind: 'miniflux' }
 }
 
 export function itemFingerprint(item: SourceItemIdentity): string | null {

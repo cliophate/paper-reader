@@ -72,6 +72,12 @@ jobs:
           build-args: SOURCE_REVISION=${{ github.sha }}
       - run: docker build --target ai -t paper-public:ai-test .
       - run: python3 scripts/test-installation.py
+      - run: python3 scripts/test-miniflux-installation.py
+        env:
+          MINIFLUX_TEST_VERSION: "2.3.2"
+      - run: python3 scripts/test-miniflux-installation.py
+        env:
+          MINIFLUX_TEST_VERSION: "2.3.3"
   ai-image:
     needs: application
     runs-on: ubuntu-24.04

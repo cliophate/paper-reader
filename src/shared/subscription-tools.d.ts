@@ -14,6 +14,7 @@ export interface ImportRow {
   repeatedUrl: boolean
 }
 export interface ImportPreview {
+  backend?: import('./backend.js').BackendKind
   token: string
   rows: ImportRow[]
   folders: string[]
