@@ -37,7 +37,7 @@ try {
     source_domain, content_html, content_text, excerpt, published_at, timestamp, first_seen_at, read,
     reading_minutes, thumbnail_url, kind, synced_at)
     VALUES (?, ?, 'Retention', '', 'Synthetic retentionneedle', '', ?, ?, 'example.test',
-    '<p>Synthetic retentionneedle</p>', 'Synthetic retentionneedle', '', '', ?, ?, 1, 1, '', 'article', '')`)
+    '<p>Synthetic retentionneedle</p>', 'Synthetic retentionneedle', '', '', ?, ?, 0, 1, '', 'article', '')`)
   for (let i = 0; i < count; i++) {
     const id = `retention-${i}`, url = `https://example.test/${i}`
     identity.run(id, backend.id, feed); alias.run(backend.id, feed, `guid-${i}`, id)
@@ -73,20 +73,48 @@ try {
     const response = await fetch(base + route, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify(body) })
     const value = await response.json(); assert.equal(response.status, 200, JSON.stringify(value)); return value
   }
-  const policy = { autoReadDays: null, folderDays: {}, feedDays: {}, readDays: 60, unreadDays: null, cacheDays: null }
+  const policy = { autoReadDays: 60, folderDays: {}, feedDays: {}, readDays: 60, unreadDays: null, cacheDays: null }
+  const eventAbort = new AbortController()
+  const events = await fetch(base + '/api/events', { signal: eventAbort.signal })
+  let invalidations = 0, eventError
+  const eventLoop = (async () => {
+    let pending = ''
+    for await (const bytes of events.body) {
+      pending += new TextDecoder().decode(bytes)
+      let end
+      while ((end = pending.indexOf('\n\n')) !== -1) {
+        const event = pending.slice(0, end); pending = pending.slice(end + 2)
+        if (event.startsWith('event: state\n')) {
+          assert.equal(event, 'event: state\ndata: null')
+          invalidations++
+        }
+      }
+    }
+  })().catch(error => { if (!eventAbort.signal.aborted) eventError = error })
   const started = performance.now()
   const preview = await post('/api/retention/preview', { policy })
-  assert.equal(preview.deleted, removed); assert.equal(preview.marked, 0)
+  assert.equal(preview.deleted, removed); assert.equal(preview.marked, removed)
   await post('/api/retention', { policy, revision: 0, token: preview.token })
   const result = await until(async () => {
     const view = await (await fetch(base + '/api/retention')).json()
     assert.equal(view.error, '')
     return view.lastRun?.finishedAt ? view.lastRun : null
   })
-  assert.equal(result.deleted, removed); assert(result.batches >= count / 100)
+  assert.equal(result.marked, removed); assert.equal(result.deleted, removed); assert(result.batches >= count / 100)
+  await until(() => { if (eventError) throw eventError; return invalidations === removed / 100 })
+  eventAbort.abort(); await eventLoop
+  const gone = await fetch(base + '/api/entries/number/1')
+  assert.equal(gone.status, 410)
+  const removal = await gone.json()
+  assert.equal(removal.code, 'removed_by_retention')
+  assert.equal(removal.removal.sequence, 1)
+  assert.equal(removal.removal.feedId, feed)
+  assert.equal(removal.error, `This article was removed by your retention settings on ${new Date(removal.removal.removedAt).toISOString().slice(0, 10)}.`)
+  assert.equal((await fetch(base + `/api/entries/number/${count}`)).status, 200)
+  assert.equal((await fetch(base + `/api/entries/number/${count + 1}`)).status, 404)
   const check = new DatabaseSync(file, { readOnly: true })
   try {
-    for (const table of ['entries', 'entry_search_rows', 'entries_fts', 'article_arrivals', 'retention_tombstones']) {
+    for (const table of ['entries', 'entry_search_rows', 'entries_fts', 'article_arrivals', 'retention_tombstones', 'retention_removals']) {
       assert.equal(check.prepare(`SELECT COUNT(*) n FROM ${table}`).get().n, removed, table)
     }
     assert.equal(check.prepare("SELECT COUNT(*) n FROM entries_fts WHERE entries_fts MATCH 'retentionneedle'").get().n, removed)

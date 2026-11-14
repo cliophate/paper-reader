@@ -207,7 +207,7 @@ export class PaperDatabase {
         // open. Coordinated bootstrap performs upgrades under exclusive access.
         if (version < DATABASE_VERSION || this.getSyncValue('fulltext_search_v1') !== 'true') this.migrate()
       }
-      this.retention = new RetentionStore(this.db)
+      this.retention = new RetentionStore(this.db, ids => { this.commitLocalEntryState(this.activeBackendId, ids, 'read', { origin: 'retention' }) })
       this.identities = new IdentityStore(this.db)
       this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
       this.feedFetch = new FeedFetchStore(this.db, id => this.assertLocalBackend(id))
@@ -386,6 +386,14 @@ export class PaperDatabase {
       const value = operation === 'read' || operation === 'star'
       const changed = states.filter(state => state[column] !== value)
       for (const state of changed) this.db.prepare(`UPDATE entries SET ${column} = ?, state_revision = state_revision + 1 WHERE id = ?`).run(value ? 1 : 0, state.id)
+      if (operation === 'unread') {
+        const exempt = this.db.prepare('UPDATE retention_auto_read SET exempt = 1 WHERE entry_id = ?')
+        for (const state of states) exempt.run(state.id)
+      } else if (operation === 'read' && options.origin === 'retention') {
+        const mark = this.db.prepare('INSERT OR IGNORE INTO retention_auto_read(entry_id, marked_at) VALUES (?, ?)')
+        const now = Date.now()
+        for (const state of changed) mark.run(state.id, now)
+      }
       if (changed.length) this.recordActivity({
         kind: 'state', origin: options.origin || 'reader', summary: `${operation}: ${changed.length} articles`, count: changed.length,
         details: { operation, ids: changed.map(state => state.id).slice(0, 30) },

@@ -1,3 +1,4 @@
+import { LocalStateService } from './local-state.js'
 import crypto from 'node:crypto'
 import { Worker } from 'node:worker_threads'
 import { createRequire } from 'node:module'
@@ -18,19 +19,24 @@ export class RetentionService {
   private previews = new Map<string, { policy: string; revision: number; now: number; ceiling: number }>()
   error = ''
 
-  constructor(private readonly db: PaperDatabase, private readonly backend: BackendIdentity) {}
+  constructor(private readonly db: PaperDatabase, private readonly backend: BackendIdentity,
+    private readonly state = new LocalStateService(db, backend.id)) {}
 
   view(): RetentionView {
     const navigation = this.backend.kind === 'standalone' ? this.db.organization.snapshot(this.backend.id).navigation : null
     const cache = this.db.getSyncValue('retention_cache_run')
     const settings = this.db.retention.settings()
     const folderIds = new Set(navigation?.folders.map(folder => folder.id))
+    const feedFolders = new Map<string, string[]>()
+    for (const folder of navigation?.folders || []) for (const feed of folder.feeds) {
+      feedFolders.set(feed.id, [...(feedFolders.get(feed.id) || []), folder.id])
+    }
     const feedIds = new Set([...(navigation?.uncategorized || []), ...(navigation?.folders.flatMap(folder => folder.feeds) || [])].map(feed => feed.id))
     settings.policy.folderDays = Object.fromEntries(Object.entries(settings.policy.folderDays).filter(([id]) => folderIds.has(id)))
     settings.policy.feedDays = Object.fromEntries(Object.entries(settings.policy.feedDays).filter(([id]) => feedIds.has(id)))
     return { backend: this.backend.kind, ...settings,
       folders: navigation?.folders.map(({ id, title }) => ({ id, title })) || [],
-      feeds: [...new Map([...(navigation?.uncategorized || []), ...(navigation?.folders.flatMap(folder => folder.feeds) || [])].map(feed => [feed.id, { id: feed.id, title: feed.title }])).values()],
+      feeds: [...new Map([...(navigation?.uncategorized || []), ...(navigation?.folders.flatMap(folder => folder.feeds) || [])].map(feed => [feed.id, { id: feed.id, title: feed.title, folderIds: feedFolders.get(feed.id) || [] }])).values()],
       lastRun: this.backend.kind === 'standalone' ? this.db.retention.lastRun() : null,
       cacheRun: cache ? JSON.parse(cache) : null, error: this.error }
   }
@@ -177,7 +183,7 @@ export class RetentionService {
         run = store.start(policy, startedAt, ceiling)
       }
       while (run && !this.stopped) {
-        const result = store.batch(run, this.backupReady)
+        const result = this.state.retentionBatch(run, this.backupReady)
         if (result.needsBackup) { await this.ensureBackup(); continue }
         if (result.done) {
           this.db.transaction(() => {
@@ -192,6 +198,7 @@ export class RetentionService {
       }
       const lastSweep = Number(this.db.getSyncValue('retention_tombstone_sweep') || 0)
       if (force || now - lastSweep >= DAY) {
+        while (!this.stopped && store.expireRemovals(now) === RETENTION_BATCH) await yieldTurn()
         let cursor = ''
         while (!this.stopped) {
           const result = store.expireTombstones(cursor, now)

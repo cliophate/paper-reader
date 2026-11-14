@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { effectiveAutoRead } from '../../server/retention-policy'
 import { api } from '../api'
 import type { RetentionPolicy, RetentionPreview, RetentionView } from '../../shared/retention'
 
@@ -49,6 +50,10 @@ export function RetentionSettings({ backend }: { backend: 'standalone' | 'freshr
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not update retention.') }
     finally { setBusy(false) }
   }
+  const selectedFeed = view?.feeds.find(item => item.id === feed)
+  const effective = draft && selectedFeed ? effectiveAutoRead(draft, feed, selectedFeed.folderIds) : null
+  const source = effective?.source === 'folder' ? `folder ${view?.folders.find(item => item.id === effective.folderId)?.title || effective.folderId}`
+    : effective?.source === 'feed' ? 'feed override' : 'global limit'
   const deleting = draft && (draft.readDays !== null || draft.unreadDays !== null)
   return <section className="retention-settings" aria-label="Retention">
     <h4>Retention</h4>
@@ -59,7 +64,7 @@ export function RetentionSettings({ backend }: { backend: 'standalone' | 'freshr
           <p>Age starts when Paper first stores an article. All limits are off until you enable them.</p>
           <Days label="Auto-mark-read" value={draft.autoReadDays} onChange={value => change({ ...draft, autoReadDays: value ?? null })} />
           <details><summary>Folder and feed overrides</summary>
-            <p>Feed overrides take priority over folder overrides, then the global limit. Never disables auto-read for that scope.</p>
+            <p>Feed overrides take priority. Across folders, Never wins; otherwise the longest limit wins. Without an override, the global limit applies.</p>
             <label>Folder <select aria-label="Override folder" value={folder} onChange={event => setFolder(event.target.value)}>
               <option value="">Choose a folder</option>{view.folders.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
             </select></label>
@@ -68,6 +73,7 @@ export function RetentionSettings({ backend }: { backend: 'standalone' | 'freshr
               <option value="">Choose a feed</option>{view.feeds.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
             </select></label>
             {feed && <Days label="Feed auto-read" inherit value={Object.hasOwn(draft.feedDays, feed) ? draft.feedDays[feed] : undefined} onChange={value => override('feedDays', feed, value)} />}
+            {effective && <p>Effective auto-read: {effective.days === null ? 'Never' : `after ${effective.days} days`}. Source: {source}.</p>}
           </details>
           <Days label="Delete read articles" value={draft.readDays} suggested={60} onChange={value => change({ ...draft, readDays: value ?? null })} />
           <Days label="Delete unread articles" value={draft.unreadDays} suggested={180} onChange={value => change({ ...draft, unreadDays: value ?? null })} />

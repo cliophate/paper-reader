@@ -24,6 +24,14 @@ export function migrateRetention(db: DatabaseSync) {
     CREATE TABLE IF NOT EXISTS retention_present (
       feed_id TEXT NOT NULL, entry_id TEXT NOT NULL, PRIMARY KEY(feed_id, entry_id)
     );
+    CREATE TABLE IF NOT EXISTS retention_auto_read (
+      entry_id TEXT PRIMARY KEY REFERENCES entries(id) ON DELETE CASCADE,
+      marked_at INTEGER NOT NULL, exempt INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS retention_removals (
+      sequence INTEGER PRIMARY KEY, removed_at INTEGER NOT NULL, feed_id TEXT NOT NULL, title TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS retention_removals_age_idx ON retention_removals(removed_at, sequence);
     CREATE TABLE IF NOT EXISTS retention_tombstones (
       entry_id TEXT PRIMARY KEY REFERENCES article_identities(id), feed_id TEXT NOT NULL,
       deleted_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL

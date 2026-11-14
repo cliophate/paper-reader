@@ -12,7 +12,7 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); vi.useFakeTimers()
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
   view = { backend: 'standalone', policy: { autoReadDays: null, folderDays: {}, feedDays: {}, readDays: null, unreadDays: null, cacheDays: null }, revision: 0,
-    feeds: [{ id: 'feed', title: 'Feed' }], folders: [{ id: 'folder', title: 'Folder' }], lastRun: null, cacheRun: null, error: '' }
+    feeds: [{ id: 'feed', title: 'Feed', folderIds: ['folder'] }], folders: [{ id: 'folder', title: 'Folder' }], lastRun: null, cacheRun: null, error: '' }
   vi.mocked(api.retention).mockImplementation(async () => structuredClone(view))
   vi.mocked(api.previewRetention).mockResolvedValue({ marked: 5, deleted: 3, token: 'preview' })
   vi.mocked(api.saveRetention).mockImplementation(async policy => ({ ...view, policy, revision: 1 }))
@@ -63,4 +63,22 @@ it('offers inherit and never overrides and polls the last run', async () => {
   view.lastRun = { id: 1, startedAt: 1, finishedAt: 2, cursor: 10, ceiling: 10, batches: 1, marked: 4, deleted: 2 }
   await act(async () => vi.advanceTimersByTime(3000))
   expect(container.textContent).toContain('Marked 4 read and deleted 2 articles.')
+})
+
+
+it('shows the effective feed policy and source while editing overrides', async () => {
+  view.policy.autoReadDays = 10
+  view.policy.folderDays = { folder: 20, second: null }
+  view.folders.push({ id: 'second', title: 'Keep unread' })
+  view.feeds[0].folderIds.push('second')
+  await act(async () => root.render(<RetentionSettings backend="standalone" />))
+  await select('Override feed', 'feed')
+  expect(container.textContent).toContain('Effective auto-read: Never. Source: folder Keep unread.')
+  await select('Feed auto-read', 'days')
+  expect(container.textContent).toContain('Effective auto-read: after 30 days. Source: feed override.')
+  await select('Feed auto-read', 'inherit')
+  await select('Override folder', 'second'); await select('Folder auto-read', 'inherit')
+  expect(container.textContent).toContain('Effective auto-read: after 20 days. Source: folder Folder.')
+  await select('Override folder', 'folder'); await select('Folder auto-read', 'inherit')
+  expect(container.textContent).toContain('Effective auto-read: after 10 days. Source: global limit.')
 })

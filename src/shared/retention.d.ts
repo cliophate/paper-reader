@@ -20,7 +20,7 @@ export interface RetentionView {
   policy: RetentionPolicy
   revision: number
   folders: Array<{ id: string; title: string }>
-  feeds: Array<{ id: string; title: string }>
+  feeds: Array<{ id: string; title: string; folderIds: string[] }>
   lastRun: RetentionRun | null
   cacheRun: { at: number; deleted: number } | null
   error: string

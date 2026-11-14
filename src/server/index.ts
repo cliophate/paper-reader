@@ -63,7 +63,7 @@ const synchronizer = standalone ? new StandaloneRuntime(database, standalone, co
   : new BackendSynchronizer(database, backend, config.sync.enabled, config.sync.minutes)
 const readwise = new ReadwiseClient(config.readwise)
 const kirby = new KirbyPublisher(config.kirby)
-const retention = new RetentionService(database, backend.identity)
+const retention = new RetentionService(database, backend.identity, standalone?.state)
 retention.start()
 const reader = new ReaderService(database, config.readerFallbackEnabled)
 const headlines = new HeadlineService(database, url => reader.fetch(url, 0), (stage, prompt, input, schema) =>
@@ -463,7 +463,12 @@ app.get('/api/entries/number/:number', asyncRoute(async (request, response) => {
   if (!/^[1-9][0-9]*$/.test(String(request.params.number)) || !Number.isSafeInteger(number)) return response.status(400).json({ error: 'Invalid article number' })
   const cached = database.entryByNumber(number)
   const entry = cached && (localReadsActive ? cached : await entriesSource.entry(cached.id))
-  if (!entry) return response.status(404).json({ error: 'Article not found' })
+  if (!entry) {
+    const removal = standalone && database.retention.removal(number)
+    if (removal) return response.status(410).json({ code: 'removed_by_retention', removal,
+      error: `This article was removed by your retention settings on ${new Date(removal.removedAt).toISOString().slice(0, 10)}.` })
+    return response.status(404).json({ error: 'Article not found' })
+  }
   response.json({ entry: headlines.decorate(database.numberEntry(entry)) })
 }))
 

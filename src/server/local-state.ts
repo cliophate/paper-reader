@@ -1,14 +1,15 @@
+import type { RetentionRun } from '../shared/retention.js'
 import type { EntryStateOperation } from './backend.js'
 import type { PaperDatabase } from './db.js'
 
 export type LocalStateChange = ReturnType<PaperDatabase['commitLocalEntryState']>
 
 export class LocalStateService {
-  private readonly listeners = new Set<(change: LocalStateChange) => void>()
+  private readonly listeners = new Set<(change: LocalStateChange | null) => void>()
 
   constructor(private readonly db: PaperDatabase, private readonly backendId: string) {}
 
-  onStateChanged(listener: (change: LocalStateChange) => void) {
+  onStateChanged(listener: (change: LocalStateChange | null) => void) {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
   }
@@ -25,8 +26,16 @@ export class LocalStateService {
     return change
   }
 
-  private emit(change: LocalStateChange) {
-    if (change.ids.length) for (const listener of this.listeners) {
+  retentionBatch(run: RetentionRun, backupReady: boolean) {
+    const result = this.db.retention.batch(run, backupReady)
+    // The state changes, removals and cursor have all committed. A null event
+    // makes readers reload without sending an ever-growing list of article IDs.
+    if (result.changed) this.emit(null)
+    return result
+  }
+
+  private emit(change: LocalStateChange | null) {
+    if (change === null || change.ids.length) for (const listener of this.listeners) {
       try { listener(change) }
       catch { console.warn('A local state listener failed after commit') }
     }

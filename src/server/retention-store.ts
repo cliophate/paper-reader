@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { IdentityResolution } from './identity.js'
 import type { RetentionCounts, RetentionPolicy, RetentionRun } from '../shared/retention.js'
+import { effectiveAutoRead } from './retention-policy.js'
 import { transaction } from './transaction.js'
 
 export const DAY = 86_400_000
@@ -22,25 +23,23 @@ export function validatePolicy(input: unknown, standalone: boolean): RetentionPo
     cacheDays: value.cacheDays, folderDays: { ...value.folderDays }, feedDays: { ...value.feedDays } }
 }
 
-export function autoReadDays(policy: RetentionPolicy, feed: string, folder: string | null): number | null {
-  if (Object.hasOwn(policy.feedDays, feed)) return policy.feedDays[feed]
-  if (folder !== null && Object.hasOwn(policy.folderDays, folder)) return policy.folderDays[folder]
-  return policy.autoReadDays
+export function autoReadDays(policy: RetentionPolicy, feed: string, folders: string[] | string | null): number | null {
+  return effectiveAutoRead(policy, feed, Array.isArray(folders) ? folders : folders === null ? [] : [folders]).days
 }
 
-type Candidate = { sequence: number; id: string; feed_id: string; folder_id: string | null; first_seen_at: number; read: number; protected: number }
+type Candidate = { sequence: number; id: string; feed_id: string; title: string; folder_ids: string[]; auto_read_exempt: number; first_seen_at: number; read: number; protected: number }
 export function evaluate(policy: RetentionPolicy, row: Candidate, now: number): RetentionCounts {
   // Unknown legacy arrival dates are not evidence that an article is old.
   if (row.first_seen_at <= 0 || row.first_seen_at > now) return { marked: 0, deleted: 0 }
   const age = now - row.first_seen_at
-  const readDays = autoReadDays(policy, row.feed_id, row.folder_id)
-  const marked = !row.read && readDays !== null && age >= readDays * DAY ? 1 : 0
+  const readDays = autoReadDays(policy, row.feed_id, row.folder_ids)
+  const marked = !row.read && !row.auto_read_exempt && readDays !== null && age >= readDays * DAY ? 1 : 0
   const deleteDays = row.read || marked ? policy.readDays : policy.unreadDays
   return { marked, deleted: !row.protected && deleteDays !== null && age >= deleteDays * DAY ? 1 : 0 }
 }
 
 export class RetentionStore {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly db: DatabaseSync, private readonly markRead: (ids: string[]) => void) {}
 
   settings(): { policy: RetentionPolicy; revision: number } {
     const row = this.db.prepare('SELECT * FROM retention_settings WHERE id = 1').get()
@@ -70,8 +69,9 @@ export class RetentionStore {
   ceiling(): number { return Number(this.db.prepare('SELECT MAX(sequence) AS n FROM article_arrivals').get()?.n || 0) }
 
   candidates(cursor: number, ceiling: number, now: number): Candidate[] {
-    return this.db.prepare(`SELECT a.sequence, e.id, e.feed_id, e.first_seen_at, e.read,
-      (SELECT folder_id FROM feed_folders WHERE feed_id = e.feed_id ORDER BY folder_id LIMIT 1) AS folder_id,
+    return this.db.prepare(`SELECT a.sequence, e.id, e.feed_id, e.title, e.first_seen_at, e.read,
+      (SELECT json_group_array(folder_id) FROM feed_folders WHERE feed_id = e.feed_id) AS folder_ids,
+      COALESCE((SELECT exempt FROM retention_auto_read WHERE entry_id = e.id), 0) AS auto_read_exempt,
       (e.starred = 1
         OR EXISTS (SELECT 1 FROM discussions WHERE entry_id = e.id)
         OR EXISTS (SELECT 1 FROM pulse_memberships WHERE entry_id = e.id)
@@ -84,7 +84,8 @@ export class RetentionStore {
         OR EXISTS (SELECT 1 FROM retention_present WHERE feed_id = e.feed_id AND entry_id = e.id)) AS protected
       FROM article_arrivals a JOIN entries e ON e.id = a.entry_id
       WHERE a.sequence > ? AND a.sequence <= ? ORDER BY a.sequence LIMIT ?`)
-      .all(new Date(now - 30 * DAY).toISOString(), cursor, ceiling, RETENTION_BATCH) as Candidate[]
+      .all(new Date(now - 30 * DAY).toISOString(), cursor, ceiling, RETENTION_BATCH)
+      .map(row => ({ ...row, folder_ids: JSON.parse(String(row.folder_ids)) })) as Candidate[]
   }
 
   start(policy: RetentionPolicy, now = Date.now(), ceiling = this.ceiling()): RetentionRun {
@@ -104,30 +105,34 @@ export class RetentionStore {
 
   runPolicy(id: number): RetentionPolicy { return JSON.parse(String(this.db.prepare('SELECT policy_json FROM retention_runs WHERE id = ?').get(id)!.policy_json)) }
 
-  batch(run: RetentionRun, backupReady: boolean): { done: boolean; needsBackup: boolean } {
+  batch(run: RetentionRun, backupReady: boolean): { done: boolean; needsBackup: boolean; changed: boolean } {
     return transaction(this.db, () => {
       const current = this.active()
-      if (!current || current.id !== run.id) return { done: true, needsBackup: false }
+      if (!current || current.id !== run.id) return { done: true, needsBackup: false, changed: false }
       run = current
       const policy = this.runPolicy(run.id)
       const rows = this.candidates(run.cursor, run.ceiling, run.startedAt)
       const decisions = rows.map(row => evaluate(policy, row, run.startedAt))
-      if (!backupReady && decisions.some(decision => decision.deleted)) return { done: false, needsBackup: true }
-      let marked = 0, deleted = 0
-      const mark = this.db.prepare('UPDATE entries SET read = 1, state_revision = state_revision + 1 WHERE id = ?')
+      if (!backupReady && decisions.some(decision => decision.deleted)) return { done: false, needsBackup: true, changed: false }
+      const markedIds = rows.filter((_, index) => decisions[index].marked).map(row => row.id)
+      if (markedIds.length) this.markRead(markedIds)
+      const marked = markedIds.length
+      let deleted = 0
+      const removedAt = Date.now()
+      const removal = this.db.prepare('INSERT INTO retention_removals VALUES (?, ?, ?, ?)')
       const tombstone = this.db.prepare('INSERT INTO retention_tombstones VALUES (?, ?, ?, ?)')
       const remove = this.db.prepare('DELETE FROM entries WHERE id = ?')
       rows.forEach((row, index) => {
         const decision = decisions[index]
-        if (decision.marked) { mark.run(row.id); marked++ }
         if (decision.deleted) {
           tombstone.run(row.id, row.feed_id, run.startedAt, run.startedAt)
+          removal.run(row.sequence, removedAt, row.feed_id, row.title)
           remove.run(row.id); deleted++
         }
       })
       this.db.prepare('UPDATE retention_runs SET cursor = ?, marked = marked + ?, deleted = deleted + ?, batches = batches + 1 WHERE id = ?')
         .run(rows.at(-1)?.sequence ?? run.ceiling, marked, deleted, run.id)
-      return { done: rows.length < RETENTION_BATCH, needsBackup: false }
+      return { done: rows.length < RETENTION_BATCH, needsBackup: false, changed: marked + deleted > 0 }
     })
   }
 
@@ -146,6 +151,17 @@ export class RetentionStore {
       }
       return { cursor: String(rows.at(-1)?.entry_id || cursor), done: rows.length < RETENTION_BATCH }
     })
+  }
+
+  removal(sequence: number): { sequence: number; removedAt: number; feedId: string; title: string } | null {
+    const row = this.db.prepare('SELECT * FROM retention_removals WHERE sequence = ?').get(sequence)
+    return row ? { sequence: Number(row.sequence), removedAt: Number(row.removed_at), feedId: String(row.feed_id), title: String(row.title) } : null
+  }
+
+  expireRemovals(now: number): number {
+    return Number(this.db.prepare(`DELETE FROM retention_removals WHERE sequence IN (
+      SELECT sequence FROM retention_removals WHERE removed_at < ? ORDER BY removed_at, sequence LIMIT ?)`)
+      .run(now - 365 * DAY, RETENTION_BATCH).changes)
   }
 
   cacheBatch(days: number, now: number): number {

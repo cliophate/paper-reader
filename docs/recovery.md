@@ -67,7 +67,13 @@ Paper 0.2.0-alpha.1 uses database schema v13.
 Schema v14 adds [retention](retention.md). Startup creates
 `<database-path>.before-retention-v14` before migrating. All retention limits
 start off. Existing articles and saved state stay unchanged. Feeds remain
-protected from deletion until their next successful body fetch.
+protected from deletion until their next successful body fetch. The v14 schema
+also keeps auto-read timestamps, explicit unread exemptions and removal notices.
+A manual unread choice after auto-read survives restart and later cleanup.
+
+Deleted article links show the retention removal date for one year, then report
+not found. Arrival numbers are never reused. Removal notices contain no article
+body and cannot restore deleted articles; restore a backup to recover them.
 
 The first cleanup that would delete articles creates a second consistent backup,
 `<database-path>.before-retention-first-delete`, including committed WAL data.

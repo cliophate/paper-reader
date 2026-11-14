@@ -4,6 +4,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db'
+import { LocalStateService } from '../src/server/local-state'
 import { RetentionService } from '../src/server/retention'
 import { autoReadDays, DAY, defaultPolicy, RETENTION_BATCH, validatePolicy } from '../src/server/retention-store'
 import { ingestFeed } from '../src/server/feed-ingestion'
@@ -141,7 +142,7 @@ it('resumes an interrupted cursor after reopening without repeating committed wo
   const p = policy({ autoReadDays: 1 })
   db.retention.save(p, 0)
   const run = db.retention.start(p)
-  expect(db.retention.batch(run, false)).toEqual({ done: false, needsBackup: false })
+  expect(db.retention.batch(run, false)).toEqual({ done: false, needsBackup: false, changed: true })
   expect(db.retention.lastRun()).toMatchObject({ marked: RETENTION_BATCH, batches: 1 })
   db.close(); db = new PaperDatabase(file); service = new RetentionService(db, backend)
   service.wake(); await service.drain()
@@ -201,7 +202,7 @@ it('cleans only the full-text cache in FreshRSS mode on its separate schedule', 
 describe('schema v14', () => {
   it('backs up v13, preserves data and can reopen without DDL', async () => {
     seed(1); await service.stop(); db.close()
-    for (const table of ['retention_settings', 'retention_runs', 'retention_feeds', 'retention_present', 'retention_tombstones', 'retention_briefing_entries']) sql.exec(`DROP TABLE ${table}`)
+    for (const table of ['retention_auto_read', 'retention_removals', 'retention_settings', 'retention_runs', 'retention_feeds', 'retention_present', 'retention_tombstones', 'retention_briefing_entries']) sql.exec(`DROP TABLE ${table}`)
     for (const index of ['article_aliases_entry_idx', 'article_fingerprints_entry_idx', 'article_cache_age_idx', 'article_reports_entry_idx']) sql.exec(`DROP INDEX ${index}`)
     sql.exec('PRAGMA user_version = 13')
     db = new PaperDatabase(file); service = new RetentionService(db, backend)
@@ -286,7 +287,7 @@ it('runs a policy saved just before a restart even when the previous run was tod
 
 it('rolls back a failed migration and retains the same backup on retry', async () => {
   seed(1); await service.stop(); db.close()
-  for (const table of ['retention_settings', 'retention_runs', 'retention_feeds', 'retention_present', 'retention_tombstones', 'retention_briefing_entries']) sql.exec(`DROP TABLE ${table}`)
+  for (const table of ['retention_auto_read', 'retention_removals', 'retention_settings', 'retention_runs', 'retention_feeds', 'retention_present', 'retention_tombstones', 'retention_briefing_entries']) sql.exec(`DROP TABLE ${table}`)
   sql.exec('PRAGMA user_version = 13')
   const original = DatabaseSync.prototype.exec
   const failure = vi.spyOn(DatabaseSync.prototype, 'exec').mockImplementation(function (this: DatabaseSync, statement: string) {
@@ -308,7 +309,7 @@ it('keeps the article foreign-key inventory explicit for future schema changes',
     return sql.prepare(`PRAGMA foreign_key_list("${table.replaceAll('"', '""')}")`).all().some(key => key.table === 'entries') ? [table] : []
   }).sort()
   expect(references).toEqual(['article_arrivals', 'article_urls', 'briefing_considered', 'coverage_cluster_entries', 'entry_search_rows',
-    'headline_cache', 'muted_entries', 'pulse_memberships', 'pulse_scanned', 'reading_progress'].sort())
+    'headline_cache', 'muted_entries', 'pulse_memberships', 'pulse_scanned', 'reading_progress', 'retention_auto_read'].sort())
 })
 
 it('backs up before earlier marking batches when deletion first occurs in a later batch', async () => {
@@ -318,4 +319,110 @@ it('backs up before earlier marking batches when deletion first occurs in a late
   expect(db.retention.lastRun()).toMatchObject({ marked: 205, deleted: 105 })
   const saved = new DatabaseSync(file + '.before-retention-first-delete', { readOnly: true })
   try { expect(saved.prepare('SELECT COUNT(*) n FROM entries WHERE read = 1').get()?.n).toBe(0) } finally { saved.close() }
+})
+
+
+it('keeps explicit unread choices after auto-read, including bulk and undo, across restart', async () => {
+  const ids = seed(3)
+  const state = new LocalStateService(db, backend.id)
+  await save(policy({ autoReadDays: 1 }))
+  state.editEntries([ids[0]], 'unread')
+  state.editEntries(ids.slice(1), 'unread')
+  const read = state.editEntries([ids[2]], 'read', { undo: { token: 'retention-undo', expiresAt: new Date(Date.now() + 60000).toISOString() } })
+  state.undo(read.undoToken)
+  await service.stop(); db.close(); db = new PaperDatabase(file); service = new RetentionService(db, backend)
+  const p = policy({ autoReadDays: 1, readDays: 1, unreadDays: null })
+  expect(await service.preview(p)).toMatchObject({ marked: 0, deleted: 0 })
+  await save(p)
+  expect(ids.map(id => db.entryState(id)?.read)).toEqual([false, false, false])
+  // A later explicit read still qualifies for read deletion.
+  db.commitLocalEntryState(backend.id, [ids[0]], 'read')
+  expect(await service.preview(p)).toMatchObject({ marked: 0, deleted: 1 })
+})
+
+it('commits auto-read activity and bounded state notifications after every batch', async () => {
+  seed(205)
+  const state = new LocalStateService(db, backend.id)
+  await service.stop(); service = new RetentionService(db, backend, state)
+  const notifications: unknown[] = [], committed: number[] = []
+  state.onStateChanged(change => {
+    notifications.push(change)
+    committed.push(Number(sql.prepare('SELECT COUNT(*) n FROM entries WHERE read = 1').get()?.n))
+  })
+  await save(policy({ autoReadDays: 1 }))
+  expect(notifications).toEqual([null, null, null])
+  expect(committed).toEqual([100, 200, 205])
+  const activity = db.activity().filter(event => event.kind === 'state' && event.origin === 'retention')
+  expect(activity.map(event => event.count).sort((a, b) => a - b)).toEqual([5, 100, 100])
+  expect(sql.prepare('SELECT COUNT(*) n FROM entries WHERE state_revision = 1').get()?.n).toBe(205)
+})
+
+it('uses the most conservative override across every folder and honors feed priority', async () => {
+  seed(1)
+  const folders: string[] = []
+  for (const title of ['First', 'Second', 'Third']) {
+    const result = db.organization.apply(backend.id, db.organization.snapshot(backend.id).revision, [{ type: 'create-folder', title }]).results[0]
+    if (result.status !== 'applied' || !result.id) throw Error('fixture')
+    folders.push(result.id)
+    db.organization.apply(backend.id, db.organization.snapshot(backend.id).revision, [{ type: 'add-membership', feedId: feed, folderId: result.id }])
+  }
+  folders.sort()
+  const p = policy({ autoReadDays: 1, readDays: 1, folderDays: { [folders[0]]: 1, [folders[1]]: 300 } })
+  expect(await service.preview(p)).toMatchObject({ marked: 0, deleted: 0 })
+  p.folderDays[folders[1]] = 100; p.folderDays[folders[2]] = null
+  expect(await service.preview(p)).toMatchObject({ marked: 0, deleted: 0 })
+  await save(p)
+  expect(db.retention.lastRun()).toMatchObject({ marked: 0, deleted: 0 })
+  p.feedDays[feed] = 1
+  expect(await service.preview(p)).toMatchObject({ marked: 1, deleted: 1 })
+  p.feedDays[feed] = null
+  expect(await service.preview(p)).toMatchObject({ marked: 0, deleted: 0 })
+})
+
+it('retains deleted arrival numbers independently of identity expiry and never reuses them', async () => {
+  const [id] = seed(1), sequence = db.localEntry(id)!.linkNumber!
+  await save(policy({ unreadDays: 1 }))
+  const removal = sql.prepare('SELECT * FROM retention_removals WHERE sequence = ?').get(sequence)
+  expect(removal).toMatchObject({ sequence, feed_id: feed, title: 'Retention item-0' })
+  expect(Number(removal?.removed_at)).toBeGreaterThanOrEqual(now)
+  ingest([], now + 40 * DAY)
+  db.retention.expireTombstones('', now + 40 * DAY)
+  expect(sql.prepare('SELECT COUNT(*) n FROM retention_tombstones').get()?.n).toBe(0)
+  expect(sql.prepare('SELECT COUNT(*) n FROM retention_removals').get()?.n).toBe(1)
+  const result = ingest(['new-item']).results[0]
+  expect(result.status).toBe('resolved')
+  if (result.status === 'resolved') expect(db.localEntry(result.id)!.linkNumber).toBeGreaterThan(sequence)
+})
+
+
+it('rolls back auto-read, activity, exemptions, removal records and cursor without notifying on failure', () => {
+  const [id] = seed(1)
+  const state = new LocalStateService(db, backend.id), listener = vi.fn()
+  state.onStateChanged(listener)
+  const run = db.retention.start(policy({ autoReadDays: 1, readDays: 1 }))
+  sql.exec("CREATE TRIGGER reject_retention_delete BEFORE DELETE ON entries BEGIN SELECT RAISE(ABORT, 'fixture'); END")
+  expect(() => state.retentionBatch(run, true)).toThrow(/fixture/)
+  expect(listener).not.toHaveBeenCalled()
+  expect(db.entryState(id)).toMatchObject({ read: false, revision: 0 })
+  expect(db.activity().filter(event => event.kind === 'state')).toHaveLength(0)
+  expect(db.retention.lastRun()).toMatchObject({ cursor: 0, marked: 0, deleted: 0 })
+  for (const table of ['retention_auto_read', 'retention_removals', 'retention_tombstones']) expect(sql.prepare(`SELECT COUNT(*) n FROM ${table}`).get()?.n).toBe(0)
+  sql.exec('DROP TRIGGER reject_retention_delete')
+  state.retentionBatch(run, true)
+  expect(listener).toHaveBeenCalledExactlyOnceWith(null)
+  expect(db.entryState(id)).toBeNull()
+})
+
+it('expires removal notices after a year in bounded batches without resetting arrival numbers', async () => {
+  const ids = seed(205), lastNumber = Math.max(...ids.map(id => db.localEntry(id)!.linkNumber!))
+  await save(policy({ unreadDays: 1 }))
+  const removedAt = db.retention.removal(lastNumber)!.removedAt
+  expect(db.retention.expireRemovals(removedAt + 364 * DAY)).toBe(0)
+  expect(db.retention.expireRemovals(removedAt + 366 * DAY)).toBe(100)
+  expect(db.retention.expireRemovals(removedAt + 366 * DAY)).toBe(100)
+  expect(db.retention.expireRemovals(removedAt + 366 * DAY)).toBe(5)
+  expect(db.retention.removal(lastNumber)).toBeNull()
+  const result = ingest(['new-arrival']).results[0]
+  if (result.status !== 'resolved') throw Error('fixture')
+  expect(db.localEntry(result.id)!.linkNumber).toBeGreaterThan(lastNumber)
 })

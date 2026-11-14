@@ -6,11 +6,19 @@ articles using separate limits. Age starts at `entries.first_seen_at`, when
 Paper first stored the article. Publication dates do not control cleanup.
 Unknown legacy arrival dates stay protected.
 
-Auto-read uses the feed override, then the folder override, then the global
-limit. **Inherit** removes an override. **Never** disables auto-read for that
-feed or folder. Auto-read happens before deletion evaluation, so an article
-marked read uses the read limit in the same run. Stars and saved references
-protect against deletion, not auto-read.
+Auto-read uses the feed override first. Otherwise it checks every folder the
+feed belongs to. Among folder overrides, **Never** wins; otherwise the largest
+number of days wins. Without an override, the global limit applies. **Inherit**
+removes an override. The feed selector in Retention settings shows the effective
+limit and its source as you edit. Read and unread deletion limits are global.
+
+Auto-read happens before deletion evaluation, so an article marked read uses the
+read limit in the same run. Paper records when retention first marks an article
+read. If you later mark it unread, including through bulk actions or Undo, it
+stays exempt from auto-read. The exemption survives restarts and policy changes.
+While unread, it can only qualify for unread deletion. A later manual mark-read
+makes the read deletion limit apply again. Stars and saved references protect
+against deletion, not auto-read.
 
 Preview the policy before enabling either deletion limit. The preview shows
 how many articles would become read or be deleted. Saving requires a matching
@@ -34,7 +42,9 @@ stored as JSON or URLs.
 | `article_reports.entry_id` | Protect reported articles, including resolved reports, because their notes are user-authored. |
 | `retention_present.entry_id` | Protect articles in the latest committed successful feed body, including ambiguous identity candidates. A 304 or failed fetch leaves this list intact. |
 | `article_identities`, `article_aliases`, `article_fingerprints` | Keep identity records as tombstones until expiry. |
-| `article_urls`, `article_arrivals` | Delete with the article. Arrival numbers are never reused. |
+| `article_urls`, `article_arrivals` | Delete with the article. Arrival numbers are never reused, even after removal notices expire. |
+| `retention_auto_read` | Record the first retention auto-read time and later unread exemption. Cascade with the article. |
+| `retention_removals` | Keep the arrival number, removal time, feed ID and title for one year. No article body or URL. |
 | `entry_search_rows`, `entries_fts` | Existing indexed triggers remove search data in the deletion transaction. |
 | `headline_cache`, `pulse_scanned`, `coverage_cluster_entries`, `briefing_considered`, `muted_entries` | Derived data cascades with the article. It does not protect it. `coverage_clusters` and mute rules remain. |
 | `coverage_feedback`, `identity_conflicts` | Keep historical metadata. Candidate IDs may refer to deleted articles. |
@@ -62,7 +72,8 @@ feed ID, deletion time and last-seen time. The existing `article_identities`
 row retains backend ownership. Existing `article_aliases` retain all GUIDs,
 Atom IDs and verified previous IDs. `article_fingerprints` retain the versioned
 stable fingerprints documented in [article identity](article-identity.md).
-No title, body or URL archive remains in the tombstone.
+The identity tombstone keeps no title, body or URL. Removal notices keep a title
+separately for one year.
 
 Ingestion resolves these keys using its normal rules, then suppresses a match
 to a tombstone. Distinct explicit IDs still remain distinct. Reappearance
@@ -78,6 +89,18 @@ body provides that evidence. This trades a small retained identity record for
 avoiding reimports after a feed outage. An item returning after expiry can be
 imported again. There is no fixed count cap that would silently break matching.
 
+## Removed article links
+
+For one year after deletion, a bookmarked article number returns HTTP 410 from
+`GET /api/entries/number/<number>`, with code `removed_by_retention` and a
+`removal` object containing `sequence`, `removedAt`, `feedId` and `title`.
+The reader shows "This article was removed by your retention settings on <date>".
+This record survives identity tombstone expiry. It cannot restore the article.
+
+Daily cleanup removes notices older than 365 days in batches of 100. After that,
+the link returns the usual HTTP 404. Paper never resets `article_arrivals`'s
+AUTOINCREMENT counter, so an expired number cannot point to another article.
+
 ## Jobs, cache and recovery
 
 Article cleanup runs daily and after a policy change. Each transaction examines
@@ -85,7 +108,11 @@ at most 100 articles. It saves the cursor and counts with its changes, then
 yields to HTTP requests and the feed scheduler. A frozen arrival ceiling keeps
 new imports outside that run. Restart resumes the committed cursor with the
 same policy and age cutoff. Each batch checks current protection and read/star
-state. A failed batch rolls back completely. Only the latest 31 run summaries
+state. Auto-read uses the normal state transaction, increments state revisions and
+records state activity with origin `retention`. Each changed batch sends a small
+state invalidation after commit so connected readers reload. Deletion sends the
+same invalidation. A failed batch rolls back state, activity, removal notices
+and its cursor, and sends no event. Only the latest 31 run summaries
 remain. Cleanup requests a nonblocking WAL checkpoint afterwards.
 
 Full-text cache cleanup runs every six hours and after a policy change, in
