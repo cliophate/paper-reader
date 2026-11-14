@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-alpha.1
+
+An alpha release with changes since [0.1.0](https://github.com/cliophate/paper-reader/releases/tag/v0.1.0).
+Adds standalone feed controls and an OpenAI-compatible API provider through
+[#64](https://github.com/cliophate/paper-reader/pull/64) and
+[#65](https://github.com/cliophate/paper-reader/pull/65).
+
+### Changes since 0.1.0
 
 - Standalone feed settings show the last successful check, next scheduled check,
   errors, consecutive failures and publisher retry delays. Check a feed or folder
@@ -20,6 +27,15 @@
   share the feed address policy, reject redirects and enforce time and size
   limits. Batch requests support JSON mode when JSON schema is unavailable. A saved key
   only goes to its own origin, and model defaults are `gpt-6-luna`.
+
+### Upgrade from 0.1.0
+
+Startup migrates the database to schema v13 after creating
+`<database-path>.before-feed-checks-v13`. Back up the full data directory and
+private configuration first. Update to `v0.2.0-alpha.1`, then pull and recreate
+the runtime and optional AI worker. No configuration change is needed.
+Existing Codex installations keep using Codex. See the
+[upgrade guide](docs/recovery.md#upgrade-from-010-to-020-alpha1).
 
 ## 0.1.0
 
