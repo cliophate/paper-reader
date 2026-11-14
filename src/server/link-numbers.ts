@@ -1,8 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { transaction } from './transaction.js'
 
-export const DATABASE_VERSION = 12
-
 export function migrateLinkNumbers(db: DatabaseSync) {
   transaction(db, () => {
     db.exec(`CREATE TABLE IF NOT EXISTS link_numbers (

@@ -279,6 +279,149 @@ describe('standalone collector', () => {
   })
 })
 
+describe('manual feed checks', () => {
+  function allowManual(id: string) { sql(c => c.prepare('UPDATE feed_fetch_state SET last_attempt_at = 0 WHERE subscription_id = ?').run(id)) }
+
+  it('forces a future check with conditional headers, deduplicates it, and persists cooldown across restart', async () => {
+    const conditions: Array<string | undefined> = []
+    const origin = await server((req, res) => {
+      conditions.push(req.headers['if-none-match'])
+      res.writeHead(conditions.length === 1 ? 200 : 304, { ETag: '"manual"' })
+      res.end(conditions.length === 1 ? rss() : '')
+    })
+    const id = save(origin)
+    const collector = scheduler(origin)
+    await collector.runDue()
+    expect(state(id).nextFetchAt).toBeGreaterThan(Date.now())
+    expect(collector.queueChecks([id])[0].status).toBe('cooldown')
+    allowManual(id)
+    expect(collector.queueChecks([id, id])).toEqual([{ feedId: id, status: 'queued' }])
+    expect(collector.queueChecks([id])).toEqual([{ feedId: id, status: 'queued' }])
+    expect(await collector.runDue()).toMatchObject({ attempted: 1, notModified: 1 })
+    expect(conditions).toEqual([undefined, '"manual"'])
+    reopen()
+    expect(scheduler(origin).queueChecks([id])[0].status).toBe('cooldown')
+    expect(state(id).leaseToken).toBe('')
+  })
+
+  it.each([200, 503])('respects Retry-After on manual checks after HTTP %s and restart', async status => {
+    let requests = 0
+    const origin = await server((_req, res) => { requests++; res.writeHead(status, { 'Retry-After': '3600' }); res.end(status === 200 ? rss() : '') })
+    const id = save(origin)
+    await scheduler(origin).runDue()
+    const until = state(id).retryAfterUntil
+    expect(until).toBeGreaterThan(Date.now() + 3500_000)
+    allowManual(id); reopen()
+    const collector = scheduler(origin)
+    expect(collector.queueChecks([id])).toEqual([{ feedId: id, status: 'retry-after', until }])
+    expect(await collector.runDue()).toMatchObject({ attempted: 0 })
+    expect(requests).toBe(1)
+  })
+
+  it('shares bounded workers with automatic collection and deduplicates running checks', async () => {
+    let active = 0, peak = 0
+    const requests = new Map<string, number>()
+    const origin = await server((req, res) => {
+      active++; peak = Math.max(peak, active)
+      requests.set(req.url!, (requests.get(req.url!) || 0) + 1)
+      setTimeout(() => { active--; res.end(rss(req.url)) }, 20)
+    })
+    const ids = Array.from({ length: 12 }, (_, index) => save(origin + '/' + index))
+    const collector = scheduler(origin, db, 2)
+    collector.queueChecks(ids.slice(0, 8))
+    const running = collector.runDue()
+    expect(collector.checkState(ids[0])).toBe('running')
+    expect(collector.queueChecks(ids.slice(0, 8)).map(result => result.status)).toEqual(['running', 'running', ...Array(6).fill('queued')])
+    expect(collector.runDue()).toBe(running)
+    expect(await running).toMatchObject({ attempted: 12, fetched: 12 })
+    expect(peak).toBe(2)
+    expect([...requests.values()]).toEqual(Array(12).fill(1))
+  })
+
+  it('uses saved global and per-feed intervals, updates schedules, and retains failure and publisher waits', async () => {
+    const origin = await server((_req, res) => res.end(rss()))
+    const first = save(origin + '/first'), second = save(origin + '/second')
+    db.feedFetch.setInterval(backend.id, 0, 60)
+    db.feedFetch.setInterval(backend.id, 1, 5, second)
+    await scheduler(origin).runDue()
+    expect(state(first).nextFetchAt - state(first).lastSuccessAt).toBe(60 * 60_000)
+    expect(state(second).nextFetchAt - state(second).lastSuccessAt).toBe(5 * 60_000)
+    db.feedFetch.setInterval(backend.id, 2, 30)
+    expect(state(first).nextFetchAt - state(first).lastSuccessAt).toBe(30 * 60_000)
+    expect(state(second).nextFetchAt - state(second).lastSuccessAt).toBe(5 * 60_000)
+    db.feedFetch.setInterval(backend.id, 3, null, second)
+    expect(state(second).nextFetchAt - state(second).lastSuccessAt).toBe(30 * 60_000)
+    const until = Date.now() + 86400_000
+    sql(c => c.prepare('UPDATE feed_fetch_state SET retry_after_until = ?, next_fetch_at = ?, available_at = ? WHERE subscription_id = ?').run(until, until, until, first))
+    sql(c => c.prepare('UPDATE feed_fetch_state SET failures = 2 WHERE subscription_id = ?').run(second))
+    const failed = state(second)
+    db.feedFetch.setInterval(backend.id, 4, 5)
+    expect(state(first).nextFetchAt).toBe(until)
+    expect(state(second)).toEqual(failed)
+    for (const minutes of [0, 4, 1441, 5.5, NaN, Infinity]) expect(() => db.feedFetch.setInterval(backend.id, 5, minutes)).toThrow(/5 to 1440/)
+    expect(() => db.feedFetch.setInterval(backend.id, 0, 15)).toThrow(/changed/)
+    expect(db.feedFetch.settings(backend.id)).toEqual({ revision: 5, intervalMinutes: 5 })
+    reopen()
+    expect(db.feedFetch.settings(backend.id)).toEqual({ revision: 5, intervalMinutes: 5 })
+  })
+
+  it('keeps the destination policy for a forced request and fences an unexpired durable lease', async () => {
+    let requests = 0
+    const origin = await server((_req, res) => { requests++; res.end(rss()) })
+    const id = save(origin)
+    const lease = db.feedFetch.claim(backend.id, Date.now(), 60000)!
+    reopen()
+    const collector = new StandaloneFeedScheduler(db, backend.id)
+    expect(collector.queueChecks([id])[0].status).toBe('running')
+    db.feedFetch.complete(lease, Date.now(), { nextFetchAt: Date.now() + 900000, failures: 0, lastError: '', lastStatus: 200 }, () => {})
+    allowManual(id)
+    collector.queueChecks([id])
+    expect(await collector.runDue()).toMatchObject({ failed: 1 })
+    expect(state(id).lastError).toBe('policy')
+    expect(requests).toBe(0)
+  })
+})
+
+describe('schema v13 recovery', () => {
+  function downgrade() {
+    db.close()
+    sql(c => c.exec(`DROP TABLE feed_check_settings;
+      ALTER TABLE feed_fetch_state DROP COLUMN interval_minutes;
+      ALTER TABLE feed_fetch_state DROP COLUMN last_attempt_at;
+      ALTER TABLE feed_fetch_state DROP COLUMN retry_after_until;
+      PRAGMA user_version = 12`))
+    db = new PaperDatabase(':memory:')
+  }
+  it('backs up v12, preserves validators and leases, and conservatively retains old waits', () => {
+    const id = save('https://example.test/feed')
+    const lease = db.feedFetch.claim(backend.id, 100, 60000)!
+    sql(c => c.prepare('UPDATE feed_fetch_state SET next_fetch_at = 100000, etag = ? WHERE subscription_id = ?').run('"saved"', id))
+    downgrade()
+    const migrated = new PaperDatabase(file); extras.push(migrated)
+    expect(migrated.feedFetch.get(backend.id, id)).toMatchObject({ leaseToken: lease.leaseToken, leaseUntil: lease.leaseUntil,
+      etag: '"saved"', retryAfterUntil: 100000, intervalMinutes: null, lastAttemptAt: 0 })
+    expect(migrated.feedFetch.settings(backend.id)).toEqual({ revision: 0, intervalMinutes: 15 })
+    const backup = `${file}.before-feed-checks-v13`
+    expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
+    const connection = new DatabaseSync(backup, { readOnly: true })
+    expect(connection.prepare('PRAGMA user_version').get()?.user_version).toBe(12)
+    expect(connection.prepare('SELECT etag FROM feed_fetch_state').get()?.etag).toBe('"saved"')
+    connection.close()
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(13)
+  })
+  it('rolls back a failed migration and reuses the original backup', () => {
+    save('https://example.test/feed'); downgrade()
+    sql(c => c.exec("CREATE TRIGGER reject_upgrade BEFORE UPDATE ON feed_fetch_state BEGIN SELECT RAISE(ABORT, 'synthetic migration failure'); END"))
+    expect(() => new PaperDatabase(file)).toThrow(/synthetic migration failure/)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(12)
+    expect(sql(c => c.prepare('PRAGMA table_info(feed_fetch_state)').all().some(row => row.name === 'retry_after_until'))).toBe(false)
+    const backup = fs.readFileSync(`${file}.before-feed-checks-v13`)
+    sql(c => c.exec('DROP TRIGGER reject_upgrade'))
+    const migrated = new PaperDatabase(file); extras.push(migrated)
+    expect(fs.readFileSync(`${file}.before-feed-checks-v13`)).toEqual(backup)
+  })
+})
+
 describe('schema v9 recovery', () => {
   function downgrade() {
     db.close()
@@ -298,7 +441,7 @@ describe('schema v9 recovery', () => {
     expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
     const connection = new DatabaseSync(backup, { readOnly: true })
     expect(connection.prepare('PRAGMA user_version').get()?.user_version).toBe(8); connection.close()
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(12)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(13)
   })
   it('rolls back migration failures and reuses its pre-upgrade backup', () => {
     downgrade()
@@ -308,7 +451,7 @@ describe('schema v9 recovery', () => {
     const backup = fs.readFileSync(`${file}.before-feed-fetch-v9`)
     sql(c => c.exec('DROP VIEW feed_fetch_state'))
     const migrated = new PaperDatabase(file); extras.push(migrated)
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(12)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(13)
     expect(fs.readFileSync(`${file}.before-feed-fetch-v9`)).toEqual(backup)
   })
 })

@@ -55,6 +55,14 @@ export class StandaloneRuntime {
     }).finally(() => { this.running = null })
     return this.running
   }
+  checkState(feedId: string) { return this.scheduler.checkState(feedId) }
+  checksEnabled() { return this.enabled && !this.controller.signal.aborted }
+  checkNow(feedIds: string[]) {
+    if (!this.checksEnabled()) throw new Error('Feed collection is disabled.')
+    const results = this.scheduler.queueChecks(feedIds)
+    void this.syncNow('manual-check').catch(() => undefined)
+    return results
+  }
   async stop() { this.controller.abort(); await this.loop; await this.running }
   status() { return { ...this.db.syncStatus(this.enabled, Boolean(this.running)), backfillComplete: true, backfillContinuation: '' } }
   async refreshNavigation() {}

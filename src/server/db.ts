@@ -1,3 +1,4 @@
+import { DATABASE_VERSION, migrateFeedCheckSettings } from './feed-check-settings.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -10,7 +11,7 @@ import { transaction } from './transaction.js'
 import { FeedFetchStore, migrateFeedFetchState } from './feed-fetch-state.js'
 import { migrateStandaloneSetup } from './migration-schema.js'
 import { migrateSearchRows } from './search-schema.js'
-import { DATABASE_VERSION, migrateLinkNumbers } from './link-numbers.js'
+import { migrateLinkNumbers } from './link-numbers.js'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
@@ -192,6 +193,7 @@ export class PaperDatabase {
         this.backupBeforeMigration(10, 'standalone-setup')
         this.backupBeforeMigration(11, 'search-rows')
         this.backupBeforeMigration(12, 'link-numbers')
+        this.backupBeforeMigration(13, 'feed-checks')
         const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
         // Current-schema participants must not drop/recreate triggers on every
         // open. Coordinated bootstrap performs upgrades under exclusive access.
@@ -425,7 +427,8 @@ export class PaperDatabase {
 
   private migrate() {
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) >= 11 && this.getSyncValue('fulltext_search_v1') === 'true') {
-      migrateLinkNumbers(this.db)
+      if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 12) migrateLinkNumbers(this.db)
+      if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 13) migrateFeedCheckSettings(this.db)
       return
     }
     this.db.exec(`
@@ -722,6 +725,7 @@ export class PaperDatabase {
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 10) migrateStandaloneSetup(this.db)
     migrateSearchRows(this.db)
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 12) migrateLinkNumbers(this.db)
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 13) migrateFeedCheckSettings(this.db)
   }
 
   linkNumber(kind: 'feed' | 'folder' | 'collection', id: string): number {

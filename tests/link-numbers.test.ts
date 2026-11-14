@@ -109,7 +109,7 @@ describe('reader link numbers', () => {
     db = new PaperDatabase(file)
     const backup = `${file}.before-link-numbers-v12`
     expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
-    expect(sql(connection => connection.prepare('PRAGMA user_version').get()?.user_version)).toBe(12)
+    expect(sql(connection => connection.prepare('PRAGMA user_version').get()?.user_version)).toBe(13)
     expect(sql(connection => connection.prepare('SELECT kind FROM link_numbers ORDER BY number').all()).map(row => row.kind)).toEqual(['feed', 'folder', 'collection'])
     expect(sql(connection => connection.prepare('PRAGMA user_version').get()?.user_version, backup)).toBe(11)
     expect(sql(connection => connection.prepare('SELECT title FROM feeds').get()?.title, backup)).toBe('Committed WAL title')
