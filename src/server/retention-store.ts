@@ -125,7 +125,7 @@ export class RetentionStore {
       rows.forEach((row, index) => {
         const decision = decisions[index]
         if (decision.deleted) {
-          tombstone.run(row.id, row.feed_id, run.startedAt, run.startedAt)
+          tombstone.run(row.id, row.feed_id, removedAt, removedAt)
           removal.run(row.sequence, removedAt, row.feed_id, row.title)
           remove.run(row.id); deleted++
         }

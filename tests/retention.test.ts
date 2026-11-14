@@ -137,6 +137,17 @@ it('suppresses reimports with aliases, verified previous aliases and fingerprint
   expect(ingest(['item-0'], now + 33 * DAY).results[0].status).toBe('resolved')
 })
 
+it('dates tombstones by deletion time when an old unfinished run resumes', () => {
+  seed(1)
+  const run = db.retention.start(policy({ unreadDays: 1 }))
+  sql.prepare('UPDATE retention_runs SET started_at = ? WHERE id = ?').run(now - 40 * DAY, run.id)
+  expect(db.retention.batch(run, true).done).toBe(true)
+  ingest([], Date.now())
+  db.retention.expireTombstones('', Date.now())
+  expect(sql.prepare('SELECT COUNT(*) n FROM retention_tombstones').get()?.n).toBe(1)
+  expect(ingest(['item-0']).results[0].status).toBe('tombstoned')
+})
+
 it('resumes an interrupted cursor after reopening without repeating committed work', async () => {
   seed(250)
   const p = policy({ autoReadDays: 1 })
