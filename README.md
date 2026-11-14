@@ -6,8 +6,9 @@ or connect it to FreshRSS to share subscriptions, read state, and stars.
 
 Entirely AI-coded. If this steals kittens, don't blame me.
 
-Paper 0.2.0-alpha.1 is an alpha release for single-user use. It has no
-built-in login. Keep it local or use an [authenticated HTTPS proxy](docs/access.md) for remote access.
+Paper is an alpha release for single-user use. Built-in login is optional and
+starts off. Keep it local until you enable login or an
+[authenticated HTTPS proxy](docs/access.md) for remote access.
 See the [changelog](CHANGELOG.md) for 0.2.0-alpha.1 changes and upgrade notes.
 
 <picture>
@@ -67,6 +68,16 @@ persistent volume at `/data`, and publish port 8080 to loopback. Paper creates
 private internal and signing secrets on first start. Keep the volume when
 recreating the container.
 
+### Optional owner login
+
+In builds after 0.2.0-alpha.1, open **Settings > Access** to enable login with a
+username, password and setup code. The server prints a code at startup while
+no owner exists. It expires after 15 minutes. To get a replacement, run
+`docker compose exec paper npm run paper-auth -- setup-code`.
+Add passkeys, manage sessions and create app passwords in the same settings.
+Use HTTPS for remote access. An existing authenticated proxy can stay in place.
+See [access and recovery](docs/access.md) before exposing Paper.
+
 ### FreshRSS mode
 
 Set `PAPER_BACKEND=freshrss` and provide `FRESHRSS_BASE_URL`, `FRESHRSS_USERNAME`
@@ -106,7 +117,8 @@ See the [integration guide](docs/integrations.md) for full setup instructions.
 
 Back up `./data` and your private `.env`. The data directory holds reading
 positions, discussions, filters, saved briefings, and any connection tokens
-entered in Settings and generated signing secrets. Standalone
+entered in Settings and generated signing secrets. The database also contains owner credentials,
+passkeys, sessions and app-password revocation state when login is enabled. Standalone
 subscriptions and article state also live there. In FreshRSS mode, back up
 FreshRSS separately. Optional [retention settings](docs/retention.md) can mark
 old articles read, delete unprotected articles and clean cached full text. All

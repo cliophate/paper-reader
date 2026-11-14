@@ -8,7 +8,7 @@ export default defineConfig({
     name: 'paper-offline-assets',
     generateBundle(_options, bundle) {
       const version = crypto.createHash('sha256').update(Object.keys(bundle).sort().join('\n')).digest('hex').slice(0, 12)
-      this.emitFile({ type: 'asset', fileName: 'sw.js', source: fs.readFileSync('public/sw.js', 'utf8').replace('paper-shell-v3', `paper-shell-v3-${version}`) })
+      this.emitFile({ type: 'asset', fileName: 'sw.js', source: fs.readFileSync('public/sw.js', 'utf8').replace('paper-shell-v4', `paper-shell-v4-${version}`) })
       this.emitFile({ type: 'asset', fileName: 'offline-assets.json', source: JSON.stringify(Object.keys(bundle).filter(name => !name.endsWith('.map') && name !== 'index.html').map(name => `/${name}`)) })
     },
   }],

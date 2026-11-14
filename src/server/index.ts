@@ -1,5 +1,7 @@
 import { RetentionService } from './retention.js'
 import { retentionRouter } from './retention-routes.js'
+import { AuthConnections } from './auth-connections.js'
+import { authGate, authRoutes, cookie, trustedProxyHops } from './auth-routes.js'
 import { feedCheckRouter } from './feed-check-routes.js'
 import { withRequestSignal } from './request-signal.js'
 import { AI_UNAVAILABLE, warnUnsafeAi } from './ai-client.js'
@@ -52,6 +54,7 @@ const storage = await openRuntimeStorage()
 const { config, database, backend } = storage
 let shuttingDown = false
 const eventResponses = new Set<Response>()
+const authConnections = new AuthConnections(database.auth)
 const connectionSettings = new ConnectionSettings(config)
 const connectionListeners = new Set<() => void>()
 const discussionEnabled = () => providerConfigured(config) && config.ai.discussionEnabled
@@ -98,6 +101,7 @@ const memoryTimer = setInterval(() => logMemory('running'), 60_000)
 memoryTimer.unref()
 
 app.disable('x-powered-by')
+app.set('trust proxy', trustedProxyHops())
 app.use(preventFraming)
 app.use(requireAllowedHost(config.publicUrl))
 app.use((_request, response, next) => {
@@ -105,6 +109,8 @@ app.use((_request, response, next) => {
   next()
 })
 app.use(requireSameOrigin(config.publicUrl))
+app.use(authGate(database.auth, authConnections))
+app.use('/api/auth', authRoutes(database.auth, config.publicUrl))
 app.use('/api/subscription-tools', subscriptionToolsRoutes(standalone ? localImportStore(database, backend.identity.id) : freshRssImportStore(backend, synchronizer), discoveryTransport(config.trustedFeedOrigins)))
 app.use(express.json({ limit: '2mb' }))
 app.use(express.urlencoded({ extended: false }))
@@ -119,8 +125,9 @@ app.get('/health', (_request, response) => response.json({ status: 'ok' }))
 // Article discussion has no subscription, read-state or publishing capabilities.
 app.get('/api/discussion', (request, response) => response.json({ discussion: discussions.get(String(request.query.entryId || '')), enabled: discussionEnabled(), provider: connectionSettings.discussionProvider() }))
 app.get('/api/discussion/events', (request, response) => {
+  if (!authConnections.register(cookie(request), response)) return
   const id = String(request.query.entryId || '')
-  response.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
+  response.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': database.auth.enabled() ? 'no-store' : 'no-cache', Connection: 'keep-alive' })
   response.flushHeaders()
   eventResponses.add(response)
   response.on('close', () => eventResponses.delete(response))
@@ -202,10 +209,11 @@ app.post('/api/settings/connections/test-ai', async (request, response) => {
 })
 
 app.get('/api/events', (request, response) => {
+  if (!authConnections.register(cookie(request), response)) return
   response.status(200)
   response.set({
     'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
+    'Cache-Control': database.auth.enabled() ? 'no-store, no-transform' : 'no-cache, no-transform',
     Connection: 'keep-alive',
   })
   response.flushHeaders()
@@ -595,6 +603,7 @@ app.post('/api/x/thread', asyncRoute(async (request, response) => {
 }))
 
 app.get('/api/x/media', asyncRoute(async (request, response) => {
+  if (!authConnections.register(cookie(request), response)) return
   await streamXMedia(String(request.query.url || ''), String(request.header('range') || ''), response)
 }))
 
@@ -709,7 +718,8 @@ app.use((error: Error, request: Request, response: Response, _next: NextFunction
 })
 
 const server = app.listen(config.port, config.host, () => {
-  console.log(`Paper is listening on port ${config.port}`)
+  console.log(`Paper is listening on port ${(server.address() as { port: number }).port}`)
+  if (!database.auth.enabled()) console.log(`Paper owner setup code, valid for 15 minutes: ${database.auth.setupCode()}`)
   logMemory('listening')
   void database.backfillMuteFilters().catch(error => console.error('Mute filter backfill failed; it will resume after restart.', error))
 })

@@ -1,3 +1,4 @@
+import { AccessSettings } from './components/AccessSettings'
 import { OrganizationSidebar } from './components/OrganizationSidebar'
 import { FeedMark } from './components/FeedMark'
 import type { OrganizationView } from '../shared/organization'
@@ -55,7 +56,7 @@ interface OverlayState {
   appearance: boolean
 }
 
-type SettingsSection = 'backend' | 'feeds' | 'filters' | 'reports' | 'activity' | 'connections'
+type SettingsSection = 'access' | 'backend' | 'feeds' | 'filters' | 'reports' | 'activity' | 'connections'
 
 const closedOverlays: OverlayState = { command: false, help: false, settings: false, appearance: false }
 
@@ -2325,7 +2326,7 @@ function Settings({ backend, section, setSection, initialFeedId, initialFeedView
   onOpenEntry: (id: string) => void
   onClose: () => void
 }) {
-  const content = section === 'backend' ? <BackendSettings backend={backend} /> : section === 'feeds'
+  const content = section === 'access' ? <AccessSettings /> : section === 'backend' ? <BackendSettings backend={backend} /> : section === 'feeds'
     ? <FeedSettings initialView={initialFeedView} onChanged={onChanged}><FeedManager initialFeedId={initialFeedId} navigation={navigation} onChanged={onChanged} notify={notify} /></FeedSettings>
     : section === 'filters'
       ? <FiltersSettings feeds={uniqueFeeds(navigation)} onChanged={onFiltersChanged} notify={notify} onMatchingChange={onFiltersMatching} />
@@ -2340,6 +2341,7 @@ function Settings({ backend, section, setSection, initialFeedId, initialFeedView
   return <Modal title="Settings" onClose={onClose} className="settings-modal">
     <div className="settings-layout">
       <nav className="settings-nav" aria-label="Settings sections">
+        <button className={section === 'access' ? 'active' : ''} onClick={() => setSection('access')}>Access</button>
         <button className={section === 'backend' ? 'active' : ''} onClick={() => setSection('backend')}>Backend &amp; data</button>
         <button className={section === 'feeds' ? 'active' : ''} onClick={() => setSection('feeds')}>Feeds</button>
         <button className={section === 'filters' ? 'active' : ''} onClick={() => setSection('filters')}>Filters</button>

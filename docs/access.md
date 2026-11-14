@@ -1,7 +1,8 @@
 # Remote access
 
-The default Compose file binds Paper to 127.0.0.1:8080. There is no login in
-Paper. Every user allowed through a proxy shares the same reading account.
+The default Compose file binds Paper to 127.0.0.1:8080. Built-in login is optional
+and starts off. Without it, anyone who can reach Paper can use the library.
+Every authenticated browser and proxy user shares the same owner account.
 Use a current Docker Compose version supporting !reset, version 2.24.4 or newer.
 
 Set `PUBLIC_URL` to the URL you use to open Paper. Requests must use its hostname
@@ -13,6 +14,90 @@ Proxies must preserve the original `Host` header. Paper ignores `X-Forwarded-Hos
 The secret-protected `POST /api/internal/briefings/...` routes accept any host,
 so automation can call Paper by its container name.
 Paper blocks embedding in frames.
+
+## Built-in owner login
+
+Owner login uses schema v15, after retention v14. Startup creates
+`.before-owner-login-v15` before adding credentials to an existing database.
+See the [upgrade and recovery notes](recovery.md#owner-login-recovery).
+
+With login on, Paper needs a connection to open. Saved offline articles cannot
+be opened while signed out.
+
+Use **Settings > Access** to enable login. Enter a username, a password of at
+least 12 characters, and the setup code printed in the server log at startup.
+A code expires after 15 minutes and works once. To issue a replacement:
+
+```sh
+docker compose exec paper npm run paper-auth -- setup-code
+```
+
+Only someone with access to the server log or container can claim the owner.
+Issuing a new code invalidates the previous one. Login stays off until setup
+succeeds. Existing installations and authenticated proxies keep working.
+Set `PUBLIC_URL` to the browser's exact origin before setup. Remote login needs
+HTTPS. HTTP is allowed only for a loopback public URL.
+
+Access settings let you change the username and password, add named passkeys,
+remove passkeys, view sessions, sign out, and sign out other sessions. Passkeys
+use the hostname and origin from `PUBLIC_URL`. They require user verification,
+such as a device PIN or fingerprint. Changing the hostname can make existing
+passkeys unusable. Keep a password or use server recovery before changing it.
+Password login can be disabled after adding a passkey. Paper prevents removal
+of the last login method.
+
+Sessions expire after seven idle days or 30 days in total. Cookies are HttpOnly
+and SameSite=Lax, with Secure set for an HTTPS `PUBLIC_URL`. Password changes
+sign out other sessions. Session IDs rotate at login and password changes.
+Paper stores hashes of passwords and session IDs, never their plaintext.
+
+Each app password has a name, the `reader-sync` scope, creation and last-used
+times, and revocation generations. Copy it when creating it. Paper shows it
+once and stores only a salted scrypt hash. Revoke one or all in Access settings.
+These credentials are reserved for the future Google Reader API in #69. They
+do not currently enable an API, log in to the web app, or grant access to
+Settings, AI or internal automation. Use one per client.
+
+Five failed logins per username/IP or 30 across the installation in 15 minutes
+return HTTP 429 with `Retry-After`. Paper runs at most two password hash jobs
+at once. Passkey options allow 10 requests per IP and 100 across the installation
+in five minutes. Registration challenges belong to the owner session; login
+challenges belong to a short-lived HttpOnly client cookie. Each pool holds up to
+100 challenges and rejects new clients when full. It never evicts another
+client's live challenge. Limits survive restarts. By default, Paper ignores `X-Forwarded-For`.
+Set `PAPER_TRUST_PROXY_HOPS=1` for one trusted proxy, or the exact number for a
+fixed proxy chain. Do not enable this when a shorter public path can reach
+Paper directly. A forged forwarding header would then bypass IP limits.
+
+The client handles an expired session by showing login and clearing saved
+offline articles and media. With login enabled, opening Paper requires a
+connection to verify the session. API responses are not stored in the service
+worker cache. Existing installations with login off retain offline reading.
+Copies already held on another offline device cannot be remotely erased.
+
+Lost access? Use the [container recovery commands](recovery.md#owner-login-recovery).
+Do not delete the reading database to reset login.
+
+### Route access
+
+The host and same-origin checks still run before authentication. With login
+on, all APIs and reader pages need an owner session except these routes:
+
+| Access | Routes |
+| --- | --- |
+| Public | `GET /health`, `GET /api/auth/status`, `POST /api/auth/setup`, `POST /api/auth/login`, `POST /api/auth/passkeys/options`, `POST /api/auth/passkeys/verify` |
+| Login shell | `GET /login`, built assets in `/assets/`, `/sw.js`, `/offline-assets.json`, `/manifest.webmanifest`, the favicon, app icons and the two Paper SVG logos |
+| Internal secret | `POST /api/internal/briefings/generate`, `POST /api/internal/briefings/:id/render`, `POST /api/internal/briefings/:id/delivered` |
+| Briefing token | `GET /briefings/:id/confirm`, `POST /briefings/:id/confirm` |
+| Owner session | Every other route, including Access settings, all mounted API routers including retention, event streams and reader pages |
+
+GET routes also accept HEAD. Email confirmation routes validate their signed
+briefing token. Internal routes validate `x-paper-secret`. Neither bypass gives
+access to other routes. Unauthenticated APIs return JSON with HTTP 401; reader
+pages redirect to the login page. Open event streams stop after session revocation.
+The full reviewed route inventory is in
+[the route classification fixture](../tests/fixtures/auth-route-classification.json).
+A test checks every declaration in `index.ts` and its mounted routers against it.
 
 ## Authenticated Caddy example
 
@@ -64,3 +149,24 @@ Private AI endpoints need an exact origin in `PAPER_TRUSTED_AI_ORIGINS`.
 Settings cannot grant private-network access. API keys stay on the Paper server,
 so only trusted users should have access to connection settings. See
 [AI providers](ai-providers.md).
+
+## Using both login layers
+
+The supplied `compose.proxy.yaml` and Caddyfile work with built-in login off or
+on. With both enabled, complete the proxy login first, then Paper's login.
+Keep the proxy in place while enabling Paper login and verify a fresh browser
+can sign in before changing proxy authentication.
+
+To use only Paper's login, keep Caddy's HTTPS and reverse proxy configuration,
+then remove the `basic_auth` block from your private copy of `examples/Caddyfile`.
+Validate the file and reload Caddy. The Compose example still expects
+`PAPER_AUTH_USER` and `PAPER_AUTH_PASSWORD_HASH`; keep those values or remove
+their environment declarations in your private override. Keep Paper's raw
+port unpublished. Test that `/api/navigation` returns 401 without a Paper
+session and 200 after login.
+
+If you retain proxy Basic auth, #69 will later need an exception for exactly
+`/api/greader.php` and its slash-delimited descendants. Native reader apps cannot
+use proxy Basic auth and GoogleLogin in the same Authorization header. Do not
+add that exception yet. The future API must authenticate every request itself.
+Never exempt `/api/*` or publish a second unprotected port.

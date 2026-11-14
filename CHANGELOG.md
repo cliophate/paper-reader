@@ -16,6 +16,18 @@
 - Schema v14 adds retention state and indexes. Upgrades create
   `.before-retention-v14`; first article deletion creates
   `.before-retention-first-delete`. See [retention](docs/retention.md).
+- Optional owner login with an administrator setup code, password, passkeys,
+  expiring sessions and container recovery commands. Existing installs keep
+  login off until setup succeeds; authenticated proxies can remain in place.
+  With login on, Paper needs a connection to open. Saved offline articles cannot
+  be opened while signed out.
+- Settings > Access manages credentials, sessions and revocable app passwords
+  for the future reader sync API. App passwords are shown once and KDF-hashed.
+- Schema v15 adds authentication tables and creates a private
+  `.before-owner-login-v15` backup after retention reaches v14. Upgrading from
+  v13 creates both migration backups; v14 creates only the login backup. Login expiry clears the browser's offline
+  article cache and shows login.
+
 - Keyboard shortcuts no longer fire while Ctrl, Cmd or Alt is held, so Ctrl+F
   opens the browser's Find again.
 - Previous into the preceding feed or folder opens its last article instead of

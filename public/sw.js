@@ -1,4 +1,4 @@
-const SHELL = 'paper-shell-v3'
+const SHELL = 'paper-shell-v4'
 const MEDIA = 'paper-offline-media-v1'
 self.addEventListener('install', event => {
   event.waitUntil((async () => {

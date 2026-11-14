@@ -1,6 +1,8 @@
 import { migrateFeedCheckSettings } from './feed-check-settings.js'
-import { DATABASE_VERSION, migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
+import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
+import { DATABASE_VERSION, migrateAuth } from './auth-schema.js'
+import { AuthStore } from './auth-store.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -177,6 +179,7 @@ export class PaperDatabase {
   private readonly db: DatabaseSync
   private readonly databasePath: string
   readonly retention: RetentionStore
+  readonly auth: AuthStore
   readonly identities: IdentityStore
   readonly organization: LocalOrganizationService
   readonly feedFetch: FeedFetchStore
@@ -205,9 +208,10 @@ export class PaperDatabase {
         const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
         // Current-schema participants must not drop/recreate triggers on every
         // open. Coordinated bootstrap performs upgrades under exclusive access.
-        if (version < DATABASE_VERSION || this.getSyncValue('fulltext_search_v1') !== 'true') this.migrate()
+        if (version < DATABASE_VERSION || this.getSyncValue('fulltext_search_v1') !== 'true') this.migrate(version > 0)
       }
       this.retention = new RetentionStore(this.db, ids => { this.commitLocalEntryState(this.activeBackendId, ids, 'read', { origin: 'retention' }) })
+      this.auth = new AuthStore(this.db)
       this.identities = new IdentityStore(this.db)
       this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
       this.feedFetch = new FeedFetchStore(this.db, id => this.assertLocalBackend(id))
@@ -444,11 +448,15 @@ export class PaperDatabase {
     }
   }
 
-  private migrate() {
+  private migrate(backupAuth: boolean) {
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) >= 11 && this.getSyncValue('fulltext_search_v1') === 'true') {
       if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 12) migrateLinkNumbers(this.db)
       if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 13) migrateFeedCheckSettings(this.db)
       if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 14) migrateRetention(this.db)
+      if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 15) {
+        if (backupAuth) this.backupBeforeMigration(15, 'owner-login')
+        migrateAuth(this.db)
+      }
       return
     }
     this.db.exec(`
@@ -747,6 +755,10 @@ export class PaperDatabase {
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 12) migrateLinkNumbers(this.db)
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 13) migrateFeedCheckSettings(this.db)
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 14) migrateRetention(this.db)
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 15) {
+      if (backupAuth) this.backupBeforeMigration(15, 'owner-login')
+      migrateAuth(this.db)
+    }
   }
 
   linkNumber(kind: 'feed' | 'folder' | 'collection', id: string): number {

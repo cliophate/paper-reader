@@ -179,6 +179,25 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
             assert response.headers.get_all('X-Frame-Options') == ['DENY']
         assert request(protected + '/api/navigation', headers={'Host': 'localhost', 'Authorization': 'Basic ' + credentials})[0] == 200
         assert request(protected + '/api/settings/connections', headers={'Host': 'localhost', 'Authorization': 'Basic ' + credentials})[1]['readwise']['tokenConfigured']
+        # Stack owner login behind the existing Basic-auth proxy.
+        proxy_headers = {'Host': 'localhost', 'Authorization': 'Basic ' + credentials}
+        setup_code = docker('exec', paper, 'npm', 'run', 'paper-auth', '--', 'setup-code').splitlines()[-1]
+        payload = json.dumps({'code': setup_code, 'username': 'owner', 'password': 'synthetic-owner-password'}).encode()
+        with urllib.request.urlopen(urllib.request.Request(protected + '/api/auth/setup', payload,
+                {'Content-Type': 'application/json', **proxy_headers})) as response:
+            assert response.status == 200
+            owner_cookie = response.headers['Set-Cookie'].split(';')[0]
+            assert b'synthetic-owner-password' not in response.read()
+        assert request(protected + '/api/navigation', headers=proxy_headers)[0] == 401
+        owner_headers = {**proxy_headers, 'Cookie': owner_cookie}
+        assert request(protected + '/api/navigation', headers=owner_headers)[0] == 200
+        assert request(protected + '/api/navigation', headers={'Host': 'localhost', 'Cookie': owner_cookie})[0] == 401
+        assert request(base + '/api/navigation')[0] == 401
+        assert request(protected + '/api/auth/password', {'username': 'owner', 'password': 'synthetic-wrong-origin-password'},
+                       headers={**owner_headers, 'Origin': 'https://evil.test'})[0] == 403
+        app_password = request(protected + '/api/auth/apps', {'name': 'Fixture reader', 'scope': 'reader-sync'}, headers=owner_headers)[1]['password']
+        access = request(protected + '/api/auth/access', headers=owner_headers)[1]
+        assert len(access['apps']) == 1 and app_password not in json.dumps(access)
         docker('exec', proxy, 'caddy', 'validate', '--config', '/etc/caddy/Caddyfile')
         for helper in ['paper-feed-health.php', 'paper-feed-repair.php']:
             docker('exec', fresh, 'php', '-l', '/var/www/FreshRSS/p/api/' + helper)
@@ -189,6 +208,17 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         paper = start_paper(restored)
         base = address(paper, 8080)
         until(lambda: request(base + '/health')[0] == 200)
+        # Restoring revives credentials and sessions. Recovery revokes them.
+        assert request(base + '/api/navigation')[0] == 401
+        assert request(base + '/api/auth/access', headers={'Cookie': owner_cookie})[1]['apps'][0]['name'] == 'Fixture reader'
+        docker('exec', paper, 'npm', 'run', 'paper-auth', '--', 'revoke-all')
+        assert request(base + '/api/navigation', headers={'Cookie': owner_cookie})[0] == 401
+        payload = json.dumps({'username': 'owner', 'password': 'synthetic-owner-password'}).encode()
+        with urllib.request.urlopen(urllib.request.Request(base + '/api/auth/login', payload, {'Content-Type': 'application/json'})) as response:
+            restored_cookie = response.headers['Set-Cookie'].split(';')[0]
+        assert request(base + '/api/auth/access', headers={'Cookie': restored_cookie})[1]['apps'] == []
+        docker('exec', paper, 'npm', 'run', 'paper-auth', '--', 'disable')
+        assert request(base + '/api/auth/status')[1]['enabled'] is False
         saved = request(base + '/api/entries/item', {'id': entry['id']})[1]['entry']
         assert saved['starred'] and not saved['read'] and saved['readingPosition'] == 0.42
         restored_settings = request(base + '/api/settings/connections')[1]
@@ -228,7 +258,7 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         assert reread['starred'] and reread['readingPosition'] == 0.6
         assert (standalone_data / 'secrets.json').stat().st_mode & 0o777 == 0o600
         print('Standalone installation checks passed: no-credential setup, import/fetch/read, restart and disabled integrations.')
-        print('Installation checks passed with FreshRSS 1.30.4: import/search, two-way state sync, organization rename/move/capabilities, helper authentication/repair, private connection settings, proxy 401/200, PHP syntax, and backup restoration.')
+        print('Installation checks passed with FreshRSS 1.30.4: import/search, two-way state sync, organization rename/move/capabilities, helper authentication/repair, private connection settings, proxy 401/200 with both login layers, owner setup/login, credential backup restoration and recovery, and PHP syntax.')
     except Exception:
         for name in dict.fromkeys(containers):
             logs = docker('logs', '--tail', '12', name, check=False)

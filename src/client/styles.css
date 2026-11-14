@@ -1152,3 +1152,17 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
 .retention-days span { flex: 1 1 180px; }
 .retention-days input { width: 90px; }
 .retention-settings button { margin: 8px 8px 0 0; }
+.login-page { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+.login-card { width: min(100%, 420px); display: grid; gap: 24px; }
+.login-card h1 { font-size: 1.6rem; }
+.access-form { display: grid; gap: 12px; max-width: 480px; margin-bottom: 24px; }
+.access-form label, .access-secret label { display: grid; gap: 6px; }
+.access-form input, .access-form select, .access-secret input { width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: inherit; font: inherit; }
+.access-form button, .login-card button { min-height: 44px; padding: 10px 16px; border: 1px solid var(--line); border-radius: 6px; }
+.access-settings h4 { margin: 24px 0 12px; }
+.access-settings p { line-height: 1.5; }
+.access-settings .settings-list-row { flex-wrap: wrap; }
+.access-settings .settings-list-row > div { min-width: 0; overflow-wrap: anywhere; }
+.access-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
+.access-toggle { display: flex; gap: 8px; align-items: center; }
+.access-secret { padding: 16px; border: 1px solid var(--line); border-radius: 6px; margin: 16px 0; }

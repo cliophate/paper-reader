@@ -39,7 +39,7 @@ export async function streamXMedia(input: string, range: string, response: Expre
     const value = upstream.headers.get(header)
     if (value) response.setHeader(header, value)
   }
-  response.setHeader('Cache-Control', 'public, max-age=3600')
+  if (!response.hasHeader('Cache-Control')) response.setHeader('Cache-Control', 'public, max-age=3600')
 
   try {
     const body = Readable.fromWeb(upstream.body as unknown as NodeReadableStream<Uint8Array>)

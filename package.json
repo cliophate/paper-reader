@@ -16,7 +16,8 @@
     "init": "node scripts/init-config.mjs",
     "licenses": "node scripts/collect-licenses.mjs",
     "test:smoke": "node scripts/smoke-test.mjs && node scripts/standalone-smoke-test.mjs && node scripts/collection-responsiveness-test.mjs && node scripts/retention-responsiveness-test.mjs",
-    "test:browser": "npm run build:web && playwright test"
+    "test:browser": "npm run build:web && playwright test",
+    "paper-auth": "node dist-server/auth-cli.js"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.6",
@@ -24,6 +25,8 @@
     "@fontsource-variable/literata": "^5.2.6",
     "@fontsource/source-sans-3": "^5.2.6",
     "@mozilla/readability": "^0.6.0",
+    "@simplewebauthn/browser": "^14.0.0",
+    "@simplewebauthn/server": "^14.1.0",
     "entities": "^7.0.1",
     "express": "^5.1.0",
     "htmlparser2": "^10.1.0",

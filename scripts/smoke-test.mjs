@@ -179,7 +179,7 @@ try {
   assert.equal((await request('/api/status')).data.discussionConfigured, false)
   const manifest = await fetch(`${base}/offline-assets.json`).then(response => response.json())
   for (const asset of manifest) assert.equal((await fetch(`${base}${asset}`)).status, 200)
-  assert((await fetch(`${base}/sw.js`).then(response => response.text())).includes('paper-shell-v3-'))
+  assert((await fetch(`${base}/sw.js`).then(response => response.text())).includes('paper-shell-v4-'))
   await stop()
   await fs.cp(path.join(temporary, 'data'), path.join(temporary, 'restored'), { recursive: true })
   await start(path.join(temporary, 'restored'))
