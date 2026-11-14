@@ -198,6 +198,6 @@ it.each(['setup', 'logout', 'sign-out-others', 'reset-password', 'remove-passkey
   }, 15000)
 
 it('keeps Reader authentication within the exact path boundary', () => {
-  for (const p of ['/api/greader.php', '/api/greader.php/', '/api/greader.php/reader/api/0/token', '/api/greader.php/reader/api/0/stream/contents/user%2F-%2Flabel%2FA%2FB']) expect(routeAccess('GET', p)).toBe('app')
-  for (const p of ['/API/GREADER.PHP', '/api/greader.phpx', '/api/greader.php/../', '/api/greader.php%2freader', '/api/greader.php/%2e%2e/api']) expect(routeAccess('GET', p)).toBe('session')
+  for (const p of ['/api/greader.php', '/api/greader.php/', '/api/greader.php/reader/api/0/token', '/api/greader.php/reader/api/0/stream/contents/user%2F-%2Flabel%2FA%2FB', '/API/GREADER.PHP', '/Api/Greader.php/reader/api/0/token']) expect(routeAccess('GET', p)).toBe('app')
+  for (const p of ['/api/greader.phpx', '/api/greader.php/../', '/api/greader.php%2freader', '/api/greader.php/%2e%2e/api']) expect(routeAccess('GET', p)).toBe('session')
 })

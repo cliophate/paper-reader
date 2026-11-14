@@ -74,7 +74,7 @@
     "client": "Capy Reader",
     "commit": "39882fe5b9a1d62ceb588354dde3cfbeb903424b",
     "contentBatch": 250,
-    "stateBatch": 250,
+    "stateBatch": 1000,
     "pageSize": 10000,
     "idForm": "long",
     "concurrentContent": 8,

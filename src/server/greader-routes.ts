@@ -113,8 +113,9 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
       const mutation = req.method === 'POST' && endpoint !== 'stream/items/contents'
       limits.take('account', 20, 80); limits.take(app.id, 10, 40)
       if (mutation) limits.take('writes', 2, 10)
-      if ((mutation || p.has('T')) && !equal(p.get('T') || '', auth.token(app, 'T'))) { res.set('X-Reader-Google-Bad-Token', 'true'); throw new ReaderError('Invalid token.', 403) }
+      if ((mutation || p.has('T')) && !equal((p.get('T') || '').replace(/\r?\n$/, ''), auth.token(app, 'T'))) { res.set('X-Reader-Google-Bad-Token', 'true'); throw new ReaderError('Invalid token.', 403) }
       if (p.has('output') && p.get('output') !== 'json') throw new ReaderError('Only JSON is supported.')
+      // Read You and Capy send this body back verbatim, newline included.
       if (endpoint === 'token') { res.type('text/plain').send(`${auth.token(app, 'T')}\n`); return }
       if (endpoint === 'user-info') { res.json({ userId: 'paper', userName: String(auth.settings().username), userProfileId: 'paper', userEmail: '' }); return }
       const sql = db.greaderDatabase

@@ -42,4 +42,5 @@ export class GreaderAuth {
     return app
   }
 }
-export function greaderPath(path: string) { return path === '/api/greader.php' || path.startsWith('/api/greader.php/') }
+// Express routes ignore case, so every case variant stays a terminal API path.
+export function greaderPath(path: string) { return /^\/api\/greader\.php(?:\/|$)/i.test(path) }

@@ -45,7 +45,7 @@ it('defaults to disabled, supports administrator credentials without owner login
   const response = await call('/accounts/ClientLogin', [['Email', 'reader'], ['Passwd', password], ['output', 'json']], 'POST')
   expect(response.status).toBe(200); expect(response.headers.get('set-cookie')).toBeNull()
   bearer = /Auth=(.+)/.exec(await response.text())![1]
-  token = (await (await call('token')).text()).trim(); expect(token).toHaveLength(57)
+  token = await (await call('token')).text(); expect(token).toMatch(/^[A-Za-z0-9_-]{57}\n$/)
   expect((await call('user-info')).headers.get('cache-control')).toBe('no-store')
   const info = await (await call('user-info')).json(); expect(info).toEqual({ userId: 'paper', userName: 'reader', userProfileId: 'paper', userEmail: '' })
   const reopened = new PaperDatabase(db.searchDatabasePath)
@@ -117,6 +117,10 @@ it('enforces Auth, T, origin, host, methods and body bounds', async () => {
   expect(await new Promise(resolve => { const req = httpRequest(base + '/reader/api/0/token', { headers: { Host: 'evil.test' } }, res => { res.resume(); resolve(res.statusCode) }); req.end() })).toBe(421)
   expect((await call('subscription/import', [], 'POST')).status).toBe(404)
   expect((await call('stream/items/contents', [['i', '1'], ['T', 'x']], 'POST')).status).toBe(403)
+  expect((await call('edit-tag', [['i', '1'], ['a', `${STATE}read`], ['T', token.trim()]], 'POST')).status).toBe(200)
+  expect((await call('edit-tag', [['i', '1'], ['a', `${STATE}read`], ['T', `${token}\n`]], 'POST')).status).toBe(403)
+  const shouting = await fetch(base.replace('/api/greader.php', '/API/GREADER.PHP') + '/reader/api/0/missing', { headers: { Authorization: `GoogleLogin auth=${bearer}` } })
+  expect(shouting.status).toBe(404); expect(shouting.headers.get('content-type')).toMatch(/json/)
   expect((await call('stream/items/contents', [['i', '1'], ['r', 'o'], ['r', 'd']], 'POST')).status).toBe(400)
 })
 it('rejects oversized batches and login bodies without accepting cookie-only authority', async () => {
@@ -153,7 +157,7 @@ it.each(clients)('replays $client source-derived sync and management requests', 
   expect(login.status).toBe(200); expect(/Auth=(.+)/.exec(await login.text())![1]).toBe(bearer)
   for (const endpoint of client.sequence.filter(s => ['token', 'user-info', 'subscription/list', 'tag/list'].includes(s))) {
     const response = await request(endpoint)
-    if (endpoint === 'token') expect((await response.text()).trim()).toHaveLength(57)
+    if (endpoint === 'token') expect(await response.text()).toMatch(/^[A-Za-z0-9_-]{57}\n$/)
     else {
       const dto = await response.json()
       if (endpoint === 'subscription/list') for (const feed of dto.subscriptions) {
