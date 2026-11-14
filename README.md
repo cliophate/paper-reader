@@ -78,6 +78,9 @@ Add passkeys, manage sessions and create app passwords in the same settings.
 Use HTTPS for remote access. An existing authenticated proxy can stay in place.
 See [access and recovery](docs/access.md) before exposing Paper.
 
+Standalone installs can enable [Reader apps](docs/greader-api.md) for Google
+Reader-compatible sync. Access starts disabled and requires app passwords.
+
 ### FreshRSS mode
 
 Set `PAPER_BACKEND=freshrss` and provide `FRESHRSS_BASE_URL`, `FRESHRSS_USERNAME`
@@ -118,7 +121,8 @@ See the [integration guide](docs/integrations.md) for full setup instructions.
 Back up `./data` and your private `.env`. The data directory holds reading
 positions, discussions, filters, saved briefings, and any connection tokens
 entered in Settings and generated signing secrets. The database also contains owner credentials,
-passkeys, sessions and app-password revocation state when login is enabled. Standalone
+passkeys, sessions and app-password revocation state. Reader app credentials can
+exist with owner login off. Standalone
 subscriptions and article state also live there. In FreshRSS mode, back up
 FreshRSS separately. Optional [retention settings](docs/retention.md) can mark
 old articles read, delete unprotected articles and clean cached full text. All

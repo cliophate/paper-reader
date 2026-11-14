@@ -224,3 +224,25 @@ Slots are released after process exit. Failed runs produce one structured log li
 request ID, exit status and an allowlisted category. Error responses omit provider
 diagnostics and input text. Paper limits batch responses to 4 MiB and discussion replies to 24,000
 characters. A missing or unreachable worker never enables local execution.
+
+## Reader API checks
+
+[Reader apps](greader-api.md) documents schema v16 and the protocol. After building:
+
+```sh
+node scripts/greader-responsiveness-test.mjs
+```
+
+Run the collection, retention and Reader API scale checks one at a time.
+This script creates and removes its own directory under TMPDIR. Allow several
+GiB of temporary space. It seeds 200,000 articles across 1,266 feeds, pages every
+unread ID, downloads eight content batches together, counts unread items and marks the
+library read while probing health and making web state writes. Sparse unread,
+heavily starred and overlapping-folder fixtures share that database. The script
+prints query plans and latency/RSS measurements, then checks cancellation and
+shutdown lock release. Read jobs allow five seconds, bulk jobs 15 seconds, and
+health probes two seconds. Combined server and child RSS must stay below 1 GiB.
+
+Client fixtures are source-derived, not device captures. Their pinned sources
+and replay contracts are in tests/fixtures/greader. Manual HTTPS client checks
+remain a release gate. Coordinate schema v16 with external PR #74.

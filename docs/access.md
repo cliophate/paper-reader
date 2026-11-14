@@ -54,9 +54,8 @@ Paper stores hashes of passwords and session IDs, never their plaintext.
 Each app password has a name, the `reader-sync` scope, creation and last-used
 times, and revocation generations. Copy it when creating it. Paper shows it
 once and stores only a salted scrypt hash. Revoke one or all in Access settings.
-These credentials are reserved for the future Google Reader API in #69. They
-do not currently enable an API, log in to the web app, or grant access to
-Settings, AI or internal automation. Use one per client.
+These credentials authorize the opt-in [Reader API](greader-api.md). They do
+not log in to the web app or grant access to Settings, AI or internal automation. Use one per client.
 
 Five failed logins per username/IP or 30 across the installation in 15 minutes
 return HTTP 429 with `Retry-After`. Paper runs at most two password hash jobs
@@ -89,6 +88,7 @@ on, all APIs and reader pages need an owner session except these routes:
 | Login shell | `GET /login`, built assets in `/assets/`, `/sw.js`, `/offline-assets.json`, `/manifest.webmanifest`, the favicon, app icons and the two Paper SVG logos |
 | Internal secret | `POST /api/internal/briefings/generate`, `POST /api/internal/briefings/:id/render`, `POST /api/internal/briefings/:id/delivered` |
 | Briefing token | `GET /briefings/:id/confirm`, `POST /briefings/:id/confirm` |
+| App password | `/api/greader.php` and slash-delimited descendants, with separate Auth and T checks |
 | Owner session | Every other route, including Access settings, all mounted API routers including retention, event streams and reader pages |
 
 GET routes also accept HEAD. Email confirmation routes validate their signed
@@ -165,8 +165,23 @@ their environment declarations in your private override. Keep Paper's raw
 port unpublished. Test that `/api/navigation` returns 401 without a Paper
 session and 200 after login.
 
-If you retain proxy Basic auth, #69 will later need an exception for exactly
-`/api/greader.php` and its slash-delimited descendants. Native reader apps cannot
-use proxy Basic auth and GoogleLogin in the same Authorization header. Do not
-add that exception yet. The future API must authenticate every request itself.
-Never exempt `/api/*` or publish a second unprotected port.
+For reader apps, enable Paper app authentication first. Then replace only the
+`basic_auth` block in your private Caddyfile with:
+
+```caddyfile
+@browser not path /api/greader.php /api/greader.php/*
+basic_auth @browser {
+    {$PAPER_AUTH_USER} {$PAPER_AUTH_PASSWORD_HASH}
+}
+```
+
+Keep the existing header and reverse_proxy blocks. They preserve Host and
+Authorization and disable caching. The default example still protects all
+paths until you make this change. Verify a web API without Basic credentials
+returns 401, while a Reader request reaches Paper's own JSON 401. Never exempt
+`/api/*`, health or a second port. Native apps cannot send Basic and GoogleLogin
+in the same Authorization header.
+
+With login off, manage reader credentials through the administrator CLI in
+[Reader apps](greader-api.md). The network or proxy protects the web UI; reader
+apps still need app passwords. Public installations should enable owner login.

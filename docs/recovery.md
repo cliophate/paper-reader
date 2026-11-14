@@ -288,3 +288,16 @@ Matches, progress and the final activity count commit in short transactions.
 Restarting resumes pending scans. Settings shows "Matching..." until completion;
 new ingestion applies the rule throughout. Deleting a filter removes its exact
 checkpoint too. Keep the database and its WAL together when backing up.
+
+## Reader API recovery
+
+Schema v16 adds Reader API settings, a separate persisted derivation key,
+modification timestamps and indexes. Startup backs up schema v15 to
+`<database-path>.before-greader-v16` before migration. The API starts disabled.
+Keep this private backup to roll back with the v15 image. Restoring a later
+backup can revive revoked app credentials. Run `npm run paper-auth -- revoke-all`
+after restoring. Recovery `disable` also disables the Reader API. A fresh
+database requires new client accounts.
+
+External PR #74 may also need a schema number. Coordinate its migration version
+before merging either change.

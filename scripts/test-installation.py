@@ -199,6 +199,29 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         access = request(protected + '/api/auth/access', headers=owner_headers)[1]
         assert len(access['apps']) == 1 and app_password not in json.dumps(access)
         docker('exec', proxy, 'caddy', 'validate', '--config', '/etc/caddy/Caddyfile')
+        # Opt-in exception reaches Paper app authentication, while web and health
+        # retain Basic auth. Use separate synthetic standalone storage.
+        reader = run('reader', '-e', 'PAPER_BACKEND=standalone', '-e', 'PUBLIC_URL=http://localhost',
+                     '-e', 'PAPER_SYNC_ENABLED=false', '-e', 'PAPER_AI_PROVIDER=none', IMAGE)
+        until(lambda: 'Paper is listening' in docker('logs', reader))
+        docker('exec', reader, 'npm', 'run', 'paper-auth', '--', 'app-password', 'create', 'Proxy fixture')
+        docker('exec', reader, 'npm', 'run', 'paper-auth', '--', 'reader-api', 'enable', 'reader')
+        original_proxy = config.read_text()
+        config.write_text(original_proxy.replace('    basic_auth {', '    @browser not path /api/greader.php /api/greader.php/*\n    basic_auth @browser {').replace('reverse_proxy paper:8080', 'reverse_proxy reader:8080'))
+        docker('exec', proxy, 'caddy', 'reload', '--config', '/etc/caddy/Caddyfile')
+        assert request(protected + '/api/navigation', headers={'Host': 'localhost'})[0] == 401
+        assert request(protected + '/health', headers={'Host': 'localhost'})[0] == 401
+        assert request(protected + '/api/greader.phpx', headers={'Host': 'localhost'})[0] == 401
+        req = urllib.request.Request(protected + '/api/greader.php/reader/api/0/token', headers={'Host': 'localhost'})
+        try:
+            urllib.request.urlopen(req)
+            raise AssertionError('Reader API accepted absent Auth')
+        except urllib.error.HTTPError as error:
+            assert error.code == 401
+            assert json.loads(error.read()) == {'errors': ['Unauthorized.']}
+            assert error.headers.get('Cache-Control') == 'private, no-store'
+        config.write_text(original_proxy)
+        docker('exec', proxy, 'caddy', 'reload', '--config', '/etc/caddy/Caddyfile')
         for helper in ['paper-feed-health.php', 'paper-feed-repair.php']:
             docker('exec', fresh, 'php', '-l', '/var/www/FreshRSS/p/api/' + helper)
         docker('stop', paper)
