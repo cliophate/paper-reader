@@ -15,7 +15,7 @@
     "briefing": "tsx src/server/briefing-cli.ts",
     "init": "node scripts/init-config.mjs",
     "licenses": "node scripts/collect-licenses.mjs",
-    "test:smoke": "node scripts/smoke-test.mjs && node scripts/standalone-smoke-test.mjs && node scripts/collection-responsiveness-test.mjs",
+    "test:smoke": "node scripts/smoke-test.mjs && node scripts/standalone-smoke-test.mjs && node scripts/collection-responsiveness-test.mjs && node scripts/retention-responsiveness-test.mjs",
     "test:browser": "npm run build:web && playwright test"
   },
   "dependencies": {

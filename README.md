@@ -108,7 +108,9 @@ Back up `./data` and your private `.env`. The data directory holds reading
 positions, discussions, filters, saved briefings, and any connection tokens
 entered in Settings and generated signing secrets. Standalone
 subscriptions and article state also live there. In FreshRSS mode, back up
-FreshRSS separately.
+FreshRSS separately. Optional [retention settings](docs/retention.md) can mark
+old articles read, delete unprotected articles and clean cached full text. All
+limits start off. Paper backs up before its first article deletion.
 
 See [backup, restore, and upgrades](docs/recovery.md) before updating Paper,
 and [security and privacy](SECURITY.md) for details about stored data and
@@ -118,7 +120,9 @@ external services.
 
 This is an alpha release. Keep backups before upgrading. Folders are flat, and OPML
 transfers subscriptions, not article history or settings. Offline browser copies
-are not server backups. Identity conflicts have no dedicated resolution UI.
+are not server backups and do not protect server articles from retention. Star
+articles to keep their server copies. Cleanup frees database pages for reuse;
+it does not shrink the file or remove backups. Identity conflicts have no dedicated resolution UI.
 Broad searches can still take time, although they run outside the HTTP event
 loop. Article cleanup avoids known repeated-markup scans; very deep or large
 HTML still has a processing cost.

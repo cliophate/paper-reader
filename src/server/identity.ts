@@ -14,6 +14,7 @@ export interface SourceItemIdentity {
 }
 export type IdentityResolution =
   | { status: 'resolved'; id: string; created: boolean }
+  | { status: 'tombstoned'; id: string }
   | { status: 'ambiguous'; conflictId: string; candidateIds: string[] }
 
 export function freshRssIdentity(baseUrl: string, username: string): BackendIdentity {
@@ -185,6 +186,7 @@ export class IdentityStore {
       if (created) this.db.prepare('INSERT INTO article_identities(id, backend_id, subscription_id) VALUES (?, ?, ?)').run(id, backendId, subscriptionId)
       for (const alias of aliases) this.addAlias(backendId, subscriptionId, alias, id)
       if (fingerprint) this.db.prepare('INSERT OR IGNORE INTO article_fingerprints VALUES (?, ?, ?, ?)').run(backendId, subscriptionId, fingerprint, id)
+      if (this.db.prepare('SELECT 1 FROM retention_tombstones WHERE entry_id = ?').get(id)) return { status: 'tombstoned', id }
       return { status: 'resolved', id, created }
     })
   }

@@ -86,7 +86,7 @@ export function ingestFeed(db: PaperDatabase, input: FeedEndpoint & {
     checkpoint: [
       { key, value: JSON.stringify(checkpoint) },
       ...(conflicts.size > previousConflictCount ? [{ key: conflictsKey, value: JSON.stringify([...conflicts]) }] : []),
-    ], feedTitle: parsed.title,
+    ], feedTitle: parsed.title, successfulFetchAt: fetchedTime,
   })
   return { feed: parsed, results, resolved: results.filter(result => result.status === 'resolved').length, ambiguous: results.filter(result => result.status === 'ambiguous').length }
 }

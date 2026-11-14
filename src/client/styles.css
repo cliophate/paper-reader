@@ -1143,3 +1143,12 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
 .feed-check-details dd { margin: 2px 0 0; overflow-wrap: anywhere; }
 
 .feed-check-message { flex: 0 0 auto; margin: 8px 24px; font-size: 13px; }
+
+.retention-settings { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 16px; }
+.retention-settings fieldset { border: 0; padding: 0; min-width: 0; }
+.retention-settings details { margin: 12px 0; }
+.retention-settings select { max-width: 100%; }
+.retention-days { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.retention-days span { flex: 1 1 180px; }
+.retention-days input { width: 90px; }
+.retention-settings button { margin: 8px 8px 0 0; }

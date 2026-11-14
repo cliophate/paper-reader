@@ -9,7 +9,7 @@ import { offlineArticles } from '../src/client/offline'
 import type { Entry, EntryPage, Feed } from '../src/client/types'
 
 vi.mock('../src/client/api', async () => ({ ...await vi.importActual('../src/client/api'), api: {
-  reload: vi.fn(), organization: vi.fn(), organize: vi.fn(), recentReading: vi.fn(), navigation: vi.fn(), status: vi.fn(), entries: vi.fn(), entry: vi.fn(), editState: vi.fn(), markStreamRead: vi.fn(),
+  reload: vi.fn(), organization: vi.fn(), organize: vi.fn(), recentReading: vi.fn(), navigation: vi.fn(), status: vi.fn(), entries: vi.fn(), entry: vi.fn(), entryByNumber: vi.fn(), editState: vi.fn(), markStreamRead: vi.fn(),
   markRelativeRead: vi.fn(), undo: vi.fn(),
   setStreamOrder: vi.fn(), removeFeed: vi.fn(), fullText: vi.fn(), previewRead: vi.fn(), confirmRead: vi.fn(), filters: vi.fn(),
 } }))
@@ -1085,4 +1085,15 @@ describe('organization keeps the reading session', () => {
     expect([...container.querySelectorAll('.story-row')]).toEqual(rows)
     expect(document.activeElement?.getAttribute('aria-label')).toBe('Options for Photos')
   })
+})
+
+
+it('shows a retention removal notice and finishes resolving the reader link', async () => {
+  history.replaceState(null, '', '/a/999999')
+  const notice = 'This article was removed by your retention settings on 2026-11-14.'
+  vi.mocked(api.entryByNumber).mockRejectedValue(new ApiError(notice, 410, 'removed_by_retention'))
+  await mount()
+  expect(container.textContent).toContain(notice)
+  expect(container.textContent).not.toContain('Article not found')
+  expect(location.pathname).toBe('/')
 })

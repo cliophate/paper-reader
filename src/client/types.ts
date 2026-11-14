@@ -128,7 +128,7 @@ export interface TopicsPayload {
 export interface ActivityRecord {
   id: number
   occurredAt: string
-  kind: 'sync' | 'state' | 'feed' | 'report' | 'filter' | 'pulse'
+  kind: 'sync' | 'state' | 'feed' | 'report' | 'filter' | 'pulse' | 'retention'
   origin: string
   summary: string
   count: number

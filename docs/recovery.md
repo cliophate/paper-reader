@@ -62,6 +62,32 @@ Paper 0.2.0-alpha.1 uses database schema v13.
 [Feed scheduling](feed-scheduling.md) describes the migration and automatic
 `.before-feed-checks-v13` backup.
 
+### Upgrade from 0.2.0-alpha.1 to the next release
+
+Schema v14 adds [retention](retention.md). Startup creates
+`<database-path>.before-retention-v14` before migrating. All retention limits
+start off. Existing articles and saved state stay unchanged. Feeds remain
+protected from deletion until their next successful body fetch. The v14 schema
+also keeps auto-read timestamps, explicit unread exemptions and removal notices.
+A manual unread choice after auto-read survives restart and later cleanup.
+
+Deleted article links show the retention removal date for one year, then report
+not found. Arrival numbers are never reused. Removal notices contain no article
+body and cannot restore deleted articles; restore a backup to recover them.
+
+The first cleanup that would delete articles creates a second consistent backup,
+`<database-path>.before-retention-first-delete`, including committed WAL data.
+Paper keeps this private file and refuses deletion if backup creation or
+validation fails. Keep enough disk space for both backups. Cache cleanup does
+not require this second backup because cached pages can be fetched again.
+
+Keep your existing configuration and full installation backups. To roll back
+to 0.2.0-alpha.1, stop Paper and briefing commands and restore the pre-v14 backup
+without stale WAL or SHM sidecars. To undo retention deletions on v14, restore
+the first-deletion backup and [reset its retention policy](retention.md#jobs-cache-and-recovery)
+before starting Paper, or cleanup will resume. Changes made after either backup
+will be absent.
+
 ### Upgrade from alpha.4 to 0.1.0
 
 Upgrading from 0.1.0-alpha.4 needs no database migration or new configuration.

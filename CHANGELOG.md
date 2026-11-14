@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Add optional standalone article retention with auto-read overrides, separate
+  read and unread limits, previews and activity summaries. Protect saved articles
+  and current feed items; keep expiring identity tombstones after deletion.
+- Retention respects manual unread choices after auto-read, including bulk
+  actions and Undo. Auto-read records state activity and refreshes connected readers.
+- Feeds in several folders use the most conservative auto-read override. Feed
+  overrides still win. Retention settings show the effective limit and source.
+- Deleted article links show the retention removal date for one year. Arrival
+  numbers stay reserved after notices expire.
+- Add independent full-text cache cleanup in both backend modes. Article cleanup
+  runs in resumable batches and backs up before its first deletion.
+- Schema v14 adds retention state and indexes. Upgrades create
+  `.before-retention-v14`; first article deletion creates
+  `.before-retention-first-delete`. See [retention](docs/retention.md).
 - Keyboard shortcuts no longer fire while Ctrl, Cmd or Alt is held, so Ctrl+F
   opens the browser's Find again.
 - Previous into the preceding feed or folder opens its last article instead of

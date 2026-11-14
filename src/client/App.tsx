@@ -644,9 +644,14 @@ export default function App() {
     const resolve = async () => {
       const offline = pendingLocation.library === 'offline' || !online ? await offlineArticles() : []
       const collections = pendingLocation.collection || pendingLocation.collectionNumber ? (await api.pulse()).collections : routeCollections.current
+      let removalNotice = ''
       const missing = async (load: () => Promise<{ entry: Entry | null }>) => {
         try { return (await load()).entry }
-        catch (error) { if (error instanceof ApiError && error.status === 404) return null; throw error }
+        catch (error) {
+          if (error instanceof ApiError && error.status === 410 && error.code === 'removed_by_retention') { removalNotice = error.message; return null }
+          if (error instanceof ApiError && error.status === 404) return null
+          throw error
+        }
       }
       const result = await resolveReaderLocation(pendingLocation, { navigation, entries: [...routeEntries.current.values(), ...offline], collections },
         value => online ? missing(() => api.entryByNumber(value)) : Promise.resolve(null),
@@ -667,7 +672,7 @@ export default function App() {
       setMobilePane(location.mobilePane)
       setPendingLocation(null)
       resolvingLocation.current = false
-      if (notice) notify(notice)
+      if (removalNotice || notice) notify(removalNotice || notice)
     }
     void resolve().catch(error => { if (!cancelled) notify(error instanceof Error ? error.message : 'Could not open this link') })
     return () => { cancelled = true }

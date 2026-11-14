@@ -51,7 +51,11 @@ from navigation.
 Navigation feeds and folders, articles and Pulse collections expose `linkNumber`.
 `GET /api/entries/number/<number>` resolves an article without requiring its
 stream page to be loaded. It returns `{entry}`, HTTP 404 for a missing article,
-or HTTP 400 for an invalid number. Existing API IDs and routes remain unchanged.
+or HTTP 400 for an invalid number. Retention removals return HTTP 410 for one
+year, with code `removed_by_retention` and a `removal` object containing
+`sequence`, `removedAt`, `feedId` and `title`. The reader shows the removal date.
+Expired notices return HTTP 404; their numbers are never reused. Existing API IDs
+and routes remain unchanged.
 FreshRSS responses also receive persisted numbers when local reads are disabled.
 Read requests import only articles without an arrival number, in one transaction.
 Existing article bodies, mute matches, search rows and sync timestamps stay unchanged.
