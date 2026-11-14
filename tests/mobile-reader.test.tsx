@@ -9,7 +9,7 @@ import { offlineArticles } from '../src/client/offline'
 import type { Entry, EntryPage, Feed } from '../src/client/types'
 
 vi.mock('../src/client/api', async () => ({ ...await vi.importActual('../src/client/api'), api: {
-  organization: vi.fn(), organize: vi.fn(), recentReading: vi.fn(), navigation: vi.fn(), status: vi.fn(), entries: vi.fn(), entry: vi.fn(), editState: vi.fn(), markStreamRead: vi.fn(),
+  reload: vi.fn(), organization: vi.fn(), organize: vi.fn(), recentReading: vi.fn(), navigation: vi.fn(), status: vi.fn(), entries: vi.fn(), entry: vi.fn(), editState: vi.fn(), markStreamRead: vi.fn(),
   markRelativeRead: vi.fn(), undo: vi.fn(),
   setStreamOrder: vi.fn(), removeFeed: vi.fn(), fullText: vi.fn(), previewRead: vi.fn(), confirmRead: vi.fn(),
 } }))
@@ -133,6 +133,40 @@ describe('mobile reader switching', () => {
     await previous()
     expect(api.entries).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'instagram' }), false, '', 'backward', expect.any(AbortSignal), {}, true)
     expect(container.textContent).toContain('Post 80')
+  })
+
+  it('keeps the reverse window on foreground Refresh, then Next enters the following feed', async () => {
+    const feeds = ['instagram', 'tech'].map(id => feed(id, 0))
+    vi.mocked(api.navigation).mockResolvedValue({ unread: 0, starred: 0, uncategorized: feeds, folders: [] })
+    history.replaceState(null, '', '/?kind=feed&id=tech&title=tech&entry=c&pane=article&unread=0')
+    vi.mocked(api.entry).mockResolvedValue({ entry: { ...post('c'), feedId: 'tech', kind: 'article' } })
+    const posts = Array.from({ length: 100 }, (_, i) => ({ ...post(String(i + 1)), kind: 'article' as const, feedId: 'instagram', timestamp: 100 - i }))
+    vi.mocked(api.entries).mockImplementation(async (target, unread, query, cursor, signal, dates, reverse) => {
+      if (target.id === 'tech') return { items: [{ ...post('c'), feedId: 'tech', kind: 'article' }], continuation: '' }
+      if (!reverse) return { items: posts.slice(0, 80), continuation: 'forward' }
+      return cursor ? { items: posts.slice(0, 20), continuation: '' }
+        : { items: posts.slice(20), continuation: '', previousContinuation: 'backward' }
+    })
+    await mount()
+    const key = async (key: string) => { await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })) }) }
+    await key('k')
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 100')
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Refresh"]')!.click() })
+    expect(api.reload).toHaveBeenCalledOnce()
+    expect(api.entries).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'instagram' }), false, '', '', undefined, {}, true)
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 100')
+    await key('j')
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post c')
+    await key('k')
+    // Expand the reverse window, then refresh without discarding its first page.
+    for (let i = 0; i < 80; i++) await key('k')
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 20')
+    await key('r')
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 20')
+    await key('k')
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 19')
+    await key('j')
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 20')
   })
 
   it.each([true, false])('counts loaded rows using the active unread filter, unread=%s', async unreadOnly => {

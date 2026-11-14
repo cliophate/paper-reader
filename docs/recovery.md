@@ -200,3 +200,12 @@ browser clears storage and are not a backup of the server database.
 
 Changing `PAPER_BACKEND` alone cannot switch ownership. After restoring, use the
 backend and account configuration that owns that backup.
+
+### Unicode mute filter repair
+
+Current builds repair existing non-ASCII mute filters after the server starts.
+The schema stays at v13. Each filter saves its row cursor and scan boundary in
+`sync_state` under `mute_unicode_v1:<filter-id>`, then records `done`. Matches and
+progress commit together in short transactions. Restarting resumes unfinished
+work, including interrupted filter creation. New ingestion applies the rule
+throughout the scan. Keep the database and its WAL together when backing up.

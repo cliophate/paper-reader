@@ -19,22 +19,62 @@ beforeEach(() => { directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-work
 afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
 
 describe('reading across changing lists', () => {
-  it.each(['title', 'content', 'any'] as const)('uses the same Unicode mute matching for preview, backfill and ingestion in %s', scope => {
+  it.each(['title', 'content', 'any'] as const)('uses the same Unicode mute matching for preview, backfill and ingestion in %s', async scope => {
     const fields = scope === 'title' ? { title: 'ÉCOLE' } : scope === 'content' ? { contentHtml: '<p>ÉCOLE</p>' } : { author: 'ÉCOLE' }
     db.upsertEntries([article(1, fields), article(2, { ...fields, feedId: 'feed/other' }), article(3)])
-    expect(db.previewMuteFilter('école', scope, 'feed/1').count).toBe(1)
-    const filter = db.createMuteFilter('école', scope, 'feed/1')
+    expect((await db.previewMuteFilter('école', scope, 'feed/1')).count).toBe(1)
+    const filter = await db.createMuteFilter('école', scope, 'feed/1')
     expect(filter.matchCount).toBe(1)
     db.upsertEntries([article(4, fields)])
     expect(db.muteFilters()[0].matchCount).toBe(2)
-    expect(db.previewMuteFilter('école', scope, 'feed/1').count).toBe(2)
+    expect((await db.previewMuteFilter('école', scope, 'feed/1')).count).toBe(2)
     expect(db.localEntriesPage(all).items.map(item => item.id).sort()).toEqual(['2', '3'])
     expect(db.localNavigation().unread).toBe(2)
   })
 
-  it.each(['newest', 'oldest'] as const)('pages backward from the true end with unread and mute filters, %s first', order => {
+  it('repairs legacy Unicode matches, resumes after shutdown and is idempotent', async () => {
+    db.upsertEntries(Array.from({ length: 700 }, (_, n) => article(n, { title: n % 2 ? 'ÉCOLE' : 'école' })))
+    const legacy = new DatabaseSync(path.join(directory, 'test.sqlite'))
+    legacy.exec(`INSERT INTO mute_filters VALUES ('legacy', 'école', 'title', '', '2026-01-01');
+      INSERT INTO muted_entries SELECT 'legacy', id FROM entries WHERE instr(lower(title), lower('école')) > 0`)
+    expect(db.muteFilters()[0].matchCount).toBe(350)
+    const backfill = db.backfillMuteFilters()
+    await new Promise<void>(resolve => setImmediate(resolve))
+    const progress = db.getSyncValue('mute_unicode_v1:legacy')
+    expect(JSON.parse(progress)).toMatchObject({ cursor: 256, end: 700 })
+    db.close()
+    await backfill
+    db = new PaperDatabase(path.join(directory, 'test.sqlite'))
+    await db.backfillMuteFilters()
+    expect(db.muteFilters()[0].matchCount).toBe(700)
+    expect(db.getSyncValue('mute_unicode_v1:legacy')).toBe('done')
+    expect(db.localEntriesPage(all).items).toEqual([])
+    await db.backfillMuteFilters()
+    expect(db.muteFilters()[0].matchCount).toBe(700)
+    legacy.close()
+  })
+
+  it('publishes a new rule before backfill and matches entries ingested between batches', async () => {
+    db.upsertEntries(Array.from({ length: 600 }, (_, n) => article(n, { contentHtml: '<p>ÉCOLE</p>' })))
+    const creating = db.createMuteFilter('école', 'content')
+    db.upsertEntries([article(700, { contentHtml: '<p>ÉCOLE</p>' }), article(0, { contentHtml: '<p>ÉCOLE updated</p>' })])
+    expect((await creating).matchCount).toBe(601)
+    expect(db.localEntriesPage(all).items).toEqual([])
+  })
+
+  it('reports a lower bound when a preview reaches the scan limit', async () => {
+    db.upsertEntries(Array.from({ length: 10_300 }, (_, n) => article(n, { title: 'ÉCOLE' })))
+    const preview = await db.previewMuteFilter('école', 'title')
+    expect(preview.truncated).toBe(true)
+    expect(preview.count).toBeGreaterThan(0)
+    expect(preview.count).toBeLessThanOrEqual(10_240)
+    expect(preview.items).toHaveLength(8)
+    expect(db.muteFilters()).toEqual([])
+  })
+
+  it.each(['newest', 'oldest'] as const)('pages backward from the true end with unread and mute filters, %s first', async order => {
     db.upsertEntries(Array.from({ length: 205 }, (_, n) => article(n + 1, { read: n % 2 === 0 })))
-    db.createMuteFilter('report 2', 'title')
+    await db.createMuteFilter('report 2', 'title')
     const stream = { kind: 'feed' as const, id: 'feed/1', title: 'One' }
     db.setStreamOrder(stream, order)
     const expected = db.localEntriesPage(stream, { unreadOnly: true, limit: 250 }).items.map(item => item.id).reverse()
@@ -56,19 +96,19 @@ describe('reading across changing lists', () => {
     const last = db.localEntriesPage(all, { unreadOnly: true, limit: 2, continuation: second.continuation })
     expect(last.items.map(item => item.id)).toEqual(order === 'newest' ? ['1'] : ['5'])
   })
-  it('holds search ordering while entries are read, muted and added', () => {
+  it('holds search ordering while entries are read, muted and added', async () => {
     db.upsertEntries([1, 2, 3, 4, 5].map(n => article(n)))
     const first = db.localEntriesPage(all, { query: 'compositor', unreadOnly: true, limit: 2 })
     db.editLocalEntryState(first.items.map(item => item.id), 'read')
-    db.createMuteFilter('report 3', 'title')
+    await db.createMuteFilter('report 3', 'title')
     db.upsertEntries([article(6)])
     const next = db.localEntriesPage(all, { query: 'compositor', unreadOnly: true, limit: 2, continuation: first.continuation })
     expect(next.items.map(item => item.id)).toEqual(['2', '1'])
     expect(() => db.localEntriesPage(all, { query: 'other', continuation: first.continuation })).toThrow('Refresh')
   })
-  it('bounds search and bulk candidates by feed, dates, unread state and mute filters', () => {
+  it('bounds search and bulk candidates by feed, dates, unread state and mute filters', async () => {
     db.upsertEntries([article(1), article(2), article(3, { feedId: 'feed/2' }), article(4, { read: true }), article(5)])
-    db.createMuteFilter('report 5', 'title')
+    await db.createMuteFilter('report 5', 'title')
     const scope = { kind: 'feed' as const, id: 'feed/1', title: 'One' }
     const options = { query: 'compositor', unreadOnly: true, after: new Date(2000).toISOString(), before: new Date(6000).toISOString() }
     expect(db.matchingEntryIds(scope, options)).toEqual(['2'])
@@ -110,9 +150,9 @@ describe('reading across changing lists', () => {
     expect(db.matchingEntryIds(all, { query: 'migratedword' })).toHaveLength(60)
     expect(db.matchingEntryIds(all, { query: 'compositor' })).toHaveLength(119)
   })
-  it('previews filter matches without changing visibility or read state', () => {
+  it('previews filter matches without changing visibility or read state', async () => {
     db.upsertEntries([article(1), article(2, { feedId: 'feed/2' })])
-    expect(db.previewMuteFilter('compositor', 'title', 'feed/1')).toMatchObject({ count: 1, items: [expect.objectContaining({ id: '1' })] })
+    expect(await db.previewMuteFilter('compositor', 'title', 'feed/1')).toMatchObject({ count: 1, items: [expect.objectContaining({ id: '1' })] })
     expect(db.localEntriesPage(all).items).toHaveLength(2)
     expect(db.muteFilters()).toHaveLength(0)
     expect(db.unreadCount()).toBe(2)

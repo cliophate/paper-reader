@@ -9,6 +9,11 @@ Adds standalone feed controls and an OpenAI-compatible API provider through
 
 ### Changes since 0.1.0
 
+- Mute filters scan article text in bounded batches. Limited previews say
+  "At least"; adding a filter checks all stored articles. Existing Unicode
+  filters gain missing matches in a resumable background backfill after startup.
+- Refresh preserves the loaded article window after entering a feed backward.
+
 - Standalone feed settings show the last successful check, next scheduled check,
   errors, consecutive failures and publisher retry delays. Check a feed or folder
   now, with deduplication, bounded concurrency and a one-minute cooldown.

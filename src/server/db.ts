@@ -177,12 +177,12 @@ export class PaperDatabase {
   readonly organization: LocalOrganizationService
   readonly feedFetch: FeedFetchStore
   private activeBackendId = ''
+  private closed = false
 
   constructor(databasePath: string, options: { readOnly?: boolean } = {}) {
     this.databasePath = databasePath
     if (!options.readOnly) fs.mkdirSync(path.dirname(databasePath), { recursive: true })
     this.db = new DatabaseSync(databasePath, { readOnly: options.readOnly, timeout: BUSY_TIMEOUT_MS })
-    this.db.function('unicode_lower', { deterministic: true }, value => String(value ?? '').toLowerCase())
     try {
       if (options.readOnly) {
         if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) !== DATABASE_VERSION
@@ -214,6 +214,7 @@ export class PaperDatabase {
   get searchDatabasePath() { return this.databasePath }
 
   close() {
+    this.closed = true
     this.db.close()
   }
 
@@ -1339,15 +1340,86 @@ export class PaperDatabase {
     this.db.prepare('INSERT INTO readwise_saves VALUES (?, ?) ON CONFLICT(url) DO UPDATE SET saved_at=excluded.saved_at').run(url, new Date().toISOString())
   }
 
-  previewMuteFilter(phrase: string, scope: MuteFilterScope, feedId = '') {
-    const title = 'instr(unicode_lower(title), unicode_lower(?)) > 0'
-    const content = 'instr(unicode_lower(content_text), unicode_lower(?)) > 0 OR instr(unicode_lower(excerpt), unicode_lower(?)) > 0'
-    const match = scope === 'title' ? title : scope === 'content' ? content : `${title} OR ${content} OR instr(unicode_lower(feed_title), unicode_lower(?)) > 0 OR instr(unicode_lower(author), unicode_lower(?)) > 0`
-    const params = Array(scope === 'title' ? 1 : scope === 'content' ? 2 : 5).fill(phrase)
-    const where = `WHERE (? = '' OR feed_id = ?) AND (${match})`
-    const count = Number(this.db.prepare(`SELECT COUNT(*) AS count FROM entries ${where}`).get(feedId, feedId, ...params)?.count || 0)
-    const items = this.db.prepare(`SELECT * FROM entries ${where} ORDER BY timestamp DESC LIMIT 8`).all(feedId, feedId, ...params).map(row => this.numberEntry(entryFromRow(row as Record<string, string | number>)))
-    return { count, items }
+  async previewMuteFilter(phrase: string, scope: MuteFilterScope, feedId = '') {
+    const rule = { phrase, scope, feed_id: feedId }
+    const end = this.muteScanEnd()
+    const started = performance.now()
+    let cursor = 0
+    let count = 0
+    let scanned = 0
+    let samples: Array<{ id: string; timestamp: number }> = []
+    while (cursor < end && scanned < 10_240 && performance.now() - started < 500) {
+      const batch = this.scanMuteBatch(rule, cursor, end)
+      cursor = batch.cursor
+      scanned += batch.scanned
+      count += batch.matches.length
+      samples = [...samples, ...batch.matches].sort((a, b) => b.timestamp - a.timestamp).slice(0, 8)
+      await new Promise<void>(resolve => setImmediate(resolve))
+      if (this.closed) throw new Error('Database closed during filter preview')
+    }
+    const items = samples.flatMap(({ id }) => {
+      const entry = this.localEntry(id)
+      return entry ? [entry] : []
+    })
+    return { count, items, truncated: cursor < end }
+  }
+
+  private muteScanEnd(): number {
+    return Number(this.db.prepare('SELECT MAX(rowid) AS last FROM entries').get()?.last || 0)
+  }
+
+  // Project only the fields needed for matching. No HTML bodies cross the
+  // SQLite/JS boundary, and each query releases its read snapshot before writing.
+  private scanMuteBatch(rule: MuteRule, cursor: number, end: number) {
+    const fields = muteFields(rule.scope)
+    const ascii = /^[\x00-\x7f]*$/.test(rule.phrase)
+    const match = fields.map(field => `instr(lower(${field}), ?) > 0`).join(' OR ')
+    const projection = ascii ? `CASE WHEN (? = '' OR feed_id = ?) AND (${match}) THEN 1 ELSE 0 END AS matches`
+      : ['feed_id', ...fields].join(', ')
+    const parameters = ascii ? [rule.feed_id, rule.feed_id, ...fields.map(() => rule.phrase.toLowerCase())] : []
+    const rows = this.db.prepare(`SELECT rowid AS scan_rowid, id, timestamp, ${projection}
+      FROM entries WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT 256`)
+      .all(...parameters, cursor, end) as Array<Record<string, string | number>>
+    const matches = rows.filter(row => ascii ? Boolean(row.matches) : matchesMuteFields(rule, String(row.feed_id), fields.map(field => String(row[field]))))
+      .map(row => ({ id: String(row.id), timestamp: Number(row.timestamp) }))
+    return { matches, scanned: rows.length, cursor: rows.length < 256 ? end : Number(rows.at(-1)!.scan_rowid) }
+  }
+
+  // A per-filter checkpoint also resumes a newly created filter interrupted by
+  // shutdown. Legacy ASCII filters need no repair; new ASCII filters get a pending key.
+  async backfillMuteFilters() {
+    await new Promise<void>(resolve => setImmediate(resolve))
+    if (this.closed) return
+    const rules = this.db.prepare('SELECT id, phrase, scope, feed_id FROM mute_filters').all() as Array<MuteRule & { id: string }>
+    for (const rule of rules) {
+      if (this.closed) return
+      const progress = this.getSyncValue(`mute_unicode_v1:${rule.id}`)
+      if (progress === 'done' || (!progress && /^[\x00-\x7f]*$/.test(rule.phrase))) continue
+      await this.backfillMuteFilter(rule)
+    }
+  }
+
+  private async backfillMuteFilter(rule: MuteRule & { id: string }) {
+    const key = `mute_unicode_v1:${rule.id}`
+    const progress = this.getSyncValue(key)
+    if (progress === 'done') return
+    const state = progress ? JSON.parse(progress) as { cursor: number; end: number } : { cursor: 0, end: this.muteScanEnd() }
+    do {
+      if (this.closed) return
+      const batch = this.scanMuteBatch(rule, state.cursor, state.end)
+      let exists = false
+      transaction(this.db, () => {
+        exists = Boolean(this.db.prepare('SELECT 1 FROM mute_filters WHERE id = ?').get(rule.id))
+        if (!exists) return
+        const insert = this.db.prepare(`INSERT OR IGNORE INTO muted_entries (filter_id, entry_id)
+          SELECT ?, id FROM entries WHERE id = ?`)
+        for (const match of batch.matches) insert.run(rule.id, match.id)
+        state.cursor = batch.cursor
+        this.setSyncValue(key, state.cursor >= state.end ? 'done' : JSON.stringify(state))
+      })
+      if (!exists) return
+      await new Promise<void>(resolve => setImmediate(resolve))
+    } while (state.cursor < state.end)
   }
 
   localEntries(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; after?: Date; before?: Date } = {}): Entry[] {
@@ -1594,31 +1666,21 @@ export class PaperDatabase {
     }))
   }
 
-  createMuteFilter(phrase: string, scope: MuteFilterScope, feedId = ''): MuteFilterRecord {
+  async createMuteFilter(phrase: string, scope: MuteFilterScope, feedId = ''): Promise<MuteFilterRecord> {
     const id = crypto.randomUUID()
     const createdAt = new Date().toISOString()
-    this.db.exec('BEGIN IMMEDIATE')
-    try {
+    // Publish the rule before scanning. Ingestion now applies it to new and
+    // updated entries while the scan covers the rows that already existed.
+    transaction(this.db, () => {
       this.db.prepare('INSERT INTO mute_filters (id, phrase, scope, feed_id, created_at) VALUES (?, ?, ?, ?, ?)')
         .run(id, phrase, scope, feedId, createdAt)
-      const titleMatch = 'instr(unicode_lower(entries.title), unicode_lower(?)) > 0'
-      const contentMatch = 'instr(unicode_lower(entries.content_text), unicode_lower(?)) > 0 OR instr(unicode_lower(entries.excerpt), unicode_lower(?)) > 0'
-      const anyMatch = `${titleMatch} OR ${contentMatch} OR instr(unicode_lower(entries.feed_title), unicode_lower(?)) > 0 OR instr(unicode_lower(entries.author), unicode_lower(?)) > 0`
-      const match = scope === 'title' ? titleMatch : scope === 'content' ? contentMatch : anyMatch
-      const parameters = scope === 'title' ? [phrase]
-        : scope === 'content' ? [phrase, phrase]
-        : [phrase, phrase, phrase, phrase, phrase]
-      this.db.prepare(`
-        INSERT OR IGNORE INTO muted_entries (filter_id, entry_id)
-        SELECT ?, entries.id FROM entries
-        WHERE (? = '' OR entries.feed_id = ?) AND (${match})
-      `).run(id, feedId, feedId, ...parameters)
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
-    }
-    return this.muteFilters().find(filter => filter.id === id)!
+      this.setSyncValue(`mute_unicode_v1:${id}`, JSON.stringify({ cursor: 0, end: this.muteScanEnd() }))
+    })
+    await this.backfillMuteFilter({ id, phrase, scope, feed_id: feedId })
+    if (this.closed) throw new Error('Database closed during filter creation')
+    const filter = this.muteFilters().find(filter => filter.id === id)
+    if (!filter) throw new Error('Filter was removed during creation')
+    return filter
   }
 
   muteFilters(): MuteFilterRecord[] {
@@ -2070,14 +2132,24 @@ function visibleEntryClause(alias: string): string {
   return `NOT EXISTS (SELECT 1 FROM muted_entries WHERE muted_entries.entry_id = ${alias}.id)`
 }
 
-function entryMatchesMuteFilter(entry: Entry, rule: { phrase: string; scope: MuteFilterScope; feed_id: string }): boolean {
-  if (rule.feed_id && rule.feed_id !== entry.feedId) return false
+type MuteRule = { phrase: string; scope: MuteFilterScope; feed_id: string }
+
+function muteFields(scope: MuteFilterScope): string[] {
+  return scope === 'title' ? ['title'] : scope === 'content' ? ['excerpt', 'content_text']
+    : ['title', 'excerpt', 'content_text', 'feed_title', 'author']
+}
+
+function matchesMuteFields(rule: MuteRule, feedId: string, fields: string[]): boolean {
+  if (rule.feed_id && rule.feed_id !== feedId) return false
   const phrase = rule.phrase.toLowerCase()
-  if (!phrase) return false
+  return Boolean(phrase) && fields.some(value => value.toLowerCase().includes(phrase))
+}
+
+function entryMatchesMuteFilter(entry: Entry, rule: MuteRule): boolean {
   const fields = rule.scope === 'title' ? [entry.title]
     : rule.scope === 'content' ? [entry.excerpt, plainText(entry.contentHtml)]
     : [entry.title, entry.excerpt, plainText(entry.contentHtml), entry.feedTitle, entry.author]
-  return fields.some(value => value.toLowerCase().includes(phrase))
+  return matchesMuteFields(rule, entry.feedId, fields)
 }
 
 function parseObject(value: string): Record<string, unknown> {

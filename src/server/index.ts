@@ -261,7 +261,7 @@ app.get('/api/filters', (_request, response) => {
   response.json(database.muteFilters())
 })
 
-app.post('/api/filters', (request, response) => {
+app.post('/api/filters', asyncRoute(async (request, response) => {
   const phrase = String(request.body?.phrase || '').trim().slice(0, 240)
   const scope = String(request.body?.scope || 'title')
   const feedId = String(request.body?.feedId || '').trim()
@@ -272,10 +272,10 @@ app.post('/api/filters', (request, response) => {
     if (error instanceof BackendValidationError) return response.status(400).json({ error: 'Unknown feed' })
     throw error
   }
-  const filter = database.createMuteFilter(phrase, scope as import('./db.js').MuteFilterScope, feedId)
+  const filter = await database.createMuteFilter(phrase, scope as import('./db.js').MuteFilterScope, feedId)
   database.recordActivity({ kind: 'filter', origin: 'settings', summary: `Muted "${phrase}"`, count: filter.matchCount, details: { filterId: filter.id, scope, feedId } })
   response.status(201).json(filter)
-})
+}))
 
 app.delete('/api/filters/:id', (request, response) => {
   const id = String(request.params.id)
@@ -285,12 +285,12 @@ app.delete('/api/filters/:id', (request, response) => {
   response.json({ ok: true })
 })
 
-app.post('/api/filters/preview', (request, response) => {
+app.post('/api/filters/preview', asyncRoute(async (request, response) => {
   const phrase = String(request.body?.phrase || '').trim().slice(0, 240)
   const scope = String(request.body?.scope || 'title')
   if (phrase.length < 2 || !['title', 'content', 'any'].includes(scope)) return response.status(400).json({ error: 'Enter a phrase and choose where to match it.' })
-  response.json(database.previewMuteFilter(phrase, scope as 'title' | 'content' | 'any', String(request.body?.feedId || '')))
-})
+  response.json(await database.previewMuteFilter(phrase, scope as 'title' | 'content' | 'any', String(request.body?.feedId || '')))
+}))
 
 app.get('/api/reading', (_request, response) => response.json(database.recentReading()))
 app.post('/api/reading', (request, response) => {
@@ -702,6 +702,7 @@ app.use((error: Error, request: Request, response: Response, _next: NextFunction
 const server = app.listen(config.port, config.host, () => {
   console.log(`Paper is listening on port ${config.port}`)
   logMemory('listening')
+  void database.backfillMuteFilters().catch(error => console.error('Mute filter backfill failed; it will resume after restart.', error))
 })
 
 function parseRevisions(value: unknown): Record<string, number> | undefined {

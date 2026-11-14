@@ -191,8 +191,8 @@ export default function App() {
   const selected = entries.find(entry => entry.id === selectedId) || null
   const readerGeneration = useRef(0)
   useLayoutEffect(() => { readerGeneration.current += 1 }, [view, stream.kind, stream.id, unreadOnly, query, libraryMode, searchStream.kind, searchStream.id, searchUnread, after, before, pulseContext?.id])
-  const currentReader = useRef({ stream, selected, previousContinuation })
-  currentReader.current = { stream, selected, previousContinuation }
+  const currentReader = useRef({ stream, selected, previousContinuation, entries })
+  currentReader.current = { stream, selected, previousContinuation, entries }
   const selectedIndex = selected ? entries.findIndex(entry => entry.id === selected.id) : -1
   const adjacentSources = stream.kind === 'category' ? navigation?.folders || [] : stream.kind === 'feed' ? navigationFeeds(navigation) : []
   const currentFolderIndex = adjacentSources.findIndex(source => source.id === stream.id)
@@ -308,13 +308,14 @@ export default function App() {
       // Refresh a tail-loaded stream from the same end, so the first page
       // cannot introduce a gap ahead of the article being read.
       const current = currentReader.current
-      const reverse = Boolean(background && !query && current.previousContinuation && current.stream.kind === target.kind && current.stream.id === target.id)
+      const keepWindow = background === 'replace-in-place' || (!background && select === 'keep' && loadedEntriesScope.current === scope)
+      const reverse = Boolean((background || keepWindow) && !query && current.previousContinuation && current.stream.kind === target.kind && current.stream.id === target.id)
       const result = await api.entries(query ? searchStream : target, query ? searchUnread : unreadOnly && target.kind !== 'starred', query, '', undefined, query ? dates : {}, reverse)
       // A bulk action must not collapse a paginated list back to page one.
-      const loadedCount = storyRowRefs.current.size
+      const loadedCount = current.entries.length
       const seenPages = new Set<string>()
       let cursor = reverse ? result.previousContinuation : result.continuation
-      while (background === 'replace-in-place' && cursor && result.items.length < loadedCount) {
+      while (keepWindow && cursor && result.items.length < loadedCount) {
         if (serial !== requestSerial.current || seenPages.has(cursor)) break
         seenPages.add(cursor)
         const page = await api.entries(query ? searchStream : target, query ? searchUnread : unreadOnly && target.kind !== 'starred', query, cursor, undefined, query ? dates : {}, reverse)
@@ -329,7 +330,7 @@ export default function App() {
       loadedEntriesScope.current = scope
       const orderChanged = Boolean(result.order && result.order !== entryOrderRef.current)
       setEntryOrder(result.order || 'newest')
-      if (background === 'replace-in-place' && listRef.current) {
+      if (keepWindow && listRef.current) {
         const list = listRef.current
         const top = list.getBoundingClientRect().top
         pendingListScroll.current = { top: list.scrollTop, anchors: [...list.querySelectorAll<HTMLElement>('.story-row')]
@@ -338,7 +339,7 @@ export default function App() {
       }
       setEntries(current => {
         if (scopeChanged) return result.items
-        if (background === 'replace-in-place') {
+        if (keepWindow && !orderChanged) {
           const next = result.items.map(item => item.id === selectedIdRef.current && current.find(old => old.id === item.id)?.fullText ? { ...item, ...articleContent(current.find(old => old.id === item.id)!) } : item)
           const selectedIndex = current.findIndex(item => item.id === selectedIdRef.current)
           const selectedEntry = current[selectedIndex]
@@ -1115,6 +1116,7 @@ export default function App() {
           // Invalidate old list requests and avoid fetching this folder twice.
           requestSerial.current += 1
           preparedStreamLoad.current = target
+          loadedEntriesScope.current = JSON.stringify([libraryMode, target.kind, target.id, unreadOnly && target.kind !== 'starred', '', {}])
           pushLocation({ stream: target, selectedId: destination.id, query: '', mobilePane: 'article' })
           setStream(target)
           setEntries(result.items)

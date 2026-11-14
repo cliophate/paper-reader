@@ -60,6 +60,15 @@ checks concurrent state writes, cancellation, queue saturation, shutdown locks,
 retained state and checkpoints. It uses about 6 GiB of temporary storage
 while seeding its multi-KiB article bodies.
 
+After building, the mute-filter scale reproduction seeds 200,000 articles with
+10.6 KB bodies and measures preview, creation, peak RSS/heap and concurrent writer
+latency. It retains its synthetic database and results in a new temporary directory.
+Pass an optional path to a baseline module exporting `PaperDatabase` to compare it.
+
+```sh
+node scripts/mute-filter-scale-test.mjs
+```
+
 After building, run the article-cleanup collection regression separately:
 
 ```sh

@@ -66,7 +66,7 @@ export function FiltersSettings({ feeds, onChanged, notify }: {
       <label><span>Feed</span><select disabled={busy} value={feedId} onChange={event => setFeedId(event.target.value)}><option value="">Every feed</option>{feeds.map(feed => <option key={feed.id} value={feed.id}>{feed.title}</option>)}</select></label>
       <button type="button" disabled={busy || phrase.trim().length < 2} onClick={() => void check()}>{previewing ? "Checking..." : "Preview matches"}</button><button type="submit" disabled={busy || !preview}>Add filter</button>
     </form>
-    {preview && <div className="filter-preview"><p>{preview.count} matching articles. Starred matches stay visible in Starred.</p><ul>{preview.items.map(entry => <li key={entry.id}>{entry.title} <small>{entry.feedTitle}</small></li>)}</ul></div>}
+    {preview && <div className="filter-preview"><p>{preview.truncated ? 'At least ' : ''}{preview.count} matching articles.{preview.truncated && ' Preview stopped after a limited scan. Adding the filter checks every article.'} Starred matches stay visible in Starred.</p><ul>{preview.items.map(entry => <li key={entry.id}>{entry.title} <small>{entry.feedTitle}</small></li>)}</ul></div>}
     {error && <p className="form-error">{error}</p>}
     <div className="settings-list">
       {filters.map(filter => <article className="settings-list-row" key={filter.id}>
