@@ -1166,3 +1166,8 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
 .access-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
 .access-toggle { display: flex; gap: 8px; align-items: center; }
 .access-secret { padding: 16px; border: 1px solid var(--line); border-radius: 6px; margin: 16px 0; }
+
+.access-settings pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.access-settings code { overflow-wrap: anywhere; }
+.access-form .access-toggle { display: flex; align-items: center; }
+.access-form input[type="checkbox"] { width: auto; }

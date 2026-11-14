@@ -100,3 +100,24 @@ it('rolls back a killed writer and releases its SQLite lock', async () => {
   expect(db.greaderDatabase.prepare('SELECT title FROM feeds WHERE id = ?').get(feed)!.title).toBe('Fixture')
   expect(() => db.saveLocalSubscription(backend, { title: 'After cancellation', url: 'https://example.test/after' })).not.toThrow()
 })
+
+it('intersects and excludes every combination of state, feed and folder streams', async () => {
+  const { ingestFeed } = await import('../src/server/feed-ingestion')
+  const { page } = await import('../src/server/greader-query')
+  const second = db.saveLocalSubscription(backend, { title: 'Second', url: 'https://example.test/second' })
+  for (const subscriptionId of [feed, second]) ingestFeed(db, { backendId: backend, subscriptionId, endpointGeneration: 'fixture', requestUrl: 'https://example.test/feed', responseUrl: 'https://example.test/feed', fetchedAt: new Date().toISOString(), xml: '<rss version="2.0"><channel><title>Fixture</title><item><guid>one</guid><title>One</title></item><item><guid>two</guid><title>Two</title></item></channel></rss>' })
+  const folder = db.organization.apply(backend, db.organization.snapshot(backend).revision, [{type:'create-folder', title:'Folder'}]).results[0]
+  if (folder.status !== 'applied') throw new Error('Folder fixture failed')
+  db.organization.apply(backend, db.organization.snapshot(backend).revision, [{type:'add-membership', feedId:feed, folderId:folder.id!}])
+  const sql = db.greaderDatabase
+  sql.exec('UPDATE entries SET read = 1 WHERE rowid % 2 = 0; UPDATE entries SET starred = 1 WHERE rowid <= 2')
+  const articles = sql.prepare('SELECT a.sequence, e.read, e.starred, e.feed_id FROM entries e JOIN article_arrivals a ON a.entry_id=e.id').all()
+  const streams = ['reading-list','read','unread','starred'].map(id => ({kind:'state' as const,id})).concat([])
+  const allStreams: import('../src/server/greader-query').Stream[] = [...streams, {kind:'feed',id:feed}, {kind:'feed',id:second}, {kind:'folder',id:folder.id!}, {kind:'folder',id:''}]
+  const matches = (row: typeof articles[number], stream: typeof allStreams[number]) => stream.kind === 'feed' ? row.feed_id === stream.id : stream.kind === 'folder' ? row.feed_id === (stream.id ? feed : second) : stream.id === 'read' ? !!row.read : stream.id === 'unread' ? !row.read : stream.id === 'starred' ? !!row.starred : true
+  for (const stream of allStreams) for (const include of allStreams) for (const exclude of allStreams) {
+    const expected = articles.filter(row => matches(row,stream) && matches(row,include) && !matches(row,exclude)).map(row => String(row.sequence)).sort((a,b)=>Number(b)-Number(a))
+    const actual = page(sql, {backend,stream,it:[include],xt:[exclude],ot:0,nt:0,order:'DESC',n:250},false).values.map(row => row.id)
+    expect(actual).toEqual(expected)
+  }
+})

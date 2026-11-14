@@ -77,6 +77,7 @@ it('commits read and star once, preserves no-ops and rejects labels atomically',
 })
 it('enforces Auth, T, origin, host, methods and body bounds', async () => {
   expect((await call('token', [], 'GET', { Authorization: '' })).status).toBe(401)
+  expect((await call('token', [], 'GET', { Origin: 'https://evil.test' })).status).toBe(403)
   const bad = await call('edit-tag', [['i', '1'], ['a', `${STATE}read`]], 'POST'); expect(bad.status).toBe(403); expect(bad.headers.get('X-Reader-Google-Bad-Token')).toBe('true')
   expect((await call('edit-tag', [], 'GET')).status).toBe(404)
   expect((await call('edit-tag', [['T', token]], 'POST', { Origin: 'https://evil.test' })).status).toBe(403)

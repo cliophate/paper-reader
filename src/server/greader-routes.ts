@@ -70,6 +70,7 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
     const abort = new AbortController(); res.once('close', () => abort.abort())
     try {
       if (!auth.enabled()) throw new ReaderError('Not found.', 404)
+      if ((req.header('origin') && req.header('origin') !== new URL(auth.publicUrl).origin) || req.header('sec-fetch-site') === 'cross-site') throw new ReaderError('Cross-site requests are not allowed.', 403)
       const path = req.path.slice('/api/greader.php'.length)
       const login = path === '/accounts/ClientLogin'
       let endpoint = path.startsWith('/reader/api/0/') ? path.slice(14) : ''

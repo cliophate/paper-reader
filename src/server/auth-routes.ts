@@ -65,7 +65,7 @@ export function authRoutes(store: AuthStore, publicUrl: string, reader?: Greader
   }
   router.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next() })
   router.use(express.json({ limit: '16kb' }))
-  router.get('/status', (req, res) => res.json({ enabled: store.enabled(), authenticated: !!store.session(cookie(req)), passwordEnabled: !!store.owner()?.password_enabled, passkeys: store.passkeys().length > 0, reader: reader?.status() }))
+  router.get('/status', (req, res) => res.json({ enabled: store.enabled(), authenticated: !!store.session(cookie(req)), passwordEnabled: !!store.owner()?.password_enabled, passkeys: store.passkeys().length > 0, reader: !store.enabled() || store.session(cookie(req)) ? reader?.status() : undefined }))
   router.post('/setup', async (req, res) => {
     requireTransport()
     const revision = await store.attempt('setup', req.ip || '', () => store.setup(String(req.body?.code || ''), req.body?.username, req.body?.password))

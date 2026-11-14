@@ -419,9 +419,9 @@ export class PaperDatabase {
   commitReaderBulk(backendId: string, selection: string, parameters: import('node:sqlite').SQLInputValue[]) {
     return transaction(this.db, () => {
       this.assertLocalBackend(backendId)
-      this.db.exec('CREATE TEMP TABLE IF NOT EXISTS greader_bulk_ids(id TEXT PRIMARY KEY); DELETE FROM greader_bulk_ids')
+      this.db.exec('CREATE TEMP TABLE IF NOT EXISTS greader_bulk_ids(row_number INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL); DELETE FROM greader_bulk_ids')
       this.db.prepare(`INSERT INTO greader_bulk_ids ${selection}`).run(...parameters)
-      const result = this.db.prepare('UPDATE entries SET read = 1, state_revision = state_revision + 1 WHERE read = 0 AND id IN (SELECT id FROM greader_bulk_ids)').run()
+      const result = this.db.prepare(`UPDATE entries SET read = 1, state_revision = state_revision + 1, greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE read = 0 AND rowid IN (SELECT row_number FROM greader_bulk_ids)`).run()
       const count = Number(result.changes)
       if (count) this.recordActivity({ kind: 'state', origin: 'greader', summary: `read: ${count} articles`, count, details: { operation: 'read' } })
       return count

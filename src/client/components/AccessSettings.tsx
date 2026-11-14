@@ -140,7 +140,7 @@ export function AccessSettings() {
       <p>API {reader.enabled ? 'enabled' : 'disabled'}. {reader.activeApps} active app passwords.</p>
       {access ? <form className="access-form" onSubmit={event => { event.preventDefault(); void run(() => authRequest('/reader', { enabled: reader.enabled, username: apiUsername })) }}>
         <label>API username<input required maxLength={80} value={apiUsername} onChange={event => setApiUsername(event.target.value)} /></label>
-        <label><input type="checkbox" checked={reader.enabled} disabled={busy} onChange={event => void run(() => authRequest('/reader', { enabled: event.target.checked, username: apiUsername }))} /> Enable reader apps</label>
+        <label className="access-toggle"><input type="checkbox" checked={reader.enabled} disabled={busy} onChange={event => void run(() => authRequest('/reader', { enabled: event.target.checked, username: apiUsername }))} /> Enable reader apps</label>
         <button disabled={busy}>Save API username</button>
       </form> : <>
         <p>With login off, the network or proxy protects the web UI. Reader apps still need app passwords. Manage them in the container CLI.</p>
