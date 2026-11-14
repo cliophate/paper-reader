@@ -312,11 +312,3 @@ it('uses indexed arrival, article and feed modification paths for sparse increme
   expect(plan).not.toMatch(/SCAN (e|a)\b/)
 })
 
-it('reads a consistent web organization snapshot in a read-only child', async () => {
-  await seedArticles(2)
-  const pool = new GreaderPool()
-  try {
-    const response = JSON.parse(await pool.run({ path: db.searchDatabasePath, kind: 'organization', backend }, new AbortController().signal))
-    expect(response).toEqual(db.organization.snapshot(backend))
-  } finally { await pool.close() }
-})

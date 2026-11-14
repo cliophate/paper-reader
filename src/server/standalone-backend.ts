@@ -37,9 +37,9 @@ export class StandaloneBackend extends PaperRepository implements ReaderBackend 
   }
   async editFeed(id: string, title: string, folder: string, currentFolder: string) {
     this.validateFeedId(id, 'edit')
-    const snapshot = this.database.organization.metadata(this.identity.id)
-    const category = this.database.greaderDatabase.prepare('SELECT title FROM folders JOIN feed_folders ON folder_id = folders.id WHERE feed_id = ? ORDER BY folders.position, folders.title COLLATE NOCASE LIMIT 1').get(id)
-    if ((category?.title || '') !== currentFolder) throw new BackendValidationError('The feed moved. Reload subscriptions.')
+    const snapshot = this.database.organization.snapshot(this.identity.id)
+    const feed = [...snapshot.navigation.uncategorized, ...snapshot.navigation.folders.flatMap(item => item.feeds)].find(item => item.id === id)!
+    if ((feed.categories[0] || '') !== currentFolder) throw new BackendValidationError('The feed moved. Reload subscriptions.')
     // The organization API preserves multiple memberships. This legacy endpoint
     // edits the title only unless the caller explicitly changes its folder.
     const result = this.database.organization.apply(this.identity.id, snapshot.revision, [{ type: 'rename-feed', feedId: id, title }])

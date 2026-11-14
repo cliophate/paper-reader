@@ -175,7 +175,5 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
       res.status(status).json({ errors: [known ? error.message : error instanceof SubscriptionInputError ? 'Could not use that feed URL.' : 'Could not complete the reader request.'] })
     }
   }
-  return { handler, async organizationSnapshot() {
-    return JSON.parse(await reads.run({ path: db.searchDatabasePath, kind: 'organization', backend }, maintenance.signal)) as ReturnType<PaperDatabase['organization']['snapshot']>
-  }, async close() { clearInterval(checkpointTimer); limits.close(); maintenance.abort(); await Promise.all([reads.close(), writer.close()]) } }
+  return { handler, async close() { clearInterval(checkpointTimer); limits.close(); maintenance.abort(); await Promise.all([reads.close(), writer.close()]) } }
 }

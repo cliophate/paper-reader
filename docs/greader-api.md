@@ -117,8 +117,8 @@ Read jobs have a killable five-second deadline. Busy or timed-out jobs return 50
 Child heaps have a 256 MiB limit. The serialized checkpoint process accepts four
 waiting jobs with a 15-second deadline and a 256 MiB SQLite cache. It keeps large
 WAL checkpoints off the HTTP thread. Bulk mark-read is not implemented in v1.
-Web organization snapshots also run in the read pool. Organization writes emit
-the existing bounded web invalidation after commit, even if another listener fails.
+Organization changes from apps emit the existing bounded web invalidation after
+commit, so open Paper pages reload. A failed listener does not fail the change.
 Oversized requests return 413. Rate limits return 429 with Retry-After.
 
 Each app gets 10 requests per second with burst 40; the account gets 20 per

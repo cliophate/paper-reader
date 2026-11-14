@@ -44,10 +44,8 @@ export function parseOrganizationRequest(body: unknown): OrganizationRequest {
   return { expectedRevision, commands }
 }
 
-export function organizationRouter({ database, backend, synchronizer, navigation, localSnapshot, invalidate }: {
+export function organizationRouter({ database, backend, synchronizer, navigation }: {
   database: PaperDatabase
-  localSnapshot?: () => Promise<ReturnType<PaperDatabase['organization']['snapshot']>>
-  invalidate?: () => void
   navigation?: ReaderBackend['navigation']
   backend: Pick<ReaderBackend, 'identity' | 'organizationCapabilities' | 'navigation'>
   synchronizer?: Pick<BackendSynchronizer, 'applyOrganizationCommand' | 'refreshNavigation'>
@@ -57,7 +55,7 @@ export function organizationRouter({ database, backend, synchronizer, navigation
     backend: backend.identity.kind,
     capabilities: backend.organizationCapabilities,
     ...(backend.identity.kind === 'standalone'
-      ? await (localSnapshot ? localSnapshot() : database.organization.snapshot(backend.identity.id))
+      ? database.organization.snapshot(backend.identity.id)
       : { revision: null, navigation: database.numberNavigation(await (cached && navigation ? navigation() : backend.navigation())) }),
   })
   router.use((_request, response, next) => { response.set('Cache-Control', 'no-store'); next() })
@@ -81,9 +79,6 @@ export function organizationRouter({ database, backend, synchronizer, navigation
       let refreshError: string | undefined
       if (local) {
         const result = database.organization.apply(backend.identity.id, expectedRevision!, allowed.map(item => item.command))
-        if (result.results.some(item => item.status === 'applied' && item.changed)) {
-          try { invalidate?.() } catch { console.warn('An organization listener failed after commit') }
-        }
         for (const item of result.results) results[allowed[item.index].index] = { ...item, index: allowed[item.index].index }
       } else {
         if (!synchronizer) throw new Error('Missing remote writer')
