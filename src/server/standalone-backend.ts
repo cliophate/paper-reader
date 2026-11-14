@@ -49,7 +49,7 @@ export class StandaloneBackend extends PaperRepository implements ReaderBackend 
   async repairFeed(id: string, url: string, expectedUrl: string) {
     this.database.transaction(() => {
       this.validateFeedId(id, 'repair')
-      const feeds = this.database.organization.metadata(this.identity.id).feeds.filter(feed => feed.active)
+      const feeds = this.database.organization.metadata(this.identity.id).feeds.filter(feed => Number(feed.active) === 1)
       const feed = feeds.find(feed => feed.id === id)!
       if (feed.url !== expectedUrl) throw new BackendValidationError('The feed URL changed. Reload subscriptions.')
       if (!/^https?:\/\//i.test(url) || new URL(url).username || new URL(url).password) throw new BackendValidationError('Use a feed URL without login details.')
