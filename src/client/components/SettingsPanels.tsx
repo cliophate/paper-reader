@@ -3,10 +3,11 @@ import { api } from '../api'
 import type { ActivityRecord, ArticleReport, Feed, MuteFilter } from '../types'
 import { Icon } from './Icon'
 
-export function FiltersSettings({ feeds, onChanged, notify }: {
+export function FiltersSettings({ feeds, onChanged, notify, onMatchingChange }: {
   feeds: Feed[]
   onChanged: () => Promise<unknown>
   notify: (message: string) => void
+  onMatchingChange?: (matching: boolean) => void
 }) {
   const [filters, setFilters] = useState<MuteFilter[]>([])
   const [preview, setPreview] = useState<Awaited<ReturnType<typeof api.previewFilter>> | null>(null)
@@ -23,8 +24,12 @@ export function FiltersSettings({ feeds, onChanged, notify }: {
   }
   useEffect(() => { void load() }, [])
 
+  const matching = filters.some(filter => filter.matching)
+  // The reader keeps watching after Settings closes, so it can refresh once matching ends.
+  useEffect(() => { onMatchingChange?.(matching) }, [matching, onMatchingChange])
+
   useEffect(() => {
-    if (!filters.some(filter => filter.matching)) return
+    if (!matching) return
     let cancelled = false
     const timer = setTimeout(async () => {
       try {

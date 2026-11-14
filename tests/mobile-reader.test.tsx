@@ -11,7 +11,7 @@ import type { Entry, EntryPage, Feed } from '../src/client/types'
 vi.mock('../src/client/api', async () => ({ ...await vi.importActual('../src/client/api'), api: {
   reload: vi.fn(), organization: vi.fn(), organize: vi.fn(), recentReading: vi.fn(), navigation: vi.fn(), status: vi.fn(), entries: vi.fn(), entry: vi.fn(), editState: vi.fn(), markStreamRead: vi.fn(),
   markRelativeRead: vi.fn(), undo: vi.fn(),
-  setStreamOrder: vi.fn(), removeFeed: vi.fn(), fullText: vi.fn(), previewRead: vi.fn(), confirmRead: vi.fn(),
+  setStreamOrder: vi.fn(), removeFeed: vi.fn(), fullText: vi.fn(), previewRead: vi.fn(), confirmRead: vi.fn(), filters: vi.fn(),
 } }))
 
 vi.mock('../src/client/offline', () => ({ offlineArticles: vi.fn(), saveOffline: vi.fn(), removeOffline: vi.fn() }))
@@ -167,6 +167,51 @@ describe('mobile reader switching', () => {
     expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 19')
     await key('j')
     expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 20')
+  })
+
+  it('starts a reordered stream from its first forward page after entering it backward', async () => {
+    const feeds = ['instagram', 'tech'].map(id => feed(id, 0))
+    vi.mocked(api.navigation).mockResolvedValue({ unread: 0, starred: 0, uncategorized: feeds, folders: [] })
+    history.replaceState(null, '', '/?kind=feed&id=tech&title=tech&entry=c&pane=article&unread=0')
+    vi.mocked(api.entry).mockResolvedValue({ entry: { ...post('c'), feedId: 'tech', kind: 'article' } })
+    const posts = Array.from({ length: 100 }, (_, i) => ({ ...post(String(i + 1)), kind: 'article' as const, feedId: 'instagram', timestamp: 100 - i }))
+    vi.mocked(api.entries).mockImplementation(async (target, _unread, _query, cursor, _signal, _dates, reverse) => {
+      if (target.id === 'tech') return { items: [{ ...post('c'), feedId: 'tech', kind: 'article' }], continuation: '' }
+      if (!reverse) return { items: posts.slice(0, 80), continuation: 'forward' }
+      return cursor ? { items: posts.slice(0, 20), continuation: '' }
+        : { items: posts.slice(20), continuation: '', previousContinuation: 'backward' }
+    })
+    vi.mocked(api.setStreamOrder).mockImplementation(async (_stream, order) => ({ ok: true, order }))
+    await mount()
+    await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true })) })
+    expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 100')
+    const select = container.querySelector<HTMLSelectElement>('[aria-label="Article order"]')!
+    await act(async () => { select.value = 'oldest'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(api.setStreamOrder).toHaveBeenCalledWith(expect.objectContaining({ id: 'instagram' }), 'oldest')
+    expect(api.entries).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'instagram' }), false, '', '', undefined, {}, false)
+  })
+
+  it('refreshes the reader when a pending filter finishes after Settings closes', async () => {
+    const pending = { id: 'filter', phrase: 'kelvin', scope: 'title' as const, feedId: '', feedTitle: '', matchCount: 0, matching: true, createdAt: '2026-01-01' }
+    vi.mocked(api.filters).mockResolvedValue([pending])
+    await mount()
+    await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: ',', bubbles: true })) })
+    const filtersTab = [...container.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find(button => button.textContent === 'Filters')!
+    await act(async () => { filtersTab.click() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(container.textContent).toContain('Matching...')
+    await act(async () => { container.querySelector<HTMLButtonElement>('[role="dialog"][aria-label="Settings"] [aria-label="Close"]')!.click() })
+    const loads = vi.mocked(api.entries).mock.calls.length
+    const navigations = vi.mocked(api.navigation).mock.calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    expect(api.entries).toHaveBeenCalledTimes(loads)
+    vi.mocked(api.filters).mockResolvedValue([{ ...pending, matching: false, matchCount: 3 }])
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    expect(api.navigation.mock.calls.length).toBeGreaterThan(navigations)
+    expect(vi.mocked(api.entries).mock.calls.length).toBeGreaterThan(loads)
+    const polls = vi.mocked(api.filters).mock.calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(api.filters).toHaveBeenCalledTimes(polls)
   })
 
   it.each([true, false])('counts loaded rows using the active unread filter, unread=%s', async unreadOnly => {

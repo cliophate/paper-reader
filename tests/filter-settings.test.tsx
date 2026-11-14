@@ -68,3 +68,12 @@ it('reenables creation while matching and announces no final count', async () =>
   await advance()
   expect(api.filters).toHaveBeenCalledTimes(2)
 })
+
+it('reports pending matching to its parent and clears it when matching ends', async () => {
+  const matching = vi.fn()
+  await act(async () => root.render(<FiltersSettings feeds={[]} onChanged={changed} notify={notify} onMatchingChange={matching} />))
+  expect(matching).toHaveBeenLastCalledWith(true)
+  vi.mocked(api.filters).mockResolvedValue([{ ...pending, matching: false, matchCount: 2 }])
+  await advance()
+  expect(matching).toHaveBeenLastCalledWith(false)
+})

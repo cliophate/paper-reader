@@ -387,6 +387,9 @@ export default function App() {
         setSelectedId('')
         setMobilePane('stories')
         pushLocation({ selectedId: '', mobilePane: 'stories' })
+        // A new order starts from its first page, even after entering this stream backward.
+        currentReader.current = { ...currentReader.current, previousContinuation: '' }
+        setPreviousContinuation('')
         await loadEntries(stream)
       }
     } catch (error) {
@@ -410,6 +413,23 @@ export default function App() {
     setTopicsRefreshKey(current => current + 1)
     return result
   }, [loadEntries, loadNavigation, stream])
+
+  // Filter settings poll while open. Once closed, finish watching a pending
+  // filter here so its matches leave the list and unread counts.
+  const [filtersMatching, setFiltersMatching] = useState(false)
+  useEffect(() => {
+    if (!filtersMatching || overlays.settings) return
+    let cancelled = false
+    const timer = setInterval(async () => {
+      try {
+        const filters = await api.filters()
+        if (cancelled || filters.some(filter => filter.matching)) return
+        setFiltersMatching(false)
+        await reloadFilteredLibrary()
+      } catch { /* Try again on the next tick. */ }
+    }, 2000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [filtersMatching, overlays.settings, reloadFilteredLibrary])
 
   const loadMore = useCallback(async (): Promise<Entry[]> => {
     if (!continuation || loadingMore) return []
@@ -1602,7 +1622,7 @@ export default function App() {
       {entryContext && <EntryContextMenu key={entryContext.entry.id} state={entryContext} unsubscribeAvailable={Boolean(organization?.capabilities.unsubscribe && uniqueFeeds(navigation).some(feed => feed.id === entryContext.entry.feedId))} relativeAvailable={libraryMode === 'stream' && online} onClose={() => setEntryContext(null)} onOpen={() => { setEntryContext(null); openEntry(entryContext.entry) }} onCopyUrl={() => { void copyArticleUrl(entryContext.entry); setEntryContext(null) }} onToggleRead={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.read ? 'unread' : 'read') }} onToggleStar={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.starred ? 'unstar' : 'star') }} onReport={() => { setReportEntry(entryContext.entry); setEntryContext(null) }} onMarkAbove={() => void markRelativeRead(entryContext.entry, 'above')} onMarkBelow={() => void markRelativeRead(entryContext.entry, 'below')} onUnsubscribe={() => void unsubscribeFeed({ id: entryContext.entry.feedId, title: entryContext.entry.feedTitle })} />}
       {selectionContext && (status.kirbyConfigured || status.discussionConfigured) && <SelectionContextMenu state={selectionContext} kirbyConfigured={status.kirbyConfigured} discussionConfigured={status.discussionConfigured} onClose={() => setSelectionContext(null)} onCreate={() => void createKirbyNote(selectionContext.quote)} onDiscuss={() => { if (!status.discussionConfigured) return notify('Article discussion is not configured'); if (selected) setDiscussionTarget({ entry: selected, quote: selectionContext.quote }); setSelectionContext(null) }} />}
       {discussionTarget && <ArticleDiscussion key={discussionTarget.entry.id} entry={discussionTarget.entry} initialQuote={discussionTarget.quote} onClose={() => setDiscussionTarget(null)} />}
-      {overlays.settings && <Settings backend={status.backend} section={settingsSection} setSection={setSettingsSection} initialFeedId={settingsFeedId} initialFeedView={settingsFeedView} navigation={navigation} onChanged={loadNavigation} onFiltersChanged={reloadFilteredLibrary} notify={notify} onConnectionsChanged={loadStatus} autoRead={autoRead} setAutoRead={value => { setAutoRead(value); localStorage.setItem('paper-auto-read', value ? 'automatic' : 'manual') }} onOpenEntry={id => { setOverlays(closedOverlays); void openTopicEntry(id) }} onClose={() => { setOverlays(closedOverlays); setSettingsFeedView('manage') }} />}
+      {overlays.settings && <Settings backend={status.backend} section={settingsSection} setSection={setSettingsSection} initialFeedId={settingsFeedId} initialFeedView={settingsFeedView} navigation={navigation} onChanged={loadNavigation} onFiltersChanged={reloadFilteredLibrary} onFiltersMatching={setFiltersMatching} notify={notify} onConnectionsChanged={loadStatus} autoRead={autoRead} setAutoRead={value => { setAutoRead(value); localStorage.setItem('paper-auto-read', value ? 'automatic' : 'manual') }} onOpenEntry={id => { setOverlays(closedOverlays); void openTopicEntry(id) }} onClose={() => { setOverlays(closedOverlays); setSettingsFeedView('manage') }} />}
       {overlays.appearance && <AppearancePopover theme={theme} setTheme={setTheme} readerFont={readerFont} setReaderFont={setReaderFont} readerSize={readerSize} setReaderSize={setReaderSize} readerSpacing={readerSpacing} setReaderSpacing={setReaderSpacing} readerWidth={readerWidth} setReaderWidth={setReaderWidth} onClose={() => setOverlays(closedOverlays)} />}
       {reportEntry && <ReportProblemModal entry={reportEntry} onClose={() => setReportEntry(null)} onSaved={() => { setReportEntry(null); notify('Problem reported') }} />}
       {toast && <div className="toast" role="status"><span>{toast.message}</span>{toast.action && <button onClick={() => { toast.action?.(); setToast(null) }}>{toast.actionLabel}</button>}</div>}
@@ -2283,7 +2303,7 @@ function ShortcutHelp({ onClose }: { onClose: () => void }) {
   return <Modal title="Keyboard shortcuts" onClose={onClose} className="help-modal"><dl>{shortcuts.map(([key, label]) => <div key={key}><dt>{key}</dt><dd>{label}</dd></div>)}</dl></Modal>
 }
 
-function Settings({ backend, section, setSection, initialFeedId, initialFeedView, navigation, onChanged, onFiltersChanged, notify, onConnectionsChanged, autoRead, setAutoRead, onOpenEntry, onClose }: {
+function Settings({ backend, section, setSection, initialFeedId, initialFeedView, navigation, onChanged, onFiltersChanged, onFiltersMatching, notify, onConnectionsChanged, autoRead, setAutoRead, onOpenEntry, onClose }: {
   backend: 'standalone' | 'freshrss'
   section: SettingsSection
   setSection: (value: SettingsSection) => void
@@ -2292,6 +2312,7 @@ function Settings({ backend, section, setSection, initialFeedId, initialFeedView
   navigation: NavigationPayload | null
   onChanged: () => Promise<unknown>
   onFiltersChanged: () => Promise<unknown>
+  onFiltersMatching: (matching: boolean) => void
   notify: (message: string) => void
   autoRead: boolean
   setAutoRead: (value: boolean) => void
@@ -2302,7 +2323,7 @@ function Settings({ backend, section, setSection, initialFeedId, initialFeedView
   const content = section === 'backend' ? <BackendSettings backend={backend} /> : section === 'feeds'
     ? <FeedSettings initialView={initialFeedView} onChanged={onChanged}><FeedManager initialFeedId={initialFeedId} navigation={navigation} onChanged={onChanged} notify={notify} /></FeedSettings>
     : section === 'filters'
-      ? <FiltersSettings feeds={uniqueFeeds(navigation)} onChanged={onFiltersChanged} notify={notify} />
+      ? <FiltersSettings feeds={uniqueFeeds(navigation)} onChanged={onFiltersChanged} notify={notify} onMatchingChange={onFiltersMatching} />
       : section === 'reports'
         ? <ReportsSettings onOpenEntry={onOpenEntry} notify={notify} />
         : section === 'activity'
