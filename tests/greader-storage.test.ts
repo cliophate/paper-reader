@@ -75,7 +75,9 @@ it('requires transport, standalone mode and credentials and retains administrato
   const app = await db.auth.createApp('Synthetic',null)
   expect(() => new GreaderAuth(db.greaderDatabase,db.auth,true,'http://example.test').configure(true,'reader')).toThrow(/HTTPS/)
   expect(() => new GreaderAuth(db.greaderDatabase,db.auth,false,'https://example.test').configure(true,'reader')).toThrow(/standalone/)
-  api.configure(true,'reader'); await db.auth.setup(db.auth.setupCode(),'owner','synthetic owner password')
+  api.configure(true,'reader')
+  expect(new GreaderAuth(db.greaderDatabase,db.auth,true,'http://example.test').enabled()).toBe(false)
+  await db.auth.setup(db.auth.setupCode(),'owner','synthetic owner password')
   expect((await db.auth.checkApp('reader',app.password,'127.0.0.1','reader')).id).toBe(app.id)
   await db.auth.recover('revoke-all'); expect(api.enabled()).toBe(true)
   await db.auth.recover('disable'); expect(api.enabled()).toBe(false)
@@ -201,4 +203,20 @@ it('keeps all bulk chunks atomic and increments each changed revision once', asy
   expect(db.commitReaderBulk(backend,'SELECT rowid FROM entries',[])).toBe(2001)
   expect(sql.prepare('SELECT min(state_revision) low,max(state_revision) high FROM entries').get()).toMatchObject({low:1,high:1})
   expect(db.commitReaderBulk(backend,'SELECT rowid FROM entries',[])).toBe(0)
+})
+
+it('keeps quickadd behind the production private-address policy', async () => {
+  const { discoveryTransport } = await import('../src/server/discovery-transport')
+  const { createServer } = await import('node:http')
+  let requests = 0
+  const server = createServer((_req,res) => { requests++; res.end('<rss version="2.0"><channel/></rss>') })
+  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve))
+  try {
+    const port = (server.address() as {port:number}).port
+    const organization = new GreaderOrganization(db,backend,discoveryTransport([]))
+    await expect(organization.quickadd(`http://127.0.0.1:${port}/feed`)).rejects.toThrow()
+    await expect(organization.quickadd('https://user:password@example.test/feed')).rejects.toThrow(/credentials/)
+    expect(requests).toBe(0)
+    expect(db.greaderDatabase.prepare('SELECT count(*) n FROM feeds').get()!.n).toBe(1)
+  } finally { await new Promise<void>(resolve=>server.close(()=>resolve())) }
 })

@@ -8,14 +8,17 @@ export function equal(a: string, b: string) { const left = Buffer.from(a), right
 export class GreaderAuth {
   constructor(readonly db: DatabaseSync, readonly store: AuthStore, readonly standalone: boolean, readonly publicUrl: string) {}
   settings() { return this.db.prepare('SELECT enabled, username FROM greader_settings WHERE id = 1').get()! }
-  enabled() { return this.standalone && !!this.settings().enabled }
+  private transportAllowed() {
+    const url = new URL(this.publicUrl)
+    return url.protocol === 'https:' || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+  }
+  enabled() { return this.standalone && this.transportAllowed() && !!this.settings().enabled }
   status() { return { enabled: this.enabled(), username: String(this.settings().username || this.store.owner()?.username || ''), activeApps: this.store.apps().length,
     addresses: { netNewsWire: `${this.publicUrl.replace(/\/$/, '')}/api/greader.php`, readYou: `${this.publicUrl.replace(/\/$/, '')}/api/greader.php`, capyReader: this.publicUrl.replace(/\/$/, '') } } }
   configure(enabled: boolean, username: string) {
     if (enabled) {
-      const url = new URL(this.publicUrl)
       if (!this.standalone) throw new AuthError('Reader apps require standalone mode.')
-      if (url.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) throw new AuthError('Set PUBLIC_URL to HTTPS before enabling reader apps.')
+      if (!this.transportAllowed()) throw new AuthError('Set PUBLIC_URL to HTTPS before enabling reader apps.')
       if (!this.store.apps().length) throw new AuthError('Create an app password first.')
       username = authText(username, 'username')
     }

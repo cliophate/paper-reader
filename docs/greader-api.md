@@ -7,7 +7,8 @@ server directly in that mode.
 ## Enable access
 
 Set PUBLIC_URL to the address clients will use. It must use HTTPS unless it is
-a loopback address. With owner login on, open Settings > Access. Create one app
+a loopback address. Paper refuses API access if this changes to an insecure
+non-loopback address. With owner login on, open Settings > Access. Create one app
 password per device, set the API username and enable Reader apps. The username
 defaults to the owner username. Copy each password when it appears.
 
