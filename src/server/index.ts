@@ -55,7 +55,7 @@ warnUnsafeAi()
 const storage = await openRuntimeStorage()
 const { config, database, backend } = storage
 // Bulk Reader writes run elsewhere. Web requests must fail promptly on contention.
-database.greaderDatabase.exec('PRAGMA busy_timeout = 50')
+database.greaderDatabase.exec('PRAGMA busy_timeout = 50; PRAGMA wal_autocheckpoint = 0')
 let shuttingDown = false
 const eventResponses = new Set<Response>()
 const authConnections = new AuthConnections(database.auth)

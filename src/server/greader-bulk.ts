@@ -2,12 +2,13 @@ import { PaperDatabase } from './db.js'
 import { scanFrom, where, type Query } from './greader-query.js'
 
 // One process owns the transaction. The parent can kill it to interrupt SQLite.
-process.once('message', (job: { path: string; query: Query; ts: string }) => {
+process.once('message', (job: { path: string; kind?: string; query: Query; ts: string }) => {
   const db = new PaperDatabase(job.path)
-  db.greaderDatabase.exec('PRAGMA busy_timeout = 50')
+  db.greaderDatabase.exec('PRAGMA busy_timeout = 50; PRAGMA wal_autocheckpoint = 0; PRAGMA cache_size = -65536')
   let message: { body?: string; error?: string; status?: number }
   try {
-    db.transaction(() => {
+    if (job.kind === 'checkpoint') db.greaderDatabase.exec('PRAGMA wal_checkpoint(PASSIVE)')
+    else db.transaction(() => {
       const cutoff = job.ts && job.ts !== '0' ? BigInt(job.ts) : BigInt(Date.now()) * 1000n
       const unread = { ...job.query, it: [...job.query.it, { kind: 'state' as const, id: 'unread' }] }
       const filter = where(unread), scan = scanFrom(unread)

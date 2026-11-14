@@ -121,3 +121,14 @@ it('intersects and excludes every combination of state, feed and folder streams'
     expect(actual).toEqual(expected)
   }
 })
+
+it('retains a read slot until response delivery ends', async () => {
+  const worker = path.join(directory, 'reply.mjs')
+  fs.writeFileSync(worker, "process.once('message', () => process.send({body:'bounded response'}, () => process.disconnect()))")
+  const pool = new GreaderPool(new URL(`file://${worker}`), 1, 1, 1000)
+  const first = new AbortController(), second = new AbortController()
+  expect(await pool.run({},first.signal,true)).toBe('bounded response')
+  const queued = pool.run({},second.signal)
+  await expect(pool.run({},second.signal)).rejects.toMatchObject({status:503})
+  first.abort(); expect(await queued).toBe('bounded response'); await pool.close()
+})

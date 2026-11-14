@@ -61,6 +61,17 @@ class Limits {
 export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: string, state: LocalStateService | undefined, connections: AuthConnections, transport: DiscoveryTransport) {
   const reads = new GreaderPool(), writer = new GreaderPool(new URL('./greader-bulk.js', import.meta.url), 1, 4, 15_000)
   const organization = new GreaderOrganization(db, backend, transport), limits = new Limits()
+  let checkpointPending = false
+  const maintenance = new AbortController()
+  const checkpoint = () => {
+    if (checkpointPending || maintenance.signal.aborted) return
+    checkpointPending = true
+    void writer.run({ path: db.searchDatabasePath, kind: 'checkpoint' }, maintenance.signal).catch(() => {}).finally(() => { checkpointPending = false })
+  }
+  db.setCheckpointHandler(checkpoint)
+  db.greaderDatabase.exec('PRAGMA busy_timeout = 50; PRAGMA wal_autocheckpoint = 0')
+  const checkpointTimer = setInterval(() => db.checkpointWalIfLarge(), 60000)
+  checkpointTimer.unref()
   let discoveries = 0
   let countsCache: { key: string; expires: number; body: string } | undefined
   const cacheKey = () => JSON.stringify([db.greaderDatabase.prepare('PRAGMA data_version').get(), db.greaderDatabase.prepare('SELECT total_changes() AS n').get()])
@@ -103,7 +114,7 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
         if (!ids.length || ids.length > (mutation ? 1000 : 250)) throw new ReaderError('Invalid item batch size.', 413)
         if (!mutation) {
           const r = p.get('r') || 'd'; if (!['d', 'n', 'o'].includes(r)) throw new ReaderError('Invalid order.')
-          const body = await reads.run({ path: db.searchDatabasePath, kind: 'contents', backend, ids, order: r === 'o' ? 'ASC' : 'DESC' }, abort.signal)
+          const body = await reads.run({ path: db.searchDatabasePath, kind: 'contents', backend, ids, order: r === 'o' ? 'ASC' : 'DESC' }, abort.signal, true)
           res.json({ id: READING, updated: Math.floor(Date.now() / 1000), items: JSON.parse(body) }); return
         }
         const fields: { read?: boolean; starred?: boolean } = {}
@@ -135,9 +146,9 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
         } else q = { backend, stream: resolveStream(sql, streamName), it: raw.it.map(s => resolveStream(sql, s)), xt: raw.xt.map(s => resolveStream(sql, s)), ot: raw.ot, nt: raw.nt, order: order === 'o' ? 'ASC' : 'DESC', n: Math.min(n, 250) }
         if (endpoint === 'mark-all-as-read') {
           const ts = p.get('ts') || '0'; if (!/^\d{1,19}$/.test(ts) || BigInt(ts) > 9223372036854775807n) throw new ReaderError('Invalid cutoff.')
-          await writer.run({ path: db.searchDatabasePath, query: q, ts }, abort.signal); state?.invalidate()
+          await writer.run({ path: db.searchDatabasePath, query: q, ts }, abort.signal); state?.invalidate(); checkpoint()
         } else {
-          const result = JSON.parse(await reads.run({ path: db.searchDatabasePath, kind: endpoint === 'stream/items/ids' ? 'ids' : 'page', query: q }, abort.signal))
+          const result = JSON.parse(await reads.run({ path: db.searchDatabasePath, kind: endpoint === 'stream/items/ids' ? 'ids' : 'page', query: q }, abort.signal, true))
           let continuation: string | undefined
           if (result.last) { const payload = Buffer.from(JSON.stringify({ v: 1, binding, expires: Date.now() + 86400000, query: { ...q, high: result.high, last: result.last } })).toString('base64url'); continuation = `${payload}.${auth.sign('cursor', payload)}` }
           res.json(endpoint === 'stream/items/ids' ? { itemRefs: result.values, ...(continuation ? { continuation } : {}) } : { id: streamName, updated: Math.floor(Date.now() / 1000), items: result.values, ...(continuation ? { continuation } : {}) }); return
@@ -145,7 +156,7 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
       } else if (['subscription/list', 'tag/list', 'unread-count'].includes(endpoint)) {
         const key = cacheKey()
         if (endpoint === 'unread-count' && countsCache?.key === key && countsCache.expires > Date.now()) { res.type('json').send(countsCache.body); return }
-        const body = await reads.run({ path: db.searchDatabasePath, kind: endpoint, backend }, abort.signal)
+        const body = await reads.run({ path: db.searchDatabasePath, kind: endpoint, backend }, abort.signal, true)
         if (endpoint === 'unread-count' && key === cacheKey()) countsCache = { key, expires: Date.now() + 1000, body }
         res.type('json').send(body); return
       } else if (endpoint === 'subscription/quickadd') {
@@ -167,5 +178,5 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
       res.status(status).json({ errors: [known ? error.message : error instanceof SubscriptionInputError ? 'Could not use that feed URL.' : 'Could not complete the reader request.'] })
     }
   }
-  return { handler, async close() { await Promise.all([reads.close(), writer.close()]) } }
+  return { handler, async close() { clearInterval(checkpointTimer); maintenance.abort(); await Promise.all([reads.close(), writer.close()]) } }
 }

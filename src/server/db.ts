@@ -186,6 +186,7 @@ export class PaperDatabase {
   readonly feedFetch: FeedFetchStore
   private activeBackendId = ''
   private closed = false
+  private checkpointHandler?: () => void
   private muteBackfill: Promise<void> | undefined
 
   constructor(databasePath: string, options: { readOnly?: boolean } = {}) {
@@ -1915,8 +1916,11 @@ export class PaperDatabase {
     }
   }
 
+  setCheckpointHandler(handler: () => void) { this.checkpointHandler = handler }
+
   checkpointWalIfLarge(maxWalBytes = 64 * 1024 * 1024): boolean {
     if (fileSize(`${this.databasePath}-wal`) <= maxWalBytes) return false
+    if (this.checkpointHandler) { this.checkpointHandler(); return true }
     // Opportunistic: skip rather than block the event loop waiting on readers.
     this.db.exec('PRAGMA busy_timeout = 0')
     try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)') }
