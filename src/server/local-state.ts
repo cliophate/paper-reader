@@ -20,6 +20,23 @@ export class LocalStateService {
     return change
   }
 
+  editFields(ids: string[], fields: { read?: boolean; starred?: boolean }) {
+    const change = this.db.commitLocalEntryState(this.backendId, ids, 'read', { fields, origin: 'greader' })
+    this.emit(null)
+    return change
+  }
+
+  editReaderNumbers(numbers: bigint[], fields: { read?: boolean; starred?: boolean }) {
+    const change = this.db.transaction(() => {
+      const rows = this.db.greaderDatabase.prepare(`SELECT a.entry_id FROM article_arrivals a JOIN article_identities ai ON ai.id = a.entry_id WHERE ai.backend_id = ? AND a.sequence IN (${numbers.map(() => '?').join(',')})`).all(this.backendId, ...numbers)
+      return this.db.commitLocalEntryState(this.backendId, rows.map(row => String(row.entry_id)), 'read', { fields, origin: 'greader' })
+    })
+    if (change.ids.length) this.emit(null)
+    return change
+  }
+
+  invalidate() { this.emit(null) }
+
   undo(token: string): LocalStateChange {
     const change = this.db.commitLocalUndo(this.backendId, token)
     this.emit(change)

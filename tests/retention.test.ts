@@ -217,7 +217,7 @@ describe('schema v14', () => {
     for (const index of ['article_aliases_entry_idx', 'article_fingerprints_entry_idx', 'article_cache_age_idx', 'article_reports_entry_idx']) sql.exec(`DROP INDEX ${index}`)
     sql.exec('PRAGMA user_version = 13')
     db = new PaperDatabase(file); service = new RetentionService(db, backend)
-    expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(15)
+    expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(16)
     const saved = new DatabaseSync(file + '.before-retention-v14', { readOnly: true })
     expect(saved.prepare('PRAGMA user_version').get()?.user_version).toBe(13)
     expect(saved.prepare('SELECT COUNT(*) n FROM entries').get()?.n).toBe(1); saved.close()
@@ -310,7 +310,7 @@ it('rolls back a failed migration and retains the same backup on retry', async (
   expect(sql.prepare("SELECT name FROM sqlite_master WHERE name = 'retention_settings'").get()).toBeUndefined()
   const saved = fs.readFileSync(file + '.before-retention-v14')
   db = new PaperDatabase(file); service = new RetentionService(db, backend)
-  expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(15)
+  expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(16)
   expect(fs.readFileSync(file + '.before-retention-v14')).toEqual(saved)
 })
 
