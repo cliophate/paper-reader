@@ -18,6 +18,7 @@ import { requireAllowedHost, requireSameOrigin } from '../src/server/request-ori
 import { authGate } from '../src/server/auth-routes'
 
 const discovery = vi.fn<import('../src/server/feed-discovery').DiscoveryTransport>(async () => { throw new Error('Synthetic discovery refuses network access') })
+let state: LocalStateService
 let connections: AuthConnections
 let dir: string, db: PaperDatabase, auth: GreaderAuth, api: ReturnType<typeof greaderRoutes>, server: Server, base: string, backend: string, password: string, bearer: string, token: string, feed: string
 beforeAll(async () => {
@@ -29,7 +30,8 @@ beforeAll(async () => {
   auth = new GreaderAuth(db.greaderDatabase, db.auth, true, 'http://localhost')
   const app = express(); connections = new AuthConnections(db.auth)
   app.use(requireAllowedHost('http://localhost')); app.use(requireSameOrigin('http://localhost')); app.use(authGate(db.auth, connections))
-  api = greaderRoutes(db, auth, backend, new LocalStateService(db, backend), connections, discovery)
+  state = new LocalStateService(db, backend)
+  api = greaderRoutes(db, auth, backend, state, connections, discovery)
   app.use(api.handler)
   server = app.listen(0, '127.0.0.1'); await new Promise<void>(r => server.once('listening', r)); base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/greader.php`
 }, 15000)
@@ -134,7 +136,7 @@ it('rejects oversized batches and login bodies without accepting cookie-only aut
 it('filters arrival and modification times with inclusive boundaries and intersecting states', () => {
   const sql = db.greaderDatabase
   const q = { backend, stream: { kind: 'state' as const, id: 'reading-list' }, it: [], xt: [], ot: 0, nt: 0, order: 'DESC' as const, n: 250 }
-  sql.exec('UPDATE entries SET first_seen_at = 1000000, greader_modified_ms = 1000000')
+  sql.exec('UPDATE entries SET first_seen_at = 1000000, greader_modified_ms = 1000000; UPDATE feeds SET greader_modified_ms = 0')
   expect(page(sql, { ...q, ot: 1000, nt: 1000 }, false).values.length).toBe(250)
   expect(page(sql, { ...q, ot: 1001 }, false).values).toHaveLength(0)
   expect(page(sql, { ...q, it: [{ kind: 'state', id: 'read' }], xt: [{ kind: 'state', id: 'read' }] }, false).values).toHaveLength(0)
@@ -235,6 +237,44 @@ it('rejects organization batches above 100 before discovery or metadata work', a
   }
   expect(snapshot).not.toHaveBeenCalled()
   snapshot.mockRestore()
+})
+it('defers mark-all-as-read with a terminal JSON 404 and leaves state unchanged', async () => {
+  const before = db.greaderDatabase.prepare('SELECT sum(read) n, sum(state_revision) revision FROM entries').get()
+  for (const method of ['GET', 'POST']) {
+    const response = await call('mark-all-as-read', [['s', READING], ['T', token]], method)
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ errors: ['Not found.'] })
+  }
+  expect(db.greaderDatabase.prepare('SELECT sum(read) n, sum(state_revision) revision FROM entries').get()).toEqual(before)
+})
+it('invalidates web navigation after organization commits despite a failed listener', async () => {
+  const transactionStates: boolean[] = []
+  const events = vi.fn(() => { transactionStates.push(db.greaderDatabase.isTransaction) })
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const removeBroken = state.onStateChanged(() => { throw new Error('Disconnected SSE client') })
+  const removeGood = state.onStateChanged(events)
+  const stream = `feed/${db.linkNumber('feed', feed)}`
+  try {
+    for (const [endpoint, fields] of [
+      ['subscription/quickadd', { quickadd: 'https://example.test/rss' }],
+      ['subscription/edit', { s: stream, ac: 'edit', t: 'Web notification', a: `${LABEL}Notify` }],
+      ['rename-tag', { s: `${LABEL}Notify`, dest: `${LABEL}Notified` }],
+      ['disable-tag', { s: `${LABEL}Notified` }],
+      ['subscription/edit', { s: stream, ac: 'unsubscribe' }],
+      ['subscription/edit', { s: stream, ac: 'subscribe' }],
+    ] as [string, Record<string, string>][]) {
+      const before = events.mock.calls.length
+      const response = await call(endpoint, [...Object.entries(fields), ['T', token]], 'POST')
+      expect(response.status, await response.text()).toBe(200)
+      expect(events).toHaveBeenCalledTimes(before + 1)
+      expect(events).toHaveBeenLastCalledWith(null)
+    }
+    const before = events.mock.calls.length
+    expect((await call('rename-tag', [['s', `${LABEL}Missing`], ['dest', `${LABEL}Never`], ['T', token]], 'POST')).status).toBe(404)
+    expect(events).toHaveBeenCalledTimes(before)
+    expect(warning).toHaveBeenCalled()
+    expect(transactionStates).toEqual(Array(6).fill(false))
+  } finally { removeBroken(); removeGood(); warning.mockRestore() }
 })
 it('limits authenticated traffic and rejects the owner password as an app password', async () => {
   await db.auth.setup(db.auth.setupCode(), 'reader', 'synthetic owner password')

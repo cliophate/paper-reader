@@ -17,7 +17,7 @@ export const GREADER_ENDPOINTS: Record<string, { method: string; fields: string[
   'stream/items/ids': { method: 'GET', fields: ['s', 'n', 'c', 'ot', 'nt', 'it', 'xt', 'r'] },
   'stream/contents': { method: 'GET', fields: ['s', 'n', 'c', 'ot', 'nt', 'it', 'xt', 'r'] },
   'stream/items/contents': { method: 'POST', fields: ['i', 'T', 'r'] },
-  'edit-tag': { method: 'POST', fields: ['i', 'a', 'r', 'T'] }, 'mark-all-as-read': { method: 'POST', fields: ['s', 'ts', 'T'] },
+  'edit-tag': { method: 'POST', fields: ['i', 'a', 'r', 'T'] },
   'subscription/quickadd': { method: 'POST', fields: ['quickadd', 'T'] },
   'subscription/edit': { method: 'POST', fields: ['s', 'ac', 't', 'a', 'r', 'T'] },
   'rename-tag': { method: 'POST', fields: ['s', 'dest', 'T'] }, 'disable-tag': { method: 'POST', fields: ['s', 'T'] },
@@ -129,7 +129,7 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
         }
         if (!Object.keys(fields).length) throw new ReaderError('Supply a state change.')
         state!.editReaderNumbers(ids.map(BigInt), fields, authorize)
-      } else if (['stream/items/ids', 'stream/contents', 'mark-all-as-read'].includes(endpoint)) {
+      } else if (['stream/items/ids', 'stream/contents'].includes(endpoint)) {
         if (p.getAll('s').length > 1 || p.getAll('r').length > 1) throw new ReaderError('Supply one stream and order.')
         const streamName = pathStream || p.get('s') || ''
         const order = p.get('r') || 'd', n = integer(p.get('n'), 20)
@@ -146,15 +146,10 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
           if (saved.v !== 1 || saved.expires <= Date.now() || saved.binding !== binding || saved.query.backend !== backend) throw new ReaderError('Invalid continuation.')
           q = { ...saved.query, n: Math.min(n, 250) }
         } else q = { backend, stream: resolveStream(sql, streamName), it: raw.it.map(s => resolveStream(sql, s)), xt: raw.xt.map(s => resolveStream(sql, s)), ot: raw.ot, nt: raw.nt, order: order === 'o' ? 'ASC' : 'DESC', n: Math.min(n, 250) }
-        if (endpoint === 'mark-all-as-read') {
-          const ts = p.get('ts') || '0'; if (!/^\d{1,19}$/.test(ts) || BigInt(ts) > 9223372036854775807n) throw new ReaderError('Invalid cutoff.')
-          await writer.run({ path: db.searchDatabasePath, query: q, ts, credential: app }, abort.signal); state?.invalidate(); checkpoint()
-        } else {
-          const result = JSON.parse(await reads.run({ path: db.searchDatabasePath, kind: endpoint === 'stream/items/ids' ? 'ids' : 'page', query: q }, abort.signal, true))
-          let continuation: string | undefined
-          if (result.last) { const payload = Buffer.from(JSON.stringify({ v: 1, binding, expires: Date.now() + 86400000, query: { ...q, high: result.high, last: result.last } })).toString('base64url'); continuation = `${payload}.${auth.sign('cursor', payload)}` }
-          jsonResponse(res, endpoint === 'stream/items/ids' ? { itemRefs: result.values, ...(continuation ? { continuation } : {}) } : { id: streamName, updated: Math.floor(Date.now() / 1000), items: result.values, ...(continuation ? { continuation } : {}) }, endpoint === 'stream/items/ids' ? 128 * 1024 : 20 * 1024 * 1024); return
-        }
+        const result = JSON.parse(await reads.run({ path: db.searchDatabasePath, kind: endpoint === 'stream/items/ids' ? 'ids' : 'page', query: q }, abort.signal, true))
+        let continuation: string | undefined
+        if (result.last) { const payload = Buffer.from(JSON.stringify({ v: 1, binding, expires: Date.now() + 86400000, query: { ...q, high: result.high, last: result.last } })).toString('base64url'); continuation = `${payload}.${auth.sign('cursor', payload)}` }
+        jsonResponse(res, endpoint === 'stream/items/ids' ? { itemRefs: result.values, ...(continuation ? { continuation } : {}) } : { id: streamName, updated: Math.floor(Date.now() / 1000), items: result.values, ...(continuation ? { continuation } : {}) }, endpoint === 'stream/items/ids' ? 128 * 1024 : 20 * 1024 * 1024); return
       } else if (['subscription/list', 'tag/list', 'unread-count'].includes(endpoint)) {
         const key = cacheKey()
         if (endpoint === 'unread-count' && countsCache?.key === key && countsCache.expires > Date.now()) { res.type('json').send(countsCache.body); return }
@@ -165,12 +160,12 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
         limits.discovery()
         if (discoveries >= 2) throw new ReaderError('Discovery is busy.', 503)
         discoveries++
-        try { const result = await organization.quickadd(p.get('quickadd') || '', authorize, abort.signal); res.json(result); return } finally { discoveries-- }
+        try { const result = await organization.quickadd(p.get('quickadd') || '', authorize, abort.signal); state?.invalidate(); res.json(result); return } finally { discoveries-- }
       } else if (endpoint === 'subscription/edit' && p.get('ac') === 'subscribe') {
         limits.discovery()
         if (discoveries >= 2) throw new ReaderError('Discovery is busy.', 503)
-        discoveries++; try { await organization.subscribe(p, authorize, abort.signal) } finally { discoveries-- }
-      } else organization.edit(endpoint, p, authorize)
+        discoveries++; try { await organization.subscribe(p, authorize, abort.signal); state?.invalidate() } finally { discoveries-- }
+      } else { organization.edit(endpoint, p, authorize); state?.invalidate() }
       res.type('text/plain').send('OK')
     } catch (error) {
       if (res.destroyed || res.headersSent) return
@@ -180,5 +175,7 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
       res.status(status).json({ errors: [known ? error.message : error instanceof SubscriptionInputError ? 'Could not use that feed URL.' : 'Could not complete the reader request.'] })
     }
   }
-  return { handler, async close() { clearInterval(checkpointTimer); limits.close(); maintenance.abort(); await Promise.all([reads.close(), writer.close()]) } }
+  return { handler, async organizationSnapshot() {
+    return JSON.parse(await reads.run({ path: db.searchDatabasePath, kind: 'organization', backend }, maintenance.signal)) as ReturnType<PaperDatabase['organization']['snapshot']>
+  }, async close() { clearInterval(checkpointTimer); limits.close(); maintenance.abort(); await Promise.all([reads.close(), writer.close()]) } }
 }

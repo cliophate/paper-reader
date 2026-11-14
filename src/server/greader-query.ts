@@ -43,14 +43,15 @@ export function predicate(stream: Stream, args: SQLInputValue[]): string {
   return 'EXISTS(SELECT 1 FROM feed_folders WHERE feed_id = e.feed_id AND folder_id = ?)'
 }
 export interface Query { backend: string; stream: Stream; it: Stream[]; xt: Stream[]; ot: number; nt: number; order: 'ASC' | 'DESC'; high?: string; last?: string; n: number }
+const modifiedSince = '(e.first_seen_at >= ? OR e.greader_modified_ms >= ? OR e.feed_id IN (SELECT id FROM feeds WHERE greader_modified_ms >= ?))'
 export function where(q: Query) {
   const args: SQLInputValue[] = [q.backend]
   const clauses = ['ai.backend_id = ?', 'f.active = 1', predicate(q.stream, args)]
   if (!(q.stream.kind === 'state' && q.stream.id === 'starred')) clauses.push('NOT EXISTS(SELECT 1 FROM muted_entries WHERE entry_id = e.id)')
   for (const stream of q.it) clauses.push(predicate(stream, args))
   for (const stream of q.xt) clauses.push(`NOT (${predicate(stream, args)})`)
-  if (q.ot) { clauses.push('(e.first_seen_at >= ? OR e.greader_modified_ms >= ?)'); args.push(q.ot * 1000, q.ot * 1000) }
-  if (q.nt) { clauses.push('(e.first_seen_at <= ? AND e.greader_modified_ms <= ?)'); args.push(q.nt * 1000, q.nt * 1000) }
+  if (q.ot) { clauses.push(modifiedSince); args.push(q.ot * 1000, q.ot * 1000, q.ot * 1000) }
+  if (q.nt) { clauses.push('(e.first_seen_at <= ? AND e.greader_modified_ms <= ? AND f.greader_modified_ms <= ?)'); args.push(q.nt * 1000, q.nt * 1000, q.nt * 1000) }
   if (q.high) { clauses.push('a.sequence <= ?'); args.push(BigInt(q.high)) }
   if (q.last) { clauses.push(`a.sequence ${q.order === 'ASC' ? '>' : '<'} ?`); args.push(BigInt(q.last)) }
   return { sql: clauses.join(' AND '), args }
@@ -105,6 +106,19 @@ export function scanFrom(q: Query, contents = false, arrivalFirst = false) {
   return { from: `FROM article_arrivals a CROSS JOIN entries e ${contents ? '' : 'INDEXED BY greader_scope'} ON e.id = a.entry_id${tail}`, extra: '' }
 }
 export function scanPageFrom(db: DatabaseSync, q: Query, contents = false) {
+  // Sparse incremental sync starts at the three modification/arrival indexes.
+  // Dense results page from arrivals to avoid sorting the full set on each page.
+  if (q.ot) {
+    const since = Math.trunc(q.ot * 1000)
+    const paths = [
+      `SELECT id FROM entries INDEXED BY greader_arrived WHERE first_seen_at >= ${since}`,
+      `SELECT id FROM entries INDEXED BY greader_modified WHERE greader_modified_ms >= ${since}`,
+      `SELECT id FROM entries INDEXED BY greader_feed_items WHERE feed_id IN (SELECT id FROM feeds INDEXED BY greader_feed_modified WHERE greader_modified_ms >= ${since})`,
+    ]
+    // UNION ALL lets this bounded density probe stop without sorting candidates.
+    const large = db.prepare(`SELECT 1 FROM (${paths.join(' UNION ALL ')}) LIMIT 1 OFFSET 1000`).get()
+    if (!large) return { from: `FROM (${paths.join(' UNION ')}) changed CROSS JOIN entries e ON e.id = changed.id CROSS JOIN article_arrivals a ON a.entry_id = e.id CROSS JOIN article_identities ai ON ai.id = e.id CROSS JOIN feeds f ON f.id = e.feed_id`, extra: '' }
+  }
   const scan = scanFrom(q, contents)
   if (!scan.extra) return scan
   const unread = scan.extra === ' AND e.read = 0'

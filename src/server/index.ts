@@ -249,7 +249,7 @@ app.get('/api/events', (request, response) => {
 app.use('/api/retention', retentionRouter(retention))
 app.use('/api/feed-checks', feedCheckRouter(database, backend.identity, synchronizer instanceof StandaloneRuntime ? synchronizer : undefined))
 
-app.use('/api/organization', organizationRouter({ database, backend, synchronizer, navigation: () => entriesSource.navigation() }))
+app.use('/api/organization', organizationRouter({ database, backend, synchronizer, localSnapshot: standalone ? () => greader.organizationSnapshot() : undefined, invalidate: () => standalone?.state.invalidate(), navigation: () => entriesSource.navigation() }))
 
 app.get('/api/navigation', asyncRoute(async (_request, response) => {
   response.json(database.numberNavigation(await entriesSource.navigation()))

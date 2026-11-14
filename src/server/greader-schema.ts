@@ -8,7 +8,10 @@ export function migrateGreader(db: DatabaseSync) {
       id INTEGER PRIMARY KEY CHECK(id = 1), enabled INTEGER NOT NULL DEFAULT 0,
       username TEXT NOT NULL DEFAULT '', key TEXT NOT NULL, updated INTEGER NOT NULL DEFAULT 0);
       INSERT INTO greader_settings(id, key) VALUES(1, lower(hex(randomblob(32))));
+      ALTER TABLE feeds ADD COLUMN greader_modified_ms INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX greader_feed_modified ON feeds(greader_modified_ms, id);
       ALTER TABLE entries ADD COLUMN greader_modified_ms INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX greader_feed_items ON entries(feed_id, id, first_seen_at, greader_modified_ms, read, starred);
       UPDATE entries SET greader_modified_ms = first_seen_at;
       CREATE INDEX greader_scope ON entries(id, feed_id, read, starred, first_seen_at, greader_modified_ms);
       CREATE INDEX greader_modified ON entries(greader_modified_ms, id);
@@ -28,10 +31,10 @@ export function migrateGreader(db: DatabaseSync) {
       BEGIN UPDATE entries SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE id = new.id; END;
       CREATE TRIGGER greader_feed AFTER UPDATE OF title, url, site_url, active ON feeds
       WHEN old.title IS NOT new.title OR old.url IS NOT new.url OR old.site_url IS NOT new.site_url OR old.active IS NOT new.active
-      BEGIN UPDATE entries SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE feed_id = new.id; END;
+      BEGIN UPDATE feeds SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE id = new.id; END;
       CREATE TRIGGER greader_folder AFTER UPDATE OF title ON folders WHEN old.title IS NOT new.title
-      BEGIN UPDATE entries SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-        WHERE feed_id IN (SELECT feed_id FROM feed_folders WHERE folder_id = new.id); END;
+      BEGIN UPDATE feeds SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER))
+        WHERE id IN (SELECT feed_id FROM feed_folders WHERE folder_id = new.id); END;
       CREATE TRIGGER greader_mute_insert AFTER INSERT ON muted_entries
       WHEN (SELECT count(*) FROM muted_entries WHERE entry_id = new.entry_id) = 1
       BEGIN UPDATE entries SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE id = new.entry_id; END;
@@ -42,7 +45,7 @@ export function migrateGreader(db: DatabaseSync) {
     for (const event of ['INSERT', 'DELETE']) {
       const ref = event === 'INSERT' ? 'new' : 'old'
       db.exec(`CREATE TRIGGER greader_membership_${event} AFTER ${event} ON feed_folders BEGIN
-        UPDATE entries SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE feed_id = ${ref}.feed_id; END;`)
+        UPDATE feeds SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE id = ${ref}.feed_id; END;`)
     }
   })
 }

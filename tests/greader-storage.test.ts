@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { PaperDatabase } from '../src/server/db'
 import { GreaderOrganization } from '../src/server/greader-organization'
-import { LABEL, item, resolveStream, STATE, explicit, metadata, page } from '../src/server/greader-query'
+import { LABEL, item, resolveStream, STATE, explicit, metadata, page, where, scanPageFrom } from '../src/server/greader-query'
 import { GreaderPool } from '../src/server/greader-pool'
 import { GreaderAuth } from '../src/server/greader-auth'
 
@@ -18,7 +18,7 @@ it('backs up v15 privately, migrates once and preserves settings on reopen', () 
   const raw = new DatabaseSync(path.join(directory,'paper.sqlite'))
   for (const row of raw.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'greader_%'").all()) raw.exec(`DROP TRIGGER ${row.name}`)
   for (const row of raw.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'greader_%'").all()) raw.exec(`DROP INDEX ${row.name}`)
-  raw.exec('DROP TABLE greader_settings; ALTER TABLE entries DROP COLUMN greader_modified_ms; PRAGMA user_version = 15'); raw.close()
+  raw.exec('DROP TABLE greader_settings; ALTER TABLE entries DROP COLUMN greader_modified_ms; ALTER TABLE feeds DROP COLUMN greader_modified_ms; PRAGMA user_version = 15'); raw.close()
   db = new PaperDatabase(path.join(directory,'paper.sqlite'))
   const backup = path.join(directory,'paper.sqlite.before-greader-v16')
   expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
@@ -89,7 +89,9 @@ it('keeps effective modification timestamps unchanged on identical imports and t
   ingestFeed(db, options)
   const row = () => db.greaderDatabase.prepare('SELECT id, greader_modified_ms FROM entries').get()!
   const first = row().greader_modified_ms
-  ingestFeed(db, options); expect(row().greader_modified_ms).toBe(first)
+  const feedClock = () => db.greaderDatabase.prepare('SELECT greader_modified_ms FROM feeds WHERE id = ?').get(feed)!.greader_modified_ms
+  const firstFeed = feedClock()
+  ingestFeed(db, options); expect(row().greader_modified_ms).toBe(first); expect(feedClock()).toBe(firstFeed)
   ingestFeed(db, { ...options, xml: options.xml.replace('Unchanged','Changed') }); expect(Number(row().greader_modified_ms)).toBeGreaterThan(Number(first))
   const sql = db.greaderDatabase, changed = row().greader_modified_ms
   sql.exec("INSERT INTO mute_filters VALUES ('mute', 'Changed', 'all', '', '')")
@@ -193,18 +195,6 @@ it('reconciles actual retention deletions without recycling arrivals or reimport
   expect(Number(sql.prepare('SELECT max(sequence) n FROM article_arrivals').get()!.n)).toBeGreaterThan(2)
 })
 
-it('keeps all bulk chunks atomic and increments each changed revision once', async () => {
-  await seedArticles(2001)
-  const sql = db.greaderDatabase
-  sql.exec("CREATE TRIGGER fail_bulk_activity BEFORE INSERT ON activity_events BEGIN SELECT RAISE(ABORT, 'fixture'); END")
-  expect(()=>db.commitReaderBulk(backend,'SELECT rowid FROM entries',[])).toThrow(/fixture/)
-  expect(sql.prepare('SELECT sum(read) n FROM entries').get()!.n).toBe(0)
-  sql.exec('DROP TRIGGER fail_bulk_activity')
-  expect(db.commitReaderBulk(backend,'SELECT rowid FROM entries',[])).toBe(2001)
-  expect(sql.prepare('SELECT min(state_revision) low,max(state_revision) high FROM entries').get()).toMatchObject({low:1,high:1})
-  expect(db.commitReaderBulk(backend,'SELECT rowid FROM entries',[])).toBe(0)
-})
-
 it('keeps quickadd behind the production private-address policy', async () => {
   const { discoveryTransport } = await import('../src/server/discovery-transport')
   const { createServer } = await import('node:http')
@@ -221,7 +211,7 @@ it('keeps quickadd behind the production private-address policy', async () => {
   } finally { await new Promise<void>(resolve=>server.close(()=>resolve())) }
 })
 
-it.each(['app', 'global', 'disabled'])('checks %s revocation inside discovery and bulk write transactions without connection polling', async invalidation => {
+it.each(['app', 'global', 'disabled'])('checks %s revocation inside discovery and state write transactions without connection polling', async invalidation => {
   const { assertReaderCredential } = await import('../src/server/greader-auth')
   const { LocalStateService } = await import('../src/server/local-state')
   await seedArticles(2)
@@ -249,10 +239,6 @@ it.each(['app', 'global', 'disabled'])('checks %s revocation inside discovery an
   expect(db.organization.metadata(backend)).toEqual(before)
   expect(() => new LocalStateService(db, backend).editReaderNumbers([1n], { read: true }, authorize)).toThrow(expect.objectContaining({ status: 401 }))
   expect(() => organization.edit('subscription/edit', form({ s: `feed/${db.linkNumber('feed', feed)}`, ac: 'unsubscribe' }), authorize)).toThrow(expect.objectContaining({ status: 401 }))
-  const pool = new GreaderPool(new URL('../src/server/greader-bulk.ts', import.meta.url), 1, 4, 15000)
-  try {
-    await expect(pool.run({ path: db.searchDatabasePath, credential, query: { backend, stream: { kind: 'state', id: 'reading-list' }, it: [], xt: [], ot: 0, nt: 0, order: 'DESC', n: 250 }, ts: '0' }, new AbortController().signal)).rejects.toMatchObject({ status: 401 })
-  } finally { await pool.close() }
   expect(sql.prepare('SELECT sum(read) read, sum(state_revision) revision FROM entries').get()).toMatchObject({ read: 0, revision: 0 })
   expect(db.organization.metadata(backend)).toEqual(before)
 })
@@ -270,4 +256,67 @@ it('passes disconnect cancellation through discovery and prevents a late transpo
   const rejected = expect(pending).rejects.toThrow()
   controller.abort(); resume(); await rejected
   expect(db.greaderDatabase.prepare("SELECT id FROM feeds WHERE url = 'https://example.test/disconnected'").get()).toBeUndefined()
+})
+
+it('returns every article after feed organization changes without updating article clocks', async () => {
+  await seedArticles(1260)
+  const sql = db.greaderDatabase
+  const organization = new GreaderOrganization(db, backend, async () => { throw new Error() })
+  const stream = `feed/${db.linkNumber('feed', feed)}`
+  const q = { backend, stream: { kind: 'state' as const, id: 'reading-list' }, it: [], xt: [], ot: 1001, nt: 0, order: 'ASC' as const, n: 250 }
+  const reset = () => sql.exec('UPDATE entries SET first_seen_at = 1000000, greader_modified_ms = 1000000; UPDATE feeds SET greader_modified_ms = 1000000')
+  const clock = () => sql.prepare('SELECT greader_modified_ms n FROM feeds WHERE id = ?').get(feed)!.n
+  const all = () => {
+    let last: string | undefined, high: string | undefined, count = 0
+    do {
+      const result = page(sql, { ...q, high, last }, false)
+      count += result.values.length; last = result.last; high = result.high
+    } while (last)
+    expect(count).toBe(1260)
+    expect(sql.prepare('SELECT min(greader_modified_ms) low, max(greader_modified_ms) high FROM entries').get()).toMatchObject({ low: 1000000, high: 1000000 })
+    expect(page(sql, { ...q, ot: 0, nt: 1000 }, false).values).toHaveLength(0)
+  }
+  for (const [kind, fields] of [
+    ['subscription/edit', { s: stream, ac: 'edit', t: 'Renamed' }],
+    ['subscription/edit', { s: stream, ac: 'edit', a: `${LABEL}Folder` }],
+    ['rename-tag', { s: `${LABEL}Folder`, dest: `${LABEL}Renamed folder` }],
+    ['subscription/edit', { s: stream, ac: 'edit', a: `${LABEL}Moved` }],
+  ] as [string, Record<string, string>][]) {
+    reset(); expect(page(sql, q, false).values).toHaveLength(0)
+    organization.edit(kind, form(fields)); all()
+    const changed = clock()
+    if (kind !== 'rename-tag') { organization.edit(kind, form(fields)); expect(clock()).toBe(changed) }
+    else { organization.edit(kind, form({ s: fields.dest, dest: fields.dest })); expect(clock()).toBe(changed) }
+  }
+  reset(); organization.edit('disable-tag', form({ s: `${LABEL}Moved` })); all()
+  organization.edit('subscription/edit', form({ s: stream, ac: 'unsubscribe' }))
+  reset(); expect(page(sql, q, false).values).toHaveLength(0)
+  organization.edit('subscription/edit', form({ s: stream, ac: 'subscribe' })); all()
+  const active = clock(); organization.edit('subscription/edit', form({ s: stream, ac: 'subscribe' })); expect(clock()).toBe(active)
+  reset()
+  const { StandaloneBackend } = await import('../src/server/standalone-backend')
+  const local = new StandaloneBackend(db)
+  await local.repairFeed(feed, 'https://example.test/repaired', 'https://example.test/feed'); all()
+  const repaired = clock(); await local.repairFeed(feed, 'https://example.test/repaired', 'https://example.test/repaired'); expect(clock()).toBe(repaired)
+  reset(); sql.exec('UPDATE feeds SET greader_modified_ms = 1001000')
+  expect(page(sql, { ...q, nt: 1001 }, false).values).toHaveLength(250)
+  expect(page(sql, { ...q, ot: 1002 }, false).values).toHaveLength(0)
+})
+
+it('uses indexed arrival, article and feed modification paths for sparse incremental sync', async () => {
+  await seedArticles(5)
+  const q = { backend, stream: { kind: 'state' as const, id: 'reading-list' }, it: [], xt: [], ot: Math.ceil(Date.now() / 1000) + 60, nt: 0, order: 'DESC' as const, n: 250 }
+  const filter = where(q), scan = scanPageFrom(db.greaderDatabase, q)
+  const plan = db.greaderDatabase.prepare(`EXPLAIN QUERY PLAN SELECT a.sequence ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY a.sequence DESC LIMIT 251`).all(...filter.args).map(row => row.detail).join('; ')
+  for (const index of ['greader_arrived', 'greader_modified', 'greader_feed_modified', 'greader_feed_items']) expect(plan).toContain(index)
+  expect(plan).not.toMatch(/SCAN (e|a)\b/)
+})
+
+it('reads a consistent web organization snapshot in a read-only child', async () => {
+  await seedArticles(2)
+  const pool = new GreaderPool()
+  try {
+    const response = JSON.parse(await pool.run({ path: db.searchDatabasePath, kind: 'organization', backend }, new AbortController().signal))
+    expect(response).toEqual(db.organization.snapshot(backend))
+  } finally { await pool.close() }
 })

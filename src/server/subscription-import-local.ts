@@ -7,7 +7,7 @@ import { SubscriptionInputError } from './opml.js'
 // Imports into the bound standalone backend. Snapshot and database guards
 // reject FreshRSS or another backend; this never binds or selects one.
 export function localImportStore(db: PaperDatabase, backendId: string): SubscriptionImportStore {
-  const snapshot = () => db.organization.snapshot(backendId)
+  const snapshot = () => db.organization.metadata(backendId)
   const check = (expected: number | null) => {
     const current = snapshot()
     if (current.revision !== expected) throw new ImportConflictError(current.revision)
@@ -16,22 +16,22 @@ export function localImportStore(db: PaperDatabase, backendId: string): Subscrip
   function folders(id: string, names: string[], expected: number | null) {
     let current = check(expected)
     for (const title of names) {
-      if (current.navigation.folders.some(folder => folder.title === title)) continue
+      if (current.folders.some(folder => folder.title === title)) continue
       const result = db.organization.apply(backendId, current.revision, [{ type: 'create-folder', title }])
       if (result.results.some(item => item.status === 'failed')) throw new SubscriptionInputError('Could not create the mapped folder. The subscription may already exist; preview again.')
       current = snapshot()
     }
     const commands: OrganizationCommand[] = []
-    for (const folder of current.navigation.folders) {
-      if (folder.feeds.some(feed => feed.id === id) && !names.includes(folder.title)) commands.push({ type: 'remove-membership', feedId: id, folderId: folder.id })
-      if (names.includes(folder.title)) commands.push({ type: 'add-membership', feedId: id, folderId: folder.id })
+    for (const folder of current.folders) {
+      if (current.memberships.some(member => member.feed_id === id && member.folder_id === folder.id) && !names.includes(String(folder.title))) commands.push({ type: 'remove-membership', feedId: id, folderId: String(folder.id) })
+      if (names.includes(String(folder.title))) commands.push({ type: 'add-membership', feedId: id, folderId: String(folder.id) })
     }
     const result = db.organization.apply(backendId, current.revision, commands)
     if (result.results.some(item => item.status === 'failed')) throw new SubscriptionInputError('Some folder changes failed. Refresh subscriptions and preview again.')
   }
   return {
     backendId, kind: 'standalone',
-    async snapshot() { return { ...snapshot(), capabilities: db.organizationCapabilities } },
+    async snapshot() { return { ...db.organization.snapshot(backendId), capabilities: db.organizationCapabilities } },
     async create(row, names, expected) {
       return db.transaction(() => {
         check(expected)

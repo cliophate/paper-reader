@@ -234,16 +234,22 @@ node scripts/greader-responsiveness-test.mjs
 ```
 
 Run the collection, retention and Reader API scale checks one at a time.
-This script creates and removes its own directory under TMPDIR. Allow several
-GiB of temporary space. It seeds 200,000 articles across 1,266 feeds, pages every
-unread ID, downloads eight content batches together, counts unread items and marks the
-library read while probing health and making web state writes. Sparse unread,
-heavily starred and overlapping-folder fixtures share that database. The script
-fails on any 429 during sync and measures 100-source organization edits with
-health probes running. It prints total sync time, query plans and latency/RSS
-measurements, then checks cancellation and
-shutdown lock release. Read jobs allow five seconds, bulk jobs 15 seconds, and
-health probes two seconds. Combined server and child RSS must stay below 1 GiB.
+This script creates and removes one directory under PAPER_PERF_DIR, defaulting
+to the user's home directory, and rejects tmpfs. Allow several GiB of disk space.
+It seeds 200,000 articles in one feed and 20,000 unevenly distributed across
+1,265 other feeds, with overlapping folders. It pages every unread ID, downloads
+eight content batches together and counts unread items during web state writes.
+It measures real rename, move, unsubscribe and folder rename/delete requests
+through both APIs, plus the legacy web feed routes. Each operation has concurrent
+health probes and fails if health exceeds two seconds. It checks sparse unread
+and incremental query plans, heavily starred scans, cancellation and shutdown
+lock release. Any 429 during sync fails the run. Output includes each organization
+operation, health latency, page timings, total sync time and combined process RSS,
+which must stay below 1 GiB. Read jobs allow five seconds.
+
+`mark-all-as-read` is deferred until it passes the 15-second disk-backed 200,000-
+article gate. The script asserts its terminal JSON 404; the pinned apps mark
+explicit IDs with `edit-tag`.
 
 Client fixtures are source-derived, not device captures. Their pinned sources
 and replay contracts are in tests/fixtures/greader. Manual HTTPS client checks

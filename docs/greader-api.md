@@ -60,7 +60,7 @@ The remaining paths are relative to `/reader/api/0/`.
 | --- | --- |
 | GET | `token`, `user-info`, `subscription/list`, `tag/list`, `unread-count` |
 | GET | `stream/items/ids`, `stream/contents`, `stream/contents/<stream>` |
-| POST | `stream/items/contents`, `edit-tag`, `mark-all-as-read` |
+| POST | `stream/items/contents`, `edit-tag` |
 | POST | `subscription/quickadd`, `subscription/edit`, `rename-tag`, `disable-tag` |
 
 ClientLogin returns persistent Auth credentials. Every other request needs
@@ -79,8 +79,15 @@ Pagination uses arrival order and signed continuations that survive restart and
 expire after 24 hours. New arrivals stay outside an existing traversal. State
 and membership remain live between pages. ot includes arrival or modification
 at or after its epoch second. nt requires both at or before its epoch second.
-Both boundaries are inclusive. mark-all-as-read ts is an inclusive arrival
-cutoff in microseconds. Publication dates do not control these filters.
+Both boundaries are inclusive. Effective modification is the maximum of the
+article clock and its feed's organization clock. Membership, folder names,
+active status and feed title/URL changes advance only the feed clock, including
+URL repair. Repeated identical changes advance neither clock. Publication dates
+do not control these filters.
+
+`mark-all-as-read` returns a terminal JSON 404. It is deferred until it passes
+the 15-second disk-backed 200,000-article gate. The pinned NetNewsWire, Read You
+and Capy Reader sources mark explicit IDs with `edit-tag`.
 
 App edits apply in commit order. They have no expected revisions. Web edits
 and undo keep their strict revision checks. An app change can invalidate a web
@@ -106,11 +113,12 @@ allow 64 KiB; larger bodies become escaped text previews with article links.
 Responses allow 20 MiB for content, 128 KiB for IDs and 4 MiB for metadata.
 
 Two read child processes serve at most two jobs at once with 16 waiting jobs.
-Read jobs have a killable five-second deadline. One bulk writer accepts four
-waiting jobs and has a 15-second deadline. Busy or timed-out jobs return 503.
-Child heaps have a 256 MiB limit; the bulk
-writer uses a 256 MiB SQLite cache. Checkpoints run in the serialized writer
-process so a web write cannot checkpoint a large WAL on the HTTP thread.
+Read jobs have a killable five-second deadline. Busy or timed-out jobs return 503.
+Child heaps have a 256 MiB limit. The serialized checkpoint process accepts four
+waiting jobs with a 15-second deadline and a 256 MiB SQLite cache. It keeps large
+WAL checkpoints off the HTTP thread. Bulk mark-read is not implemented in v1.
+Web organization snapshots also run in the read pool. Organization writes emit
+the existing bounded web invalidation after commit, even if another listener fails.
 Oversized requests return 413. Rate limits return 429 with Retry-After.
 
 Each app gets 10 requests per second with burst 40; the account gets 20 per

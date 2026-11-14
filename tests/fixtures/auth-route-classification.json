@@ -122,7 +122,6 @@
   "GET /api/greader.php/reader/api/0/stream/contents/:stream": "app",
   "POST /api/greader.php/reader/api/0/stream/items/contents": "app",
   "POST /api/greader.php/reader/api/0/edit-tag": "app",
-  "POST /api/greader.php/reader/api/0/mark-all-as-read": "app",
   "POST /api/greader.php/reader/api/0/subscription/quickadd": "app",
   "POST /api/greader.php/reader/api/0/subscription/edit": "app",
   "POST /api/greader.php/reader/api/0/rename-tag": "app",

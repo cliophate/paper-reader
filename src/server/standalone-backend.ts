@@ -21,9 +21,7 @@ export class StandaloneBackend extends PaperRepository implements ReaderBackend 
   }
 
   validateFeedId(id: string, operation: FeedOperation) {
-    const nav = this.database.localNavigation()
-    const feeds = [...nav.uncategorized, ...nav.folders.flatMap(folder => folder.feeds)]
-    if (!feeds.some(feed => feed.id === id)) throw new BackendValidationError('This feed is no longer subscribed. Reload subscriptions.')
+    if (!this.database.greaderDatabase.prepare('SELECT 1 FROM feeds WHERE id = ? AND active = 1').get(id)) throw new BackendValidationError('This feed is no longer subscribed. Reload subscriptions.')
     this.database.identities.assertSubscription(this.identity.id, id)
   }
 
@@ -35,13 +33,13 @@ export class StandaloneBackend extends PaperRepository implements ReaderBackend 
   async editEntries(ids: string[], operation: EntryStateOperation) { this.state.editEntries(ids, operation) }
   async addFeed(url: string, title = '', folder = '') {
     const store = localImportStore(this.database, this.identity.id)
-    await store.create({ title: title || url, url }, folder ? [folder] : [], (await store.snapshot()).revision)
+    await store.create({ title: title || url, url }, folder ? [folder] : [], this.database.organization.revision(this.identity.id))
   }
   async editFeed(id: string, title: string, folder: string, currentFolder: string) {
     this.validateFeedId(id, 'edit')
-    const snapshot = this.database.organization.snapshot(this.identity.id)
-    const feed = [...snapshot.navigation.uncategorized, ...snapshot.navigation.folders.flatMap(item => item.feeds)].find(item => item.id === id)!
-    if ((feed.categories[0] || '') !== currentFolder) throw new BackendValidationError('The feed moved. Reload subscriptions.')
+    const snapshot = this.database.organization.metadata(this.identity.id)
+    const category = this.database.greaderDatabase.prepare('SELECT title FROM folders JOIN feed_folders ON folder_id = folders.id WHERE feed_id = ? ORDER BY folders.position, folders.title COLLATE NOCASE LIMIT 1').get(id)
+    if ((category?.title || '') !== currentFolder) throw new BackendValidationError('The feed moved. Reload subscriptions.')
     // The organization API preserves multiple memberships. This legacy endpoint
     // edits the title only unless the caller explicitly changes its folder.
     const result = this.database.organization.apply(this.identity.id, snapshot.revision, [{ type: 'rename-feed', feedId: id, title }])
@@ -51,19 +49,18 @@ export class StandaloneBackend extends PaperRepository implements ReaderBackend 
   async repairFeed(id: string, url: string, expectedUrl: string) {
     this.database.transaction(() => {
       this.validateFeedId(id, 'repair')
-      const nav = this.database.localNavigation()
-      const feed = [...nav.uncategorized, ...nav.folders.flatMap(folder => folder.feeds)].find(feed => feed.id === id)!
+      const feeds = this.database.organization.metadata(this.identity.id).feeds.filter(feed => feed.active)
+      const feed = feeds.find(feed => feed.id === id)!
       if (feed.url !== expectedUrl) throw new BackendValidationError('The feed URL changed. Reload subscriptions.')
       if (!/^https?:\/\//i.test(url) || new URL(url).username || new URL(url).password) throw new BackendValidationError('Use a feed URL without login details.')
-      const feeds = [...nav.uncategorized, ...nav.folders.flatMap(folder => folder.feeds)]
       if (feeds.some(feed => feed.id !== id && feed.url === url)) throw new BackendValidationError('This URL is already subscribed. Keep the feeds separate or choose another URL.')
-      this.database.saveLocalSubscription(this.identity.id, { id, title: feed.title, url, siteUrl: feed.siteUrl, iconUrl: feed.iconUrl })
+      this.database.saveLocalSubscription(this.identity.id, { id, title: String(feed.title), url, siteUrl: String(feed.site_url), iconUrl: String(feed.icon_url) })
       this.database.recordActivity({ kind: 'feed', origin: 'settings', summary: 'Repaired a feed URL', count: 1, details: { id } })
     })
   }
   async removeFeed(id: string) {
     this.validateFeedId(id, 'remove')
-    const snapshot = this.database.organization.snapshot(this.identity.id)
+    const snapshot = this.database.organization.metadata(this.identity.id)
     const result = this.database.organization.apply(this.identity.id, snapshot.revision, [{ type: 'unsubscribe', feedId: id }])
     if (result.results.some(item => item.status === 'failed')) throw new BackendValidationError('Could not unsubscribe this feed.')
   }

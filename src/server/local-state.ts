@@ -29,7 +29,9 @@ export class LocalStateService {
   editReaderNumbers(numbers: bigint[], fields: { read?: boolean; starred?: boolean }, authorize: () => void = () => {}) {
     const change = this.db.transaction(() => {
       authorize()
-      const rows = this.db.greaderDatabase.prepare(`SELECT a.entry_id FROM article_arrivals a JOIN article_identities ai ON ai.id = a.entry_id WHERE ai.backend_id = ? AND a.sequence IN (${numbers.map(() => '?').join(',')})`).all(this.backendId, ...numbers)
+      // Resolve the bounded arrival IDs first; a backend-first join can probe
+      // every article once per supplied ID.
+      const rows = this.db.greaderDatabase.prepare(`SELECT a.entry_id FROM article_arrivals a CROSS JOIN article_identities ai ON ai.id = a.entry_id WHERE ai.backend_id = ? AND a.sequence IN (${numbers.map(() => '?').join(',')})`).all(this.backendId, ...numbers)
       return this.db.commitLocalEntryState(this.backendId, rows.map(row => String(row.entry_id)), 'read', { fields, origin: 'greader' })
     })
     this.emitFields(change, fields)
