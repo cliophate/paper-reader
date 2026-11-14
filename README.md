@@ -6,10 +6,10 @@ or connect it to FreshRSS to share subscriptions, read state, and stars.
 
 Entirely AI-coded. If this steals kittens, don't blame me.
 
-Paper is an alpha release for single-user use. Built-in login is optional and
-starts off. Keep it local until you enable login or an
+Paper 0.2.0-alpha.2 is an alpha release for single-user use. Built-in login
+is optional and starts off. Keep it local until you enable login or an
 [authenticated HTTPS proxy](docs/access.md) for remote access.
-See the [changelog](CHANGELOG.md) for 0.2.0-alpha.1 changes and upgrade notes.
+See the [changelog](CHANGELOG.md) for 0.2.0-alpha.2 changes and upgrade notes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/desktop-dark.png">
@@ -26,14 +26,14 @@ See the [changelog](CHANGELOG.md) for 0.2.0-alpha.1 changes and upgrade notes.
 ## Quick start
 
 Start new installations in standalone mode. For an existing installation, follow
-the [upgrade guide](docs/recovery.md#upgrade-from-010-to-020-alpha1).
+the [upgrade guide](docs/recovery.md#upgrade-from-020-alpha1-to-020-alpha2).
 
-You need Docker Compose 2.24.4 or newer. The 0.2.0-alpha.1 images support Linux amd64.
+You need Docker Compose 2.24.4 or newer. The 0.2.0-alpha.2 images support Linux amd64.
 Standalone mode needs one Paper container and a persistent data directory. No
 FreshRSS or optional integration credentials are needed.
 
 ```sh
-git clone --branch v0.2.0-alpha.1 --depth 1 https://github.com/cliophate/paper-reader.git
+git clone --branch v0.2.0-alpha.2 --depth 1 https://github.com/cliophate/paper-reader.git
 cd paper-reader
 sh scripts/setup.sh
 sh scripts/pull-image.sh
@@ -70,7 +70,7 @@ recreating the container.
 
 ### Optional owner login
 
-In builds after 0.2.0-alpha.1, open **Settings > Access** to enable login with a
+Open **Settings > Access** to enable login with a
 username, password and setup code. The server prints a code at startup while
 no owner exists. It expires after 15 minutes. To get a replacement, run
 `docker compose exec paper npm run paper-auth -- setup-code`.

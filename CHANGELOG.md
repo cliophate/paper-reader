@@ -1,9 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-alpha.2
 
-- Add opt-in Google Reader sync with revocable app passwords, standalone CLI management and Reader apps settings.
+An alpha release with changes since [0.2.0-alpha.1](https://github.com/cliophate/paper-reader/releases/tag/v0.2.0-alpha.1).
 
+### Changes since 0.2.0-alpha.1
+
+- Add opt-in Google Reader API sync in standalone mode for NetNewsWire,
+  Read You and Capy Reader, with revocable app passwords, CLI management and
+  Reader apps settings. Manual HTTPS device checks remain necessary.
+- Google Reader API mark-all-as-read is deferred. Clients can mark explicit
+  article IDs as read.
+- Schema v16 adds Reader API settings and sync indexes. Upgrades create
+  `.before-greader-v16`. The API stays off until enabled.
 - Add optional standalone article retention with auto-read overrides, separate
   read and unread limits, previews and activity summaries. Protect saved articles
   and current feed items; keep expiring identity tombstones after deletion.
@@ -24,12 +33,10 @@
   With login on, Paper needs a connection to open. Saved offline articles cannot
   be opened while signed out.
 - Settings > Access manages credentials, sessions and revocable app passwords
-  for the future reader sync API. App passwords are shown once and KDF-hashed.
+  for the Reader API. App passwords are shown once and KDF-hashed.
 - Schema v15 adds authentication tables and creates a private
-  `.before-owner-login-v15` backup after retention reaches v14. Upgrading from
-  v13 creates both migration backups; v14 creates only the login backup. Login expiry clears the browser's offline
-  article cache and shows login.
-
+  `.before-owner-login-v15` backup after retention reaches v14.
+  Login expiry clears the browser's offline article cache and shows login.
 - Keyboard shortcuts no longer fire while Ctrl, Cmd or Alt is held, so Ctrl+F
   opens the browser's Find again.
 - Previous into the preceding feed or folder opens its last article instead of
@@ -46,6 +53,13 @@
   Existing filters gain missing matches after startup, and interrupted scans
   resume after restart.
 - Discussions show the configured AI provider and model.
+
+### Upgrade from 0.2.0-alpha.1
+
+Startup migrates schema v13 to v16, creating a backup before each migration.
+Back up the full data directory and private configuration first. Login and the
+Reader API stay off until enabled. See the
+[upgrade guide](docs/recovery.md#upgrade-from-020-alpha1-to-020-alpha2).
 
 ## 0.2.0-alpha.1
 
