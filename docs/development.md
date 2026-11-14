@@ -239,7 +239,9 @@ GiB of temporary space. It seeds 200,000 articles across 1,266 feeds, pages ever
 unread ID, downloads eight content batches together, counts unread items and marks the
 library read while probing health and making web state writes. Sparse unread,
 heavily starred and overlapping-folder fixtures share that database. The script
-prints query plans and latency/RSS measurements, then checks cancellation and
+fails on any 429 during sync and measures 100-source organization edits with
+health probes running. It prints total sync time, query plans and latency/RSS
+measurements, then checks cancellation and
 shutdown lock release. Read jobs allow five seconds, bulk jobs 15 seconds, and
 health probes two seconds. Combined server and child RSS must stay below 1 GiB.
 

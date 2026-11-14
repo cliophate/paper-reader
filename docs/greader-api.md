@@ -114,14 +114,22 @@ process so a web write cannot checkpoint a large WAL on the HTTP thread.
 Oversized requests return 413. Rate limits return 429 with Retry-After.
 
 Each app gets 10 requests per second with burst 40; the account gets 20 per
-second. Writes also allow two per second with burst 10. Discovery allows ten
-per minute and two simultaneous requests. Failed login limits match owner login.
+second with burst 80. Writes also allow two per second with burst 10. Requests
+wait in FIFO order for up to ten seconds, with at most 64 waiters per app and
+128 per account. A full queue or a longer wait returns 429 with Retry-After
+based on the queued token budget. Disconnects cancel waiting requests.
+Discovery still rejects excess requests, allowing ten per minute and two
+simultaneous requests. Failed login limits match owner login.
+
+Organization edits accept at most 100 source fields and deduplicate repeated
+feeds or folders. Larger batches return 413 before discovery or organization work.
 
 ## Revocation and recovery
 
 Revoke a device's app password to invalidate its password, Auth and T. Active
-responses stop on revocation. `revoke-all` revokes all app passwords but keeps
-the API enable flag. Recovery `disable` disables the API and owner login.
+responses stop on revocation. Pending discovery is cancelled, and every mutation
+checks API enablement and both credential generations inside its write transaction.
+`revoke-all` revokes all app passwords but keeps the API enable flag. Recovery `disable` disables the API and owner login.
 A backup can restore revoked credentials; run revoke-all after restoring it.
 A new database is a new identity domain. Recreate client accounts after starting
 with an empty database. See [recovery](recovery.md).

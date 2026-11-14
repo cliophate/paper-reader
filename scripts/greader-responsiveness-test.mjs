@@ -56,30 +56,37 @@ try {
   assert.equal(login.status, 200); const bearer = /Auth=(.+)/.exec(await login.text())[1]
   const headers = { Authorization: `GoogleLogin auth=${bearer}` }
   async function call(endpoint, fields = [], method = 'GET') {
-    for (;;) {
-      const p = new URLSearchParams(fields), start = performance.now()
-      const response = await fetch(root + '/reader/api/0/' + endpoint + (method === 'GET' ? '?' + p : ''), { method, headers, body: method === 'POST' ? p : undefined, signal: AbortSignal.timeout(17000) })
-      const text = await response.text()
-      if (response.status === 429) { await delay(1000); continue }
-      assert.equal(response.status, 200, `${endpoint}: ${text}`)
-      if (failure) throw failure
-      return { text, ms: performance.now() - start }
-    }
+    const p = new URLSearchParams(fields), start = performance.now()
+    const response = await fetch(root + '/reader/api/0/' + endpoint + (method === 'GET' ? '?' + p : ''), { method, headers, body: method === 'POST' ? p : undefined, signal: AbortSignal.timeout(17000) })
+    const text = await response.text()
+    assert.equal(response.status, 200, `${endpoint}: ${text}`)
+    if (failure) throw failure
+    return { text, ms: performance.now() - start }
   }
   const token = (await call('token')).text.trim()
   console.log('Seeded 200000 articles; starting full pagination.')
+  const syncStarted = performance.now()
   let cursor, seen = 0, previous = BigInt(count + 1)
   do {
     const response = await call('stream/items/ids', [['s', 'user/-/state/com.google/reading-list'], ['xt', 'user/-/state/com.google/read'], ['n', '10000'], ...(cursor ? [['c', cursor]] : [])])
     pages.push(response.ms); const data = JSON.parse(response.text); for (const ref of data.itemRefs) { const id = BigInt(ref.id); assert(id < previous, 'ID pages must advance without duplicates'); previous = id }; seen += data.itemRefs.length; if (seen % 50000 === 0) console.log(`Paged ${seen} IDs`); cursor = data.continuation
   } while (cursor)
-  assert.equal(seen, count); assert.equal(previous, 1n)
+  assert(pages.length >= 200); assert.equal(seen, count); assert.equal(previous, 1n)
   const content = Array.from({ length: 250 }, (_, i) => ['i', String(i + 1)])
   const downloads = await Promise.all(Array.from({ length: 8 }, () => call('stream/items/contents', content, 'POST')))
   downloads.forEach(result => assert.equal(JSON.parse(result.text).items.length, 250))
   console.log(`Eight content downloads: ${Math.round(Math.max(...downloads.map(d => d.ms)))}ms max`)
   const counts = await call('unread-count'); assert.equal(JSON.parse(counts.text).max, count)
   console.log(`Counts: ${Math.round(counts.ms)}ms`)
+  const syncMs = performance.now() - syncStarted
+  const subscriptions = JSON.parse((await call('subscription/list')).text).subscriptions
+  const batchTimings = []
+  for (const sources of [Array(100).fill(subscriptions[0].id), subscriptions.slice(0, 100).map(feed => feed.id)]) {
+    const batch = await call('subscription/edit', [...sources.map(source => ['s', source]), ['ac', 'edit'], ['T', token]], 'POST')
+    assert(batch.ms < 1000, 'Organization batch exceeded one second')
+    batchTimings.push(Math.round(batch.ms))
+  }
+  console.log(`100-source organization edits, repeated and distinct: ${batchTimings.join(', ')}ms`)
   let writing = true, writes = 0
   const web = (async () => { while (writing) { const response = await fetch(base + '/api/entries/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: ['synthetic-1'], operation: 'star' }) }); await response.text(); assert([200,503].includes(response.status), `web write returned ${response.status}`); writes++; await delay(100) } })()
   try { bulkMs = (await call('mark-all-as-read', [['s', 'user/-/state/com.google/reading-list'], ['T', token]], 'POST')).ms } finally { writing = false; await web }
@@ -107,7 +114,7 @@ try {
   const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited
   const lock = acquireStateLock(temporary, 'exclusive'); lock.release()
   assert(maxHealth < 2000); assert(peakRss < 1024 * 1024 * 1024, 'process RSS exceeded 1 GiB')
-  console.log(JSON.stringify({ articles: count, feeds: feedCount, pages: pages.length, healthMaxMs: Math.round(maxHealth), pageMaxMs: Math.round(Math.max(...pages)), pageMeanMs: Math.round(pages.reduce((a,b)=>a+b,0)/pages.length), contentMaxMs: Math.round(Math.max(...downloads.map(d=>d.ms))), countsMs: Math.round(counts.ms), bulkMs: Math.round(bulkMs), peakRssMiB: Math.round(peakRss/1024/1024), concurrentWebRequests: writes }))
+  console.log(JSON.stringify({ articles: count, feeds: feedCount, pages: pages.length, syncMs: Math.round(syncMs), organizationBatchMs: batchTimings, healthMaxMs: Math.round(maxHealth), pageMaxMs: Math.round(Math.max(...pages)), pageMeanMs: Math.round(pages.reduce((a,b)=>a+b,0)/pages.length), contentMaxMs: Math.round(Math.max(...downloads.map(d=>d.ms))), countsMs: Math.round(counts.ms), bulkMs: Math.round(bulkMs), peakRssMiB: Math.round(peakRss/1024/1024), concurrentWebRequests: writes }))
 } finally {
   stop = true; await probeLoop
   if (child && child.exitCode === null && child.signalCode === null) { const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited }
