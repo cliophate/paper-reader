@@ -16,7 +16,7 @@ Anyone with access to Paper can also change integration switches, replace tokens
 and set a Kirby publishing endpoint, including an endpoint on its private network.
 Limit access to trusted administrators. Settings never returns tokens to clients.
 Tokens entered there are stored without encryption in data/connections.json with
-mode 0600. Treat the data directory and backups as credentials. AI authentication
+mode 0600. Treat the data directory and backups as credentials. Codex authentication
 remains in each CLI's separate login store.
 
 Feed/article HTML is sanitized before display. Private network checks reduce
@@ -34,3 +34,10 @@ able to read saved offline articles even after proxy authentication expires.
 Use GitHub's private vulnerability reporting for sensitive reports if available.
 Public issues should contain synthetic examples and no credentials, article
 archives, or authentication files.
+
+OpenAI-compatible API keys use the same private connection settings file.
+They are never returned by Settings or passed to the Codex worker. API requests
+run in Paper without tools. Public endpoints require HTTPS. Local endpoints
+require an administrator-approved origin, using the feed address policy and
+pinned DNS. Redirects are rejected. Provider error bodies are not logged or
+returned to the browser. See [AI providers](docs/ai-providers.md).

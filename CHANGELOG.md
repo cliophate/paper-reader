@@ -13,6 +13,13 @@
 - Schema v13 saves intervals, Retry-After and cooldown state. Upgrades create
   `<database-path>.before-feed-checks-v13` before migration. Existing schedules,
   validators and leases are preserved. See [feed scheduling](docs/feed-scheduling.md).
+- Add an OpenAI-compatible API provider for discussions, headlines, Pulse
+  grouping and briefings. Settings includes per-feature models, a private API
+  key field and a connection test. Codex remains available through its worker.
+- Require administrator-approved origins for local AI servers. API requests
+  share the feed address policy, reject redirects and enforce time and size
+  limits. Batch requests support JSON mode when JSON schema is unavailable. A saved key
+  only goes to its own origin, and model defaults are `gpt-6-luna`.
 
 ## 0.1.0
 

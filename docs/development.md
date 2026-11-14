@@ -112,6 +112,11 @@ accounts and feeds. It checks two-way state sync, feed repair, connection
 settings, proxy authentication, and backup restoration. It removes its test
 containers and network when finished.
 
+The local HTTP provider fixture in `tests/fixtures/openai-provider.mjs` exercises
+structured JSON, JSON-mode fallback, SSE, cancellation, limits, credential
+handling and the private-origin gate. It does not contact a real provider.
+See [AI providers](ai-providers.md) for configuration.
+
 ## AI worker regression
 
 The AI override runs Paper's runtime image alongside the Codex worker image.

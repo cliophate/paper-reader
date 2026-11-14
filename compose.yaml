@@ -8,6 +8,7 @@ services:
         SOURCE_REVISION: ${SOURCE_REVISION:-unknown}
     restart: unless-stopped
     user: ${PAPER_UID:-1000}:${PAPER_GID:-1000}
+    # API settings and PAPER_TRUSTED_AI_ORIGINS belong only to this service.
     env_file: ${PAPER_ENV_FILE:-.env}
     environment:
       HOST: 0.0.0.0
