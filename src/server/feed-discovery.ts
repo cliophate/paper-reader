@@ -4,7 +4,7 @@ import { SubscriptionInputError, portableUrl } from './opml.js'
 import type { DiscoveryCandidate, DiscoveryResult } from '../shared/subscription-tools.js'
 
 export interface DiscoveryDocument { body: string; responseUrl: string; contentType: string }
-export type DiscoveryTransport = (url: string) => Promise<DiscoveryDocument>
+export type DiscoveryTransport = (url: string, signal?: AbortSignal) => Promise<DiscoveryDocument>
 
 // Streaming HTML parsing loads no resources or scripts. Network policy belongs to the
 // shared HTTP transport, including the final URL and every redirect.
@@ -56,8 +56,11 @@ export function parseDiscoveryDocument({ body, responseUrl, contentType }: Disco
   return { responseUrl: safeResponseUrl, candidates }
 }
 
-export async function discoverFeeds(url: string, transport: DiscoveryTransport): Promise<DiscoveryResult> {
+export async function discoverFeeds(url: string, transport: DiscoveryTransport, signal?: AbortSignal): Promise<DiscoveryResult> {
   const safe = portableUrl(url)
   if (!safe) throw new SubscriptionInputError('Enter a complete website or feed URL without credentials.')
-  return parseDiscoveryDocument(await transport(safe))
+  signal?.throwIfAborted()
+  const document = await transport(safe, signal)
+  signal?.throwIfAborted()
+  return parseDiscoveryDocument(document)
 }

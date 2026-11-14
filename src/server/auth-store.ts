@@ -207,27 +207,27 @@ export class AuthStore {
     return { challenge: String(row.challenge), revision: Number(row.revision) }
   }
   apps(): AppCredential[] { return this.db.prepare('SELECT id, name, scope, generation, created, used FROM auth_apps WHERE revoked IS NULL ORDER BY created').all().map(row => ({ ...row, globalGeneration: this.generation() })) as unknown as AppCredential[] }
-  async createApp(name: string, token: string) {
-    name = authText(name, 'name'); this.requireSession(token)
+  async createApp(name: string, token: string | null) {
+    name = authText(name, 'name'); if (token !== null) this.requireSession(token)
     const revision = this.revision(), generation = this.generation()
     const id = randomUUID(), password = `${id}.${secret()}`, hash = await hashPassword(password)
     transaction(this.db, () => {
-      this.assertRevision(revision); this.requireSession(token)
+      this.assertRevision(revision); if (token !== null) this.requireSession(token)
       if (generation !== this.generation()) throw new AuthError('Access settings changed. Try again.', 409)
       if (this.apps().length >= 100) throw new AuthError('Revoke an app password before adding another.')
       this.db.prepare("INSERT INTO auth_apps VALUES(?, ?, 'reader-sync', ?, 0, ?, NULL, NULL)").run(id, name, hash, this.now())
     })
     return { id, password }
   }
-  // For the future Reader API only. This never creates an owner session.
-  async checkApp(username: string, password: string, ip: string): Promise<AppCredential> {
+  // Reader API credentials only. This never creates an owner session.
+  async checkApp(username: string, password: string, ip: string, apiUsername?: string): Promise<AppCredential> {
     return this.attempt(username, ip, async () => {
       const row = this.db.prepare('SELECT * FROM auth_apps WHERE id = ? AND revoked IS NULL').get(password.slice(0, 36))
       const generation = this.generation(), revision = this.revision()
       const valid = await verifyPassword(password.slice(0, 1024), row ? String(row.hash) : undefined)
       return transaction(this.db, () => {
         const current = row && this.apps().find(app => app.id === row.id)
-        if (!valid || !current || !this.enabled() || username !== this.owner()?.username || generation !== this.generation() || revision !== this.revision() || current.generation !== row!.generation) throw new AuthError('Could not sign in.', 401)
+        if (!valid || !current || (apiUsername === undefined ? !this.enabled() || username !== this.owner()?.username : username !== apiUsername) || generation !== this.generation() || revision !== this.revision() || current.generation !== row!.generation) throw new AuthError('Could not sign in.', 401)
         this.db.prepare('UPDATE auth_apps SET used = ? WHERE id = ?').run(this.now(), current.id)
         return { ...current, used: this.now() }
       })
@@ -249,7 +249,10 @@ export class AuthStore {
       }
       if (action === 'remove-passkeys' && this.enabled() && !this.owner()?.password_enabled) throw new AuthError('Reset the password before removing the last login method.')
       if (action === 'remove-passkeys' || action === 'disable') this.db.exec('DELETE FROM auth_passkeys')
-      if (action === 'disable') this.db.exec('DELETE FROM auth_owner; DELETE FROM auth_setup')
+      if (action === 'disable') {
+        this.db.exec('DELETE FROM auth_owner; DELETE FROM auth_setup')
+        if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'greader_settings'").get()) this.db.exec('UPDATE greader_settings SET enabled = 0')
+      }
       this.db.exec('DELETE FROM auth_sessions; DELETE FROM auth_challenges; DELETE FROM auth_limits; UPDATE auth_meta SET revision = revision + 1')
       this.revokeAllApps()
     })

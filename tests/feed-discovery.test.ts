@@ -24,8 +24,9 @@ describe('feed discovery documents', () => {
   })
   it('uses only the injected shared transport and its final response URL', async () => {
     const transport = vi.fn(async () => ({ body: '<link rel="alternate" type="application/atom+xml" href="feed">', responseUrl: 'https://redirect.test/path/', contentType: 'text/html' }))
-    const result = await discoverFeeds('https://example.test/', transport)
-    expect(transport).toHaveBeenCalledWith('https://example.test/')
+    const signal = new AbortController().signal
+    const result = await discoverFeeds('https://example.test/', transport, signal)
+    expect(transport).toHaveBeenCalledWith('https://example.test/', signal)
     expect(result.candidates[0].url).toBe('https://redirect.test/path/feed')
     await expect(discoverFeeds('https://user:password@example.test/', transport)).rejects.toThrow()
     expect(transport).toHaveBeenCalledTimes(1)

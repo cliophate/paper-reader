@@ -4,6 +4,7 @@ import type { PublicKeyCredentialCreationOptionsJSON, PublicKeyCredentialRequest
 import { authRequest, requireLogin, type AuthStatus } from '../auth'
 import { clearOffline, setOfflineLocked } from '../offline'
 
+interface ReaderStatus { enabled: boolean; username: string; activeApps: number; addresses: { netNewsWire: string; readYou: string; capyReader: string } }
 interface Access {
   username: string; passwordEnabled: boolean
   passkeys: Array<{ id: string; name: string; created: number; used: number | null }>
@@ -94,10 +95,11 @@ export function AuthBoundary({ children }: { children: React.ReactNode }) {
 }
 
 export function AccessSettings() {
+  const [reader, setReader] = useState<ReaderStatus | null>(null), [apiUsername, setApiUsername] = useState('')
   const [access, setAccess] = useState<Access | null>(null), [enabled, setEnabled] = useState<boolean | null>(null)
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState('')
   const [keyName, setKeyName] = useState(''), [appName, setAppName] = useState(''), [appPassword, setAppPassword] = useState('')
-  const load = async () => { const status = await authRequest<AuthStatus>('/status'); setEnabled(status.enabled); if (status.enabled) setAccess(await authRequest<Access>('/access')) }
+  const load = async () => { const status = await authRequest<AuthStatus & { reader?: ReaderStatus }>('/status'); setEnabled(status.enabled); if (status.reader) { setReader(status.reader); setApiUsername(status.reader.username) } if (status.enabled) setAccess(await authRequest<Access>('/access')) }
   useEffect(() => { void load().catch(reason => setError((reason as Error).message)) }, [])
   const run = async (work: () => Promise<unknown>, success = 'Saved.') => {
     setBusy(true); setError(''); setMessage('')
@@ -124,7 +126,7 @@ export function AccessSettings() {
       <div className="settings-list">{access.passkeys.map(key => <article className="settings-list-row" key={key.id}><div><strong>{key.name}</strong><span>Added {date(key.created)} · Last used {date(key.used)}</span></div><button disabled={busy || (!access.passwordEnabled && access.passkeys.length === 1)} aria-label={`Remove passkey ${key.name}`} onClick={() => { if (confirm(`Remove passkey ${key.name}?`)) void run(() => authRequest(`/passkeys/${encodeURIComponent(key.id)}`, undefined, 'DELETE')) }}>Remove</button></article>)}</div>
       <h4>Sessions</h4><div className="access-actions"><button disabled={busy} onClick={() => void run(() => authRequest('/sessions/sign-out-others', {}), 'Other sessions signed out.')}>Sign out other sessions</button><button disabled={busy} onClick={() => void run(async () => { await authRequest('/logout', {}); requireLogin() })}>Sign out</button></div>
       <div className="settings-list">{access.sessions.map(session => <article className="settings-list-row" key={session.id}><div><strong>{session.current ? 'This session' : 'Other session'}</strong><span>{session.agent || 'Unknown browser'}</span><span>Created {date(session.created)} · Last seen {date(session.seen)}</span></div></article>)}</div>
-      <h4>App passwords</h4><p>Use a separate password for each reader app. Reader sync is reserved for the future Google Reader API. It does not grant access to Settings or an owner session.</p>
+      <h4>App passwords</h4><p>Use a separate password for each reader app. These passwords authorize the Google Reader sync API. It does not grant access to Settings or an owner session.</p>
       <form className="access-form" onSubmit={event => { event.preventDefault(); void run(async () => { const result = await authRequest<{ password: string }>('/apps', { name: appName, scope: 'reader-sync' }); setAppPassword(result.password); setAppName('') }, 'App password created.') }}>
         <label>App name<input required maxLength={80} value={appName} onChange={event => setAppName(event.target.value)} placeholder="Phone reader" /></label>
         <label>Scope<select disabled><option>reader-sync</option></select></label><button disabled={busy}>Create app password</button>
@@ -132,6 +134,23 @@ export function AccessSettings() {
       {appPassword && <div className="access-secret"><label>Copy this password now. Paper will not show it again.<input readOnly autoFocus value={appPassword} onFocus={event => event.target.select()} /></label><div className="access-actions"><button onClick={() => void navigator.clipboard.writeText(appPassword).then(() => setMessage('Copied.'), () => setError('Select and copy the password above.'))}>Copy password</button><button onClick={() => setAppPassword('')}>Done</button></div></div>}
       <div className="settings-list">{access.apps.map(app => <article className="settings-list-row" key={app.id}><div><strong>{app.name}</strong><span>{app.scope} · Created {date(app.created)} · Last used {date(app.used)}</span></div><button disabled={busy} aria-label={`Revoke app password ${app.name}`} onClick={() => { if (confirm(`Revoke app password ${app.name}?`)) void run(() => authRequest(`/apps/${app.id}`, undefined, 'DELETE')) }}>Revoke</button></article>)}</div>
       <button disabled={busy || !access.apps.length} onClick={() => { if (confirm('Revoke every app password?')) void run(async () => { await authRequest('/apps', undefined, 'DELETE'); setAppPassword('') }) }}>Revoke all app passwords</button>
+    </>}
+    {reader && <>
+      <h4>Reader apps</h4>
+      <p>API {reader.enabled ? 'enabled' : 'disabled'}. {reader.activeApps} active app passwords.</p>
+      {access ? <form className="access-form" onSubmit={event => { event.preventDefault(); void run(() => authRequest('/reader', { enabled: reader.enabled, username: apiUsername })) }}>
+        <label>API username<input required maxLength={80} value={apiUsername} onChange={event => setApiUsername(event.target.value)} /></label>
+        <label className="access-toggle"><input type="checkbox" checked={reader.enabled} disabled={busy} onChange={event => void run(() => authRequest('/reader', { enabled: event.target.checked, username: apiUsername }))} /> Enable reader apps</label>
+        <button disabled={busy}>Save API username</button>
+      </form> : <>
+        <p>With login off, the network or proxy protects the web UI. Reader apps still need app passwords. Manage them in the container CLI.</p>
+        <pre>npm run paper-auth -- app-password create &lt;name&gt;{'\n'}npm run paper-auth -- reader-api enable &lt;username&gt;{'\n'}npm run paper-auth -- reader-api disable</pre>
+        <p>API username: {reader.username || 'Not configured'}</p>
+      </>}
+      <p>Choose FreshRSS in each app. Use the API username and its app password.</p>
+      <p>NetNewsWire: <code>{reader.addresses.netNewsWire}</code></p>
+      <p>Read You: <code>{reader.addresses.readYou}</code></p>
+      <p>Capy Reader: <code>{reader.addresses.capyReader}</code></p>
     </>}
   </section>
 }

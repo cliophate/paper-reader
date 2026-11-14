@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add opt-in Google Reader sync with revocable app passwords, standalone CLI management and Reader apps settings.
+
 - Add optional standalone article retention with auto-read overrides, separate
   read and unread limits, previews and activity summaries. Protect saved articles
   and current feed items; keep expiring identity tombstones after deletion.

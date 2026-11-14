@@ -1,3 +1,7 @@
+# Optional reader apps: enable Paper app authentication first, then add
+# @browser not path /api/greader.php /api/greader.php/*
+# inside this site and change basic_auth to basic_auth @browser.
+# Keep Host, Authorization and the no-store header unchanged.
 {$PAPER_DOMAIN} {
     basic_auth {
         {$PAPER_AUTH_USER} {$PAPER_AUTH_PASSWORD_HASH}

@@ -8,6 +8,7 @@ import type { PaperDatabase } from './db.js'
 import type { BackendIdentity } from './identity.js'
 import type { RetentionPolicy, RetentionPreview, RetentionView } from '../shared/retention.js'
 import { DAY, evaluate, RETENTION_BATCH, validatePolicy } from './retention-store.js'
+import { decodeHtmlText } from './text.js'
 
 export class RetentionService {
   private timer?: ReturnType<typeof setInterval>
@@ -23,20 +24,24 @@ export class RetentionService {
     private readonly state = new LocalStateService(db, backend.id)) {}
 
   view(): RetentionView {
-    const navigation = this.backend.kind === 'standalone' ? this.db.organization.snapshot(this.backend.id).navigation : null
+    // Progress polls need names and memberships, not counts over article history.
+    const organization = this.backend.kind === 'standalone' ? this.db.organization.metadata(this.backend.id) : null
+    const folders = (organization?.folders || []).map(row => ({ id: String(row.id), title: String(row.title) }))
+    const activeFeeds = new Map((organization?.feeds || []).filter(row => Number(row.active) === 1)
+      .map(row => [String(row.id), { id: String(row.id), title: decodeHtmlText(String(row.title)), folderIds: [] as string[] }]))
+    const groupedFeeds: Array<{ id: string; title: string; folderIds: string[] }> = []
+    for (const folder of folders) for (const member of organization?.memberships || []) {
+      const feed = activeFeeds.get(String(member.feed_id))
+      if (feed && member.folder_id === folder.id) { feed.folderIds.push(folder.id); groupedFeeds.push(feed) }
+    }
+    const feeds = [...new Map([...activeFeeds.values()].filter(feed => !feed.folderIds.length)
+      .concat(groupedFeeds).map(feed => [feed.id, feed])).values()]
     const cache = this.db.getSyncValue('retention_cache_run')
     const settings = this.db.retention.settings()
-    const folderIds = new Set(navigation?.folders.map(folder => folder.id))
-    const feedFolders = new Map<string, string[]>()
-    for (const folder of navigation?.folders || []) for (const feed of folder.feeds) {
-      feedFolders.set(feed.id, [...(feedFolders.get(feed.id) || []), folder.id])
-    }
-    const feedIds = new Set([...(navigation?.uncategorized || []), ...(navigation?.folders.flatMap(folder => folder.feeds) || [])].map(feed => feed.id))
+    const folderIds = new Set(folders.map(folder => folder.id))
     settings.policy.folderDays = Object.fromEntries(Object.entries(settings.policy.folderDays).filter(([id]) => folderIds.has(id)))
-    settings.policy.feedDays = Object.fromEntries(Object.entries(settings.policy.feedDays).filter(([id]) => feedIds.has(id)))
-    return { backend: this.backend.kind, ...settings,
-      folders: navigation?.folders.map(({ id, title }) => ({ id, title })) || [],
-      feeds: [...new Map([...(navigation?.uncategorized || []), ...(navigation?.folders.flatMap(folder => folder.feeds) || [])].map(feed => [feed.id, { id: feed.id, title: feed.title, folderIds: feedFolders.get(feed.id) || [] }])).values()],
+    settings.policy.feedDays = Object.fromEntries(Object.entries(settings.policy.feedDays).filter(([id]) => activeFeeds.has(id)))
+    return { backend: this.backend.kind, ...settings, folders, feeds,
       lastRun: this.backend.kind === 'standalone' ? this.db.retention.lastRun() : null,
       cacheRun: cache ? JSON.parse(cache) : null, error: this.error }
   }

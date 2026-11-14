@@ -1,6 +1,7 @@
 import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
+import { migrateGreader } from './greader-schema.js'
 import { DATABASE_VERSION, migrateAuth } from './auth-schema.js'
 import { AuthStore } from './auth-store.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
@@ -185,6 +186,7 @@ export class PaperDatabase {
   readonly feedFetch: FeedFetchStore
   private activeBackendId = ''
   private closed = false
+  private checkpointHandler?: () => void
   private muteBackfill: Promise<void> | undefined
 
   constructor(databasePath: string, options: { readOnly?: boolean } = {}) {
@@ -221,6 +223,8 @@ export class PaperDatabase {
       throw error
     }
   }
+
+  get greaderDatabase() { return this.db }
 
   get searchDatabasePath() { return this.databasePath }
 
@@ -370,7 +374,7 @@ export class PaperDatabase {
   }
 
   commitLocalEntryState(backendId: string, ids: string[], operation: EntryStateOperation, options: {
-    expectedRevisions?: Record<string, number>; origin?: string
+    expectedRevisions?: Record<string, number>; origin?: string; fields?: { read?: boolean; starred?: boolean }
     undo?: { token: string; expiresAt: string }
   } = {}) {
     return transaction(this.db, () => {
@@ -388,9 +392,14 @@ export class PaperDatabase {
       }
       const column = operation === 'read' || operation === 'unread' ? 'read' : 'starred'
       const value = operation === 'read' || operation === 'star'
-      const changed = states.filter(state => state[column] !== value)
-      for (const state of changed) this.db.prepare(`UPDATE entries SET ${column} = ?, state_revision = state_revision + 1 WHERE id = ?`).run(value ? 1 : 0, state.id)
-      if (operation === 'unread') {
+      const fields = options.fields || { [column]: value }
+      const changed = states.filter(state => (fields.read !== undefined && state.read !== fields.read) || (fields.starred !== undefined && state.starred !== fields.starred))
+      // Prepare once per batch, and advance the clock in the state write so the
+      // fallback trigger does not rewrite each article during bulk changes.
+      const update = this.db.prepare(`UPDATE entries SET read = ?, starred = ?, state_revision = state_revision + 1,
+        greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE id = ?`)
+      for (const state of changed) update.run(Number(fields.read ?? state.read), Number(fields.starred ?? state.starred), state.id)
+      if (fields.read === false) {
         const exempt = this.db.prepare('UPDATE retention_auto_read SET exempt = 1 WHERE entry_id = ?')
         for (const state of states) exempt.run(state.id)
       } else if (operation === 'read' && options.origin === 'retention') {
@@ -399,8 +408,8 @@ export class PaperDatabase {
         for (const state of changed) mark.run(state.id, now)
       }
       if (changed.length) this.recordActivity({
-        kind: 'state', origin: options.origin || 'reader', summary: `${operation}: ${changed.length} articles`, count: changed.length,
-        details: { operation, ids: changed.map(state => state.id).slice(0, 30) },
+        kind: 'state', origin: options.origin || 'reader', summary: `${options.fields ? Object.keys(options.fields).join('/') : operation}: ${changed.length} articles`, count: changed.length,
+        details: { operation, ...(options.fields ? { fields: options.fields } : {}), ids: changed.map(state => state.id).slice(0, 30) },
       })
       const revisions = Object.fromEntries(states.map(state => [state.id, this.entryState(state.id)!.revision]))
       const undoToken = changed.length && options.undo ? options.undo.token : ''
@@ -456,6 +465,10 @@ export class PaperDatabase {
       if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 15) {
         if (backupAuth) this.backupBeforeMigration(15, 'owner-login')
         migrateAuth(this.db)
+      }
+      if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 16) {
+        if (backupAuth) this.backupBeforeMigration(16, 'greader')
+        migrateGreader(this.db)
       }
       return
     }
@@ -759,6 +772,8 @@ export class PaperDatabase {
       if (backupAuth) this.backupBeforeMigration(15, 'owner-login')
       migrateAuth(this.db)
     }
+    if (backupAuth) this.backupBeforeMigration(16, 'greader')
+    migrateGreader(this.db)
   }
 
   linkNumber(kind: 'feed' | 'folder' | 'collection', id: string): number {
@@ -872,7 +887,7 @@ export class PaperDatabase {
         synced_at = excluded.synced_at
     `)
     const muteRules = this.db.prepare('SELECT id, phrase, scope, feed_id FROM mute_filters').all() as Array<{ id: string; phrase: string; scope: MuteFilterScope; feed_id: string }>
-    const clearMuteMatches = this.db.prepare('DELETE FROM muted_entries WHERE entry_id = ?')
+    const clearMuteMatch = this.db.prepare('DELETE FROM muted_entries WHERE entry_id = ? AND filter_id = ?')
     const addMuteMatch = this.db.prepare('INSERT OR IGNORE INTO muted_entries (filter_id, entry_id) VALUES (?, ?)')
     transaction(this.db, () => {
       for (const entry of entries) {
@@ -888,10 +903,11 @@ export class PaperDatabase {
         )
         const cached = this.getArticleForEntry(entry.id)
         if (cached) this.db.prepare('UPDATE entries SET full_content_text = ? WHERE id = ?').run(plainText(cached.contentHtml), entry.id)
-        clearMuteMatches.run(entry.id)
-        for (const rule of muteRules) {
-          if (entryMatchesMuteFilter(entry, rule)) addMuteMatch.run(rule.id, entry.id)
+        const matches = new Set(muteRules.filter(rule => entryMatchesMuteFilter(entry, rule)).map(rule => rule.id))
+        for (const row of this.db.prepare('SELECT filter_id FROM muted_entries WHERE entry_id = ?').all(entry.id)) {
+          if (!matches.has(String(row.filter_id))) clearMuteMatch.run(entry.id, row.filter_id)
         }
+        for (const id of matches) addMuteMatch.run(id, entry.id)
       }
     })
   }
@@ -1892,8 +1908,11 @@ export class PaperDatabase {
     }
   }
 
+  setCheckpointHandler(handler: () => void) { this.checkpointHandler = handler }
+
   checkpointWalIfLarge(maxWalBytes = 64 * 1024 * 1024): boolean {
     if (fileSize(`${this.databasePath}-wal`) <= maxWalBytes) return false
+    if (this.checkpointHandler) { this.checkpointHandler(); return true }
     // Opportunistic: skip rather than block the event loop waiting on readers.
     this.db.exec('PRAGMA busy_timeout = 0')
     try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)') }

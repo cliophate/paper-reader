@@ -14,6 +14,13 @@ hashes. Cookies are HttpOnly, SameSite=Lax and Secure for HTTPS. Sessions expire
 after seven idle days or 30 days total. Failed login budgets and two concurrent
 hash jobs limit brute force. See [access](docs/access.md) for proxy trust settings.
 
+The optional [Reader API](docs/greader-api.md) uses app passwords
+with persistent, revocable Auth and T tokens. It starts disabled.
+Owner cookies do not authorize API requests.
+Protect Authorization, Passwd and T from proxy logs.
+With login off, only the administrator CLI can create reader credentials.
+Public installs should enable owner login.
+
 The default Compose file publishes only on loopback. Remote login needs HTTPS.
 An authenticated reverse proxy works with login off or on. Keep the raw Paper
 port private. Internal automation and signed email confirmation links retain

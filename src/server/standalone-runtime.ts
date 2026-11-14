@@ -73,7 +73,7 @@ export class StandaloneRuntime {
   async removeFeed(id: string) { await this.backend.removeFeed(id) }
   async repairFeed(id: string, url: string, expectedUrl: string) { await this.backend.repairFeed(id, url, expectedUrl) }
   async applyOrganizationCommand(command: OrganizationCommand): Promise<{ refreshError?: string }> {
-    const current = this.db.organization.snapshot(this.backend.identity.id)
+    const current = this.db.organization.metadata(this.backend.identity.id)
     const result = this.db.organization.apply(this.backend.identity.id, current.revision, [command])
     if (result.results.some(item => item.status === 'failed')) throw new Error('Could not apply organization change')
     return {}

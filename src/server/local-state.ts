@@ -20,6 +20,32 @@ export class LocalStateService {
     return change
   }
 
+  editFields(ids: string[], fields: { read?: boolean; starred?: boolean }) {
+    const change = this.db.commitLocalEntryState(this.backendId, ids, 'read', { fields, origin: 'greader' })
+    this.emitFields(change, fields)
+    return change
+  }
+
+  editReaderNumbers(numbers: bigint[], fields: { read?: boolean; starred?: boolean }, authorize: () => void = () => {}) {
+    const change = this.db.transaction(() => {
+      authorize()
+      // Resolve the bounded arrival IDs first; a backend-first join can probe
+      // every article once per supplied ID.
+      const rows = this.db.greaderDatabase.prepare(`SELECT a.entry_id FROM article_arrivals a CROSS JOIN article_identities ai ON ai.id = a.entry_id WHERE ai.backend_id = ? AND a.sequence IN (${numbers.map(() => '?').join(',')})`).all(this.backendId, ...numbers)
+      return this.db.commitLocalEntryState(this.backendId, rows.map(row => String(row.entry_id)), 'read', { fields, origin: 'greader' })
+    })
+    this.emitFields(change, fields)
+    return change
+  }
+
+  private emitFields(change: LocalStateChange, fields: { read?: boolean; starred?: boolean }) {
+    if (!change.ids.length) return
+    if (fields.read !== undefined) this.emit({ ...change, operation: fields.read ? 'read' : 'unread' })
+    if (fields.starred !== undefined) this.emit({ ...change, operation: fields.starred ? 'star' : 'unstar' })
+  }
+
+  invalidate() { this.emit(null) }
+
   undo(token: string): LocalStateChange {
     const change = this.db.commitLocalUndo(this.backendId, token)
     this.emit(change)

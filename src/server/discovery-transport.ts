@@ -4,12 +4,12 @@ import type { DiscoveryTransport } from './feed-discovery.js'
 
 export function discoveryTransport(trustedOrigins: readonly string[]): DiscoveryTransport {
   let active = 0
-  return async url => {
+  return async (url, signal) => {
     if (active >= 2) throw new SubscriptionInputError('Two discovery requests are already running. Try again when they finish.')
     active++
     try {
       const result = await boundedFetch(url, {
-        trustedOrigins,
+        trustedOrigins, signal,
         accept: 'text/html, application/xhtml+xml, application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.1',
       })
       if (result.status !== 200) throw new SubscriptionInputError(`The website returned HTTP ${result.status}. Enter another website or feed URL.`)

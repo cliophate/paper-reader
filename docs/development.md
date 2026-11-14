@@ -224,3 +224,33 @@ Slots are released after process exit. Failed runs produce one structured log li
 request ID, exit status and an allowlisted category. Error responses omit provider
 diagnostics and input text. Paper limits batch responses to 4 MiB and discussion replies to 24,000
 characters. A missing or unreachable worker never enables local execution.
+
+## Reader API checks
+
+[Reader apps](greader-api.md) documents schema v16 and the protocol. After building:
+
+```sh
+node scripts/greader-responsiveness-test.mjs
+```
+
+Run the collection, retention and Reader API scale checks one at a time.
+This script creates and removes one directory under PAPER_PERF_DIR, defaulting
+to the user's home directory, and rejects tmpfs. Allow several GiB of disk space.
+It seeds 200,000 articles in one feed and 20,000 unevenly distributed across
+1,265 other feeds, with overlapping folders. It pages every unread ID, downloads
+eight content batches together and counts unread items during web state writes.
+It measures real rename, move, unsubscribe and folder rename/delete requests
+through both APIs, plus the legacy web feed routes. Each operation has concurrent
+health probes and fails if health exceeds two seconds. It checks sparse unread
+and incremental query plans, heavily starred scans, cancellation and shutdown
+lock release. Any 429 during sync fails the run. Output includes each organization
+operation, health latency, page timings, total sync time and combined process RSS,
+which must stay below 1 GiB. Read jobs allow five seconds.
+
+`mark-all-as-read` is deferred until it passes the 15-second disk-backed 200,000-
+article gate. The script asserts its terminal JSON 404; the pinned apps mark
+explicit IDs with `edit-tag`.
+
+Client fixtures are source-derived, not device captures. Their pinned sources
+and replay contracts are in tests/fixtures/greader. Manual HTTPS client checks
+remain a release gate. Coordinate schema v16 with external PR #74.
