@@ -13,9 +13,10 @@ await fs.mkdir(working)
 await fs.cp(path.resolve('dist'), path.join(working, 'dist'), { recursive: true })
 await fs.writeFile(path.join(working, 'dist/.private-fixture'), 'Synthetic hidden file')
 const executable = path.resolve('dist-server/index.js')
-let slowStarted = false, slowClosed = false
+let slowStarted = false, slowClosed = false, feedRequests = 0
 const fixture = http.createServer((request, response) => {
   if (request.url === '/slow.xml') { slowStarted = true; response.on('close', () => { slowClosed = true }); return }
+  feedRequests++
   response.setHeader('Content-Type', 'application/rss+xml')
   response.end(`<rss version="2.0"><channel><title>Synthetic standalone feed</title><link>https://example.test</link><description>Disposable</description>
   ${[1, 2].map(n => `<item><guid>standalone-${n}</guid><title>Standalone story ${n}</title><link>https://example.test/${n}</link><pubDate>${new Date().toUTCString()}</pubDate><description>Synthetic article content</description></item>`).join('')}</channel></rss>`)
@@ -64,6 +65,21 @@ try {
   assert.equal(applied.results[0].status, 'created')
   const feedId = applied.results[0].id
   const page = await until(async () => { const value = (await request('/api/entries?kind=all&id=all&unread=0')).data; return value?.items.length === 2 && value })
+  const checkView = (await request('/api/feed-checks')).data
+  const checkRevision = { expectedRevision: checkView.revision, expectedOrganizationRevision: checkView.organizationRevision }
+  assert(checkView.feeds[0].lastSuccessAt > 0)
+  assert(checkView.feeds[0].nextFetchAt > Date.now())
+  const beforeReload = feedRequests
+  assert.equal((await request('/api/reload', {})).status, 200)
+  assert.equal(feedRequests, beforeReload)
+  const manual = await request('/api/feed-checks/now', { ...checkRevision, feedId })
+  assert.equal(manual.status, 200); assert.equal(manual.data.results[0].status, 'cooldown')
+  assert.equal(feedRequests, beforeReload)
+  const crossSite = await fetch(base + '/api/feed-checks/now', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://other.example.test' }, body: JSON.stringify({ ...checkRevision, feedId }) })
+  assert.equal(crossSite.status, 403)
+  const interval = await request('/api/feed-checks/interval', { ...checkRevision, intervalMinutes: 30 })
+  assert.equal(interval.status, 200)
+  assert.equal((await request('/api/feed-checks/now', { ...checkRevision, feedId })).status, 409)
   const entry = page.items[0]
   const changed = await request('/api/entries/state', { ids: [entry.id], operation: 'read', expectedRevisions: { [entry.id]: 0 }, undo: true })
   assert.equal(changed.status, 200); assert(changed.data.undoToken)
@@ -78,6 +94,7 @@ try {
   assert.equal(renamed.data.results[0].status, 'applied')
   await stop(); await start()
   assert.equal((await request('/api/status')).data.backendInstance, initial.backendInstance)
+  assert.equal((await request('/api/feed-checks')).data.intervalMinutes, 30)
   const saved = (await request('/api/entries/item', { id: entry.id })).data.entry
   assert(saved.starred && !saved.read); assert.equal(saved.readingPosition, 0.42)
   const current = (await request('/api/organization')).data
@@ -87,7 +104,7 @@ try {
   assert.equal((await request('/api/feeds', { url: feedOrigin + '/slow.xml', title: 'Slow synthetic feed' })).status, 201)
   await until(() => slowStarted)
   await stop(); await until(() => slowClosed)
-  console.log('Standalone built-server smoke passed: hidden-parent root HTML and dotfile protection, no-credential setup, discovery/import/fetch/read, CAS/undo, optional integrations off, organization, restart identity/progress/stars, retained unsubscribe history, scheduler abort/drain.')
+  console.log('Standalone built-server smoke passed: hidden-parent root HTML and dotfile protection, no-credential setup, discovery/import/fetch/read, CAS/undo, optional integrations off, organization, reload without collection, manual cooldown/origin/revision checks, restart intervals/identity/progress/stars, retained unsubscribe history, scheduler abort/drain.')
 } catch (error) { console.error(logs.slice(-4000)); throw error }
 finally {
   await stop(); fixture.closeAllConnections(); await new Promise(resolve => fixture.close(resolve))

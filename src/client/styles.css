@@ -1128,3 +1128,18 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
 .backend-settings p { margin: 12px 0; }
 .backend-settings a { color: inherit; text-underline-offset: 3px; }
 @media (max-width: 700px) { .backend-settings { padding: 16px; } }
+
+.feed-settings-manage { display: flex; flex-direction: column; }
+.feed-settings-manage > .feed-manager { flex: 1; height: auto; }
+.feed-check-controls { flex: 0 0 auto; max-height: 40%; overflow: auto; padding: 12px 24px; border-bottom: 1px solid var(--line); }
+.feed-check-controls summary { cursor: pointer; font-size: 13px; }
+.feed-check-controls button, .feed-check-controls input, .feed-check-controls select { min-height: 36px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
+.feed-check-details { padding: 12px 0; }
+.feed-check-controls label, .feed-check-interval label { display: grid; gap: 6px; margin: 8px 0; }
+.feed-check-controls p, .feed-check-details p { font-size: 13px; color: var(--muted); }
+.feed-check-interval input { width: 100%; max-width: 180px; }
+.feed-check-details dl { font-size: 13px; }
+.feed-check-details dt { margin-top: 8px; font-weight: 600; }
+.feed-check-details dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+
+.feed-check-message { flex: 0 0 auto; margin: 8px 24px; font-size: 13px; }

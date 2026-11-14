@@ -48,6 +48,62 @@ HTTP deadline. Claimed rows become eligible again when that lease expires.
 Restart preserves due times, retries and unexpired leases. It does not reset
 all schedules or import only articles newer than a previous fetch.
 
+## Manual checks and intervals
+
+In standalone mode, **Reload articles** reloads articles Paper already has. It
+never requests feeds upstream. Use **Settings > Feeds > Manage feeds** to check
+upstream. Select a feed for **Check now**, its successful-check time, next
+scheduled check, last error, consecutive failures, publisher Retry-After and
+manual cooldown. **Feed checks and intervals** contains the default interval
+and a folder selector with **Check folder now**, including Uncategorized.
+Settings polls check status every five seconds while open. Collection completion
+also notifies the reader through its existing sync event.
+
+The default successful-check interval is 15 minutes. Set a whole number from
+5 to 1440 minutes globally or override it for a feed. An empty feed override
+uses the default. Saving an interval recalculates successful idle schedules
+from the last success. It preserves publisher delays and failure backoff. An
+active check uses the latest saved interval when it completes. These intervals
+control polling, not push delivery or a guarantee that articles arrive on time.
+
+Manual checks bypass the normal schedule and failure backoff. They retain the
+network policy, conditional headers, transaction fences and durable leases.
+A future publisher Retry-After always blocks manual collection, even after a
+successful response. A one-minute cooldown from the last attempt prevents
+repeated clicks from making more requests. The cooldown survives restart.
+A blocked request reports its reason and wait time without queueing a retry.
+
+Manual and scheduled work use the same four workers and HTTP slots. The
+in-memory manual queue holds at most 1000 unique feed IDs. Requests already
+queued or running are reported without adding work. A full queue reports each
+feed that could not be admitted. Queued requests are lost on restart; claimed
+requests recover through their persisted lease expiry. The runtime's due loop
+continues draining admitted work and aborts active requests on shutdown.
+
+FreshRSS manages its own upstream checks. Paper hides standalone controls and
+explains this in feed settings. Refresh continues importing from FreshRSS.
+`PAPER_SYNC_ENABLED=false` disables both scheduled and manual collection.
+
+### API
+
+- `GET /api/feed-checks` returns check status, global and per-feed intervals,
+  folders, a settings revision and an organization revision. It omits validators,
+  lease tokens and URLs. FreshRSS returns a disabled view.
+- `POST /api/feed-checks/now` accepts either `feedId` or `folderId`, with `null`
+  for Uncategorized. It returns per-feed admission results: `queued`, `running`,
+  `cooldown`, `retry-after`, `unavailable` or `queue-full`, plus a fresh snapshot.
+  Admission is not a completed fetch. Poll the GET endpoint for completion.
+- `POST /api/feed-checks/interval` accepts `intervalMinutes` and an optional
+  `feedId`. Only a per-feed value can be `null`, to remove its override.
+- Both writes require `expectedRevision` and `expectedOrganizationRevision`
+  from the GET snapshot. Stale revisions return 409 before any changes. They
+  use the existing same-origin middleware and reject unsubscribed feed IDs.
+- `POST /api/reload` does no collection in standalone mode. The client then
+  reloads navigation, articles and status through their GET endpoints. In
+  FreshRSS mode it imports articles before the client reloads them.
+- `POST /api/sync` retains its legacy due-only behavior. It does not force feeds
+  whose next check is in the future. The reader now uses `/api/reload`.
+
 ## Endpoint changes and commit rules
 
 `saveLocalSubscription` saves its schedule in the same transaction as feed
@@ -107,6 +163,27 @@ backup with no stale WAL or SHM sidecars, then start the matching older release.
 Changes made after that backup will be absent. Never run both releases against
 one database. Backups contain reading data and settings and must stay private.
 
+## Schema v13 and recovery
+
+Schema v13 adds `retry_after_until`, `last_attempt_at` and a nullable
+`interval_minutes` to `feed_fetch_state`. `feed_check_settings` stores the global
+interval and revision per backend. Validators, endpoint generations, leases,
+article state and existing schedules survive the migration.
+
+Before upgrading an existing database, Paper creates a consistent backup at
+`<database-path>.before-feed-checks-v13`, including committed WAL data. It uses
+mode `0600` and validates an existing backup on retry. The schema changes and
+v13 marker commit together. A failed v13 migration rolls back and can retry.
+
+Older schedules did not record Retry-After separately. The migration treats each
+existing next-check time as a publisher wait once. This may delay the first
+manual check after upgrading, but it cannot shorten an existing publisher delay.
+The next response replaces that conservative value with its actual Retry-After.
+
+To roll back, stop Paper, preserve its data directory, and restore the pre-v13
+backup without stale WAL or SHM sidecars. Then start the matching older release.
+Changes made after the backup will be absent. Keep backups private.
+
 ## Verification
 
 Synthetic local servers require explicit trusted origins. Tests cover deadlines,
@@ -116,3 +193,10 @@ tests cover conditional delivery, delayed articles, retry persistence, expired
 leases, competing database connections, endpoint changes during fetch,
 unsubscribe, transaction rollback and a 2,000-subscription due queue. Migration
 tests verify backup permissions, seeding, rollback and retry.
+
+Manual-check tests cover forcing a future schedule, conditional responses,
+queued and running deduplication, cooldown after restart, shared concurrency,
+publisher waits on success and failure, and destination policy. API and UI tests
+cover revision and origin checks, interval bounds and overrides, folder actions,
+status updates, and disabled controls. Migration tests cover backup contents and
+permissions, retained leases and validators, rollback and retry.

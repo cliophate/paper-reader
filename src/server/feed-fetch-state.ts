@@ -1,3 +1,5 @@
+import { DEFAULT_CHECK_INTERVAL, MANUAL_CHECK_COOLDOWN_MS, validateCheckInterval } from './feed-check-settings.js'
+import { OrganizationError } from './organization.js'
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { transaction } from './transaction.js'
@@ -10,6 +12,9 @@ export interface FeedFetchState {
   host: string
   nextFetchAt: number
   availableAt: number
+  retryAfterUntil: number
+  lastAttemptAt: number
+  intervalMinutes: number | null
   failures: number
   etag: string
   lastModified: string
@@ -23,6 +28,7 @@ export interface FeedFetchState {
 }
 export type FeedLease = FeedFetchState
 export interface FetchCompletion {
+  retryAfterUntil?: number
   nextFetchAt: number
   failures: number
   lastStatus: number
@@ -41,6 +47,7 @@ const projection = `backend_id AS backendId, subscription_id AS subscriptionId,
   next_fetch_at AS nextFetchAt, available_at AS availableAt, failures,
   etag, last_modified AS lastModified, validator_url AS validatorUrl,
   last_success_at AS lastSuccessAt, last_status AS lastStatus, last_error AS lastError,
+  retry_after_until AS retryAfterUntil, last_attempt_at AS lastAttemptAt, interval_minutes AS intervalMinutes,
   ambiguous, lease_token AS leaseToken, lease_until AS leaseUntil`
 
 export function migrateFeedFetchState(db: DatabaseSync) {
@@ -86,7 +93,7 @@ export class FeedFetchStore {
       (backend_id, subscription_id, endpoint_generation, endpoint_url, host) VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(backend_id, subscription_id) DO UPDATE SET
         endpoint_generation = excluded.endpoint_generation, endpoint_url = excluded.endpoint_url, host = excluded.host,
-        next_fetch_at = 0, available_at = 0, failures = 0, etag = '', last_modified = '', validator_url = '',
+        next_fetch_at = 0, available_at = 0, retry_after_until = 0, last_attempt_at = 0, failures = 0, etag = '', last_modified = '', validator_url = '',
         last_success_at = 0, last_status = 0, last_error = '', ambiguous = 0, lease_token = '', lease_until = 0
       WHERE endpoint_url != excluded.endpoint_url`).run(backendId, subscriptionId, randomUUID(), url, host(url))
   }
@@ -97,19 +104,19 @@ export class FeedFetchStore {
       .get(backendId, subscriptionId) as unknown as FeedFetchState || null
   }
 
-  claim(backendId: string, now: number, leaseMs: number): FeedLease | null {
+  claim(backendId: string, now: number, leaseMs: number, subscriptionId?: string): FeedLease | null {
     return transaction(this.db, () => {
       this.assertLocal(backendId)
       const row = this.db.prepare(`SELECT ${projection} FROM feed_fetch_state s
-        WHERE backend_id = ? AND available_at <= ? AND EXISTS
+        WHERE backend_id = ? AND ${subscriptionId === undefined ? 'available_at <= ?' : 'subscription_id = ? AND lease_until <= ? AND retry_after_until <= ? AND (last_attempt_at = 0 OR last_attempt_at <= ?)'} AND EXISTS
           (SELECT 1 FROM feeds f WHERE f.id = s.subscription_id AND f.active = 1 AND f.url = s.endpoint_url)
-        ORDER BY available_at, subscription_id LIMIT 1`).get(backendId, now) as unknown as FeedFetchState | undefined
+        ORDER BY available_at, subscription_id LIMIT 1`).get(...(subscriptionId === undefined ? [backendId, now] : [backendId, subscriptionId, now, now, now - MANUAL_CHECK_COOLDOWN_MS])) as unknown as FeedFetchState | undefined
       if (!row) return null
       const leaseToken = randomUUID()
       const leaseUntil = now + leaseMs
-      this.db.prepare(`UPDATE feed_fetch_state SET lease_token = ?, lease_until = ?, available_at = ?
-        WHERE backend_id = ? AND subscription_id = ?`).run(leaseToken, leaseUntil, leaseUntil, backendId, row.subscriptionId)
-      return { ...row, leaseToken, leaseUntil, availableAt: leaseUntil }
+      this.db.prepare(`UPDATE feed_fetch_state SET lease_token = ?, lease_until = ?, available_at = ?, last_attempt_at = ?
+        WHERE backend_id = ? AND subscription_id = ?`).run(leaseToken, leaseUntil, leaseUntil, now, backendId, row.subscriptionId)
+      return { ...row, leaseToken, leaseUntil, availableAt: leaseUntil, lastAttemptAt: now }
     })
   }
 
@@ -126,11 +133,11 @@ export class FeedFetchStore {
       const value = commit()
       this.db.prepare(`UPDATE feed_fetch_state SET next_fetch_at = ?, available_at = ?, failures = ?,
         last_status = ?, last_error = ?, etag = ?, last_modified = ?, validator_url = ?,
-        last_success_at = ?, ambiguous = ?, lease_token = '', lease_until = 0
+        last_success_at = ?, ambiguous = ?, retry_after_until = ?, lease_token = '', lease_until = 0
         WHERE backend_id = ? AND subscription_id = ?`).run(update.nextFetchAt, update.nextFetchAt, update.failures,
           update.lastStatus, update.lastError, update.etag ?? lease.etag, update.lastModified ?? lease.lastModified,
           update.validatorUrl ?? lease.validatorUrl, update.lastSuccessAt ?? lease.lastSuccessAt,
-          update.ambiguous ?? lease.ambiguous, lease.backendId, lease.subscriptionId)
+          update.ambiguous ?? lease.ambiguous, update.retryAfterUntil ?? lease.retryAfterUntil, lease.backendId, lease.subscriptionId)
       const checkedAt = new Date(now).toISOString()
       if (update.failures > 0) {
         this.db.prepare('UPDATE feeds SET broken = 1, last_error_at = ? WHERE id = ?').run(checkedAt, lease.subscriptionId)
@@ -138,6 +145,35 @@ export class FeedFetchStore {
         this.db.prepare('UPDATE feeds SET broken = 0, last_checked_at = ? WHERE id = ?').run(checkedAt, lease.subscriptionId)
       }
       return { committed: true, value }
+    })
+  }
+
+  settings(backendId: string): { revision: number; intervalMinutes: number } {
+    this.assertLocal(backendId)
+    return this.db.prepare('SELECT revision, interval_minutes AS intervalMinutes FROM feed_check_settings WHERE backend_id = ?')
+      .get(backendId) as { revision: number; intervalMinutes: number } | undefined ?? { revision: 0, intervalMinutes: DEFAULT_CHECK_INTERVAL }
+  }
+
+  setInterval(backendId: string, expectedRevision: number, minutes: number | null, feedId?: string) {
+    if (minutes !== null) validateCheckInterval(minutes)
+    else if (feedId === undefined) throw new OrganizationError('invalid', 'The global interval is required.')
+    transaction(this.db, () => {
+      const current = this.settings(backendId)
+      if (current.revision !== expectedRevision) throw new OrganizationError('conflict', 'Check settings changed. Reload before saving.')
+      if (feedId !== undefined && !this.get(backendId, feedId)) throw new OrganizationError('not-found', 'This feed is no longer subscribed.')
+      this.db.prepare(`INSERT INTO feed_check_settings (backend_id, revision, interval_minutes) VALUES (?, ?, ?)
+        ON CONFLICT(backend_id) DO UPDATE SET revision = excluded.revision, interval_minutes = excluded.interval_minutes`)
+        .run(backendId, current.revision + 1, feedId === undefined ? minutes : current.intervalMinutes)
+      if (feedId !== undefined) this.db.prepare('UPDATE feed_fetch_state SET interval_minutes = ? WHERE backend_id = ? AND subscription_id = ?').run(minutes, backendId, feedId)
+      // Recalculate successful schedules only. Failures retain their backoff,
+      // and active leases retain their fencing deadline.
+      this.db.prepare(`UPDATE feed_fetch_state SET
+        next_fetch_at = MAX(last_success_at + COALESCE(interval_minutes, ?) * 60000, retry_after_until),
+        available_at = MAX(last_success_at + COALESCE(interval_minutes, ?) * 60000, retry_after_until)
+        WHERE backend_id = ? AND failures = 0 AND last_success_at > 0 AND lease_until = 0
+          AND (? IS NULL OR subscription_id = ?)`).run(
+          feedId === undefined ? minutes : current.intervalMinutes, feedId === undefined ? minutes : current.intervalMinutes,
+          backendId, feedId ?? null, feedId ?? null)
     })
   }
 

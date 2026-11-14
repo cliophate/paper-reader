@@ -9,8 +9,8 @@ revision-checked commands, collision rules and FreshRSS capability limits.
 [Feed discovery and OPML](subscription-tools.md) describes import identity policy,
 flat-folder mapping, partial failures and the bounded discovery transport.
 
-[Standalone feed scheduling](feed-scheduling.md) documents schema v9, durable
-leases and conditional requests. [Bounded HTTP transport](feed-http.md) defines
+[Standalone feed scheduling](feed-scheduling.md) documents schemas v9 and v13, durable
+leases, conditional requests, manual checks and interval controls. [Bounded HTTP transport](feed-http.md) defines
 the shared collector, discovery and repair fetch contract.
 
 [Search indexing](search-index.md) documents schema v11 and the collection and

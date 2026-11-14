@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Standalone feed settings show the last successful check, next scheduled check,
+  errors, consecutive failures and publisher retry delays. Check a feed or folder
+  now, with deduplication, bounded concurrency and a one-minute cooldown.
+- Set a global check interval from 5 to 1440 minutes and optional per-feed
+  overrides. Manual checks preserve Retry-After, conditional requests and the
+  network policy. FreshRSS keeps managing its own checks.
+- The standalone reader's Reload articles button reloads stored articles without
+  checking upstream. Feed settings explain the separate Check now action.
+- Schema v13 saves intervals, Retry-After and cooldown state. Upgrades create
+  `<database-path>.before-feed-checks-v13` before migration. Existing schedules,
+  validators and leases are preserved. See [feed scheduling](docs/feed-scheduling.md).
+
 ## 0.1.0
 
 Paper's first stable release closes the 0.1 Stable milestone. This is still a

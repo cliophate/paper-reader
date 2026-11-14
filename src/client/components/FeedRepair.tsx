@@ -1,3 +1,4 @@
+import { FeedCheckDetails } from './FeedChecks'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import type { Feed } from '../types'
@@ -24,6 +25,7 @@ export function FeedRepair({ feed, onChanged }: { feed: Feed; onChanged: () => P
     finally { setBusy(false) }
   }
   return <section className="feed-repair">
+    <FeedCheckDetails feedId={feed.id} />
     <label>Full article preference on this device<select value={mode} onChange={event => { const next = event.target.value as FullTextMode; setMode(next); setFullTextMode(feed.id, next) }}><option value="auto">Auto</option><option value="always">Always load full text</option><option value="never">Never load automatically</option></select></label>
     <details><summary>Repair feed URL</summary><p>Check a replacement RSS or Atom endpoint, then replace the URL while keeping this subscription and its articles.</p>
       <label>Replacement URL<input type="url" value={url} disabled={busy} onChange={event => { setUrl(event.target.value); setPreview(null); setMessage('') }} placeholder="https://example.com/feed.xml" /></label>

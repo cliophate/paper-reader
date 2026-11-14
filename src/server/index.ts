@@ -1,3 +1,4 @@
+import { feedCheckRouter } from './feed-check-routes.js'
 import { withRequestSignal } from './request-signal.js'
 import { AI_UNAVAILABLE, aiAvailability, aiExecutionConfigured, warnUnsafeAi } from './ai-client.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
@@ -213,10 +214,17 @@ app.get('/api/events', (request, response) => {
   })
 })
 
+app.use('/api/feed-checks', feedCheckRouter(database, backend.identity, synchronizer instanceof StandaloneRuntime ? synchronizer : undefined))
+
 app.use('/api/organization', organizationRouter({ database, backend, synchronizer, navigation: () => entriesSource.navigation() }))
 
 app.get('/api/navigation', asyncRoute(async (_request, response) => {
   response.json(database.numberNavigation(await entriesSource.navigation()))
+}))
+
+app.post('/api/reload', asyncRoute(async (_request, response) => {
+  if (!(synchronizer instanceof StandaloneRuntime)) await synchronizer.syncNow('manual')
+  response.json({ ok: true, sync: synchronizer.status() })
 }))
 
 app.post('/api/sync', asyncRoute(async (_request, response) => {

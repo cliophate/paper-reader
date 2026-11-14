@@ -160,7 +160,7 @@ export function TopicsLibrary({ initialCollection, onCollectionChange, feedIcons
   const refresh = async () => {
     if (refreshing) return
     setRefreshing(true)
-    try { await api.sync(); await load() }
+    try { await api.reload(); await load() }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not refresh feeds') }
     finally { setRefreshing(false) }
   }
@@ -211,7 +211,7 @@ export function TopicsLibrary({ initialCollection, onCollectionChange, feedIcons
       </div>
       <div className="topics-header-meta">
         <span>{activeCount} active {activeCount === 1 ? 'collection' : 'collections'}</span>
-        <button className={`icon-button ${refreshing ? 'spinning' : ''}`} disabled={refreshing} onClick={() => void refresh()} aria-label="Refresh feeds" title="Refresh feeds"><Icon name="refresh" /></button>
+        <button className={`icon-button ${refreshing ? 'spinning' : ''}`} disabled={refreshing} onClick={() => void refresh()} aria-label="Reload articles" title="Reload articles from Paper or FreshRSS"><Icon name="refresh" /></button>
       </div>
     </header>
     <div className="topics-scroll" ref={scroll}>

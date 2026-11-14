@@ -77,3 +77,26 @@ it('repairs a subscription in place and rejects stale or duplicate endpoints', a
   db.saveLocalSubscription(backend.identity.id, { title: 'Other', url: 'https://example.test/other' })
   await expect(runtime.repairFeed(id, 'https://example.test/other', 'https://example.test/new')).rejects.toThrow(/already subscribed/)
 })
+
+it('queues manual checks through the runtime and drains them on shutdown', async () => {
+  const backend = new StandaloneBackend(db)
+  const id = db.saveLocalSubscription(backend.identity.id, { title: 'Synthetic', url: 'https://example.test/feed' })
+  const run = vi.spyOn(StandaloneFeedScheduler.prototype, 'runDue').mockImplementation(({ signal } = {}) => new Promise(resolve => {
+    signal!.addEventListener('abort', () => resolve(empty), { once: true })
+  }))
+  expect(runtime.checkNow([id])).toEqual([{ feedId: id, status: 'queued' }])
+  await flush()
+  expect(run).toHaveBeenCalledOnce()
+  expect(runtime.checkState(id)).toBe('queued')
+  await runtime.stop()
+  expect(() => runtime.checkNow([id])).toThrow(/disabled/)
+})
+
+it('rejects manual collection when sync is disabled', async () => {
+  const disabled = new StandaloneRuntime(db, new StandaloneBackend(db), false, [])
+  const run = vi.spyOn(StandaloneFeedScheduler.prototype, 'runDue')
+  expect(disabled.checksEnabled()).toBe(false)
+  expect(() => disabled.checkNow([])).toThrow(/disabled/)
+  expect(run).not.toHaveBeenCalled()
+  await disabled.stop()
+})
