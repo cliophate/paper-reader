@@ -128,6 +128,25 @@ These requests are not one atomic transaction. FreshRSS has no conditional undo,
 so a failed action can leave completed batches applied; its Undo sends the
 inverse operation for all IDs.
 
+## Owner authentication tests
+
+Schema v15 adds optional owner authentication. Tests use disposable SQLite
+storage and a software ES256 authenticator. They verify real WebAuthn signatures,
+origin and RP binding, user verification, counters and replay rejection without
+a physical device. The route inventory in
+`tests/fixtures/auth-route-classification.json` must classify every declaration
+in `index.ts` and its mounted routers. Add new routes to that reviewed fixture.
+
+```sh
+npx vitest run tests/auth.test.ts tests/auth-routes.test.ts tests/auth-gate.test.ts tests/auth-cli.test.ts
+npm run build
+npx playwright test tests/browser/owner-access.pw.ts
+```
+
+The browser tests check login, keyboard focus, phone layouts, Access controls,
+401 handling and offline cache removal. The installation test below also checks
+proxy Basic auth stacked with owner login, restored credentials and CLI recovery.
+
 ## Docker integration test
 
 This test requires Docker Compose and Python 3. Build both images, then run:

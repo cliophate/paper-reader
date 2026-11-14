@@ -2,8 +2,6 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { BriefingSelection } from './types.js'
 import { transaction } from './transaction.js'
 
-export const DATABASE_VERSION = 14
-
 export function migrateRetention(db: DatabaseSync) {
   transaction(db, () => {
     db.exec(`

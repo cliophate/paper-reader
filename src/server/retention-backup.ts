@@ -1,3 +1,4 @@
+import { DATABASE_VERSION } from './auth-schema.js'
 import fs from 'node:fs'
 import crypto from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
@@ -11,8 +12,9 @@ try {
   if (fs.existsSync(destination)) {
     const saved = new DatabaseSync(destination, { readOnly: true })
     try {
+      const version = Number(saved.prepare('PRAGMA user_version').get()?.user_version)
       if (saved.prepare('PRAGMA integrity_check').get()?.integrity_check !== 'ok'
-        || Number(saved.prepare('PRAGMA user_version').get()?.user_version) !== 14) throw new Error('Invalid retention backup')
+        || version < 14 || version > DATABASE_VERSION) throw new Error('Invalid retention backup')
     } finally { saved.close() }
   } else {
     const temporary = `${destination}.${crypto.randomUUID()}.tmp`

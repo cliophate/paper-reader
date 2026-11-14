@@ -20,6 +20,52 @@ permanent `paper-lock.sqlite` is a coordination file, not an application databas
 AI login files live separately under ai-auth when using compose.ai.yaml. Protect
 that directory separately or authenticate the CLIs again after a restore.
 
+## Owner login recovery
+
+Credentials, passkeys, sessions and app-password revocation state live in
+`paper.sqlite`. A restored backup restores them too, and can revive a revoked
+session or app password. Run `revoke-all` after restoring an old backup.
+Recovery commands work inside the running container and do not need a browser
+session, FreshRSS password or AI credentials.
+
+```sh
+docker compose exec paper npm run paper-auth -- revoke-all
+docker compose exec paper npm run paper-auth -- remove-passkeys
+docker compose exec paper npm run paper-auth -- disable
+```
+
+`revoke-all` signs out all sessions and revokes all app passwords, incrementing
+the global generation. `remove-passkeys` also removes every passkey. If password
+login is disabled, reset the password first so a login method remains.
+`disable` removes the owner and passkeys and turns login off. Restrict network
+access or restore proxy authentication before disabling it. All three commands
+invalidate pending passkey challenges.
+
+To reset the password, use a hidden Bash prompt and pipe it into the container.
+Do not put a password in a command argument or environment variable:
+
+```bash
+read -r -s -p 'New Paper password: ' paper_recovery_password
+printf '\n'
+printf '%s' "$paper_recovery_password" | docker compose exec -T paper npm run paper-auth -- reset-password
+unset paper_recovery_password
+```
+
+The password must have at least 12 characters. Resetting it enables password
+login, retains the username and passkeys, and revokes all sessions and app
+passwords. The command never prints the password. After disabling login, issue
+a new setup code with `docker compose exec paper npm run paper-auth -- setup-code`
+and use Settings > Access to enable it again. Setup codes expire in 15 minutes.
+
+Schema v15 adds the authentication tables. Startup creates
+`paper.sqlite.before-owner-login-v15` after retention reaches v14 and before
+adding login. Upgrades from v13 create both `.before-retention-v14` and
+`.before-owner-login-v15`. Upgrades from the deployed retention v14 create only
+the login backup. The login backup contains schema v14 and no owner credentials.
+Restore it with the v14 image to roll back login.
+Keep that private backup with the rest of your recovery files. A downgrade
+requires the matching older database; it does not preserve newer credentials.
+
 ## Consistent backup
 
 For a simple backup, stop Paper and every briefing command and archive the entire data
@@ -75,17 +121,22 @@ Deleted article links show the retention removal date for one year, then report
 not found. Arrival numbers are never reused. Removal notices contain no article
 body and cannot restore deleted articles; restore a backup to recover them.
 
-The first cleanup that would delete articles creates a second consistent backup,
+Schema v15 then adds [owner login](#owner-login-recovery) and creates
+`<database-path>.before-owner-login-v15` from the v14 database. Upgrading an
+existing v14 installation creates only this login backup. Login starts off.
+
+The first cleanup that would delete articles creates another consistent backup,
 `<database-path>.before-retention-first-delete`, including committed WAL data.
 Paper keeps this private file and refuses deletion if backup creation or
-validation fails. Keep enough disk space for both backups. Cache cleanup does
-not require this second backup because cached pages can be fetched again.
+validation fails. Keep enough disk space for the migration and deletion backups.
+Cache cleanup does not require the deletion backup because cached pages can be
+fetched again.
 
 Keep your existing configuration and full installation backups. To roll back
 to 0.2.0-alpha.1, stop Paper and briefing commands and restore the pre-v14 backup
-without stale WAL or SHM sidecars. To undo retention deletions on v14, restore
+without stale WAL or SHM sidecars. To undo retention deletions, restore
 the first-deletion backup and [reset its retention policy](retention.md#jobs-cache-and-recovery)
-before starting Paper, or cleanup will resume. Changes made after either backup
+before starting Paper, or cleanup will resume. Changes made after the restored backup
 will be absent.
 
 ### Upgrade from alpha.4 to 0.1.0

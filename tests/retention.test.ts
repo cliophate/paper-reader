@@ -217,7 +217,7 @@ describe('schema v14', () => {
     for (const index of ['article_aliases_entry_idx', 'article_fingerprints_entry_idx', 'article_cache_age_idx', 'article_reports_entry_idx']) sql.exec(`DROP INDEX ${index}`)
     sql.exec('PRAGMA user_version = 13')
     db = new PaperDatabase(file); service = new RetentionService(db, backend)
-    expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(14)
+    expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(15)
     const saved = new DatabaseSync(file + '.before-retention-v14', { readOnly: true })
     expect(saved.prepare('PRAGMA user_version').get()?.user_version).toBe(13)
     expect(saved.prepare('SELECT COUNT(*) n FROM entries').get()?.n).toBe(1); saved.close()
@@ -310,7 +310,7 @@ it('rolls back a failed migration and retains the same backup on retry', async (
   expect(sql.prepare("SELECT name FROM sqlite_master WHERE name = 'retention_settings'").get()).toBeUndefined()
   const saved = fs.readFileSync(file + '.before-retention-v14')
   db = new PaperDatabase(file); service = new RetentionService(db, backend)
-  expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(14)
+  expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(15)
   expect(fs.readFileSync(file + '.before-retention-v14')).toEqual(saved)
 })
 
@@ -436,4 +436,16 @@ it('expires removal notices after a year in bounded batches without resetting ar
   const result = ingest(['new-arrival']).results[0]
   if (result.status !== 'resolved') throw Error('fixture')
   expect(db.localEntry(result.id)!.linkNumber).toBeGreaterThan(lastNumber)
+})
+
+it.each([14, 15])('reuses a schema %i first-deletion backup after the login upgrade', async version => {
+  seed(2)
+  const backup = file + '.before-retention-first-delete'
+  sql.prepare('VACUUM INTO ?').run(backup)
+  const saved = new DatabaseSync(backup)
+  saved.exec(`PRAGMA user_version = ${version}`); saved.close()
+  const bytes = fs.readFileSync(backup)
+  await save(policy({ unreadDays: 1 }))
+  expect(db.retention.lastRun()?.deleted).toBe(2)
+  expect(fs.readFileSync(backup)).toEqual(bytes)
 })
