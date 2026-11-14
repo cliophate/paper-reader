@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add optional standalone article retention with auto-read overrides, separate
+  read and unread limits, previews and activity summaries. Protect saved articles
+  and current feed items; keep expiring identity tombstones after deletion.
+- Add independent full-text cache cleanup in both backend modes. Article cleanup
+  runs in resumable batches and backs up before its first deletion.
+- Schema v14 adds retention state and indexes. Upgrades create
+  `.before-retention-v14`; first article deletion creates
+  `.before-retention-first-delete`. See [retention](docs/retention.md).
 - Keyboard shortcuts no longer fire while Ctrl, Cmd or Alt is held, so Ctrl+F
   opens the browser's Find again.
 - Previous into the preceding feed or folder opens its last article instead of

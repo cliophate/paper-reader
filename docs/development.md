@@ -19,6 +19,10 @@ search responsiveness regression.
 [Reader routes](reader-routes.md) documents schema v12, link numbers, legacy
 bookmarks and nested offline routes.
 
+[Retention](retention.md) documents schema v14, protected references, tombstones
+and the first-deletion backup. The smoke suite also deletes 100,000 of 200,000
+synthetic articles while checking the existing two-second health limit.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh

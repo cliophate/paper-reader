@@ -144,7 +144,8 @@ by the current FreshRSS adapter.
 
 ## Upgrade and recovery
 
-The current schema is v13. [Standalone feed scheduling](feed-scheduling.md#schema-v13-and-recovery)
+The current schema is v14. [Retention](retention.md) documents its migration,
+tombstones and `.before-retention-v14` backup. [Standalone feed scheduling](feed-scheduling.md#schema-v13-and-recovery)
 documents its check settings, Retry-After and attempt columns, and the
 `.before-feed-checks-v13` backup. [Reader routes](reader-routes.md) documents v12's additive
 link-number table, backfill and `.before-link-numbers-v12` backup. Article links

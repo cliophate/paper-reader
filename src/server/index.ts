@@ -1,3 +1,5 @@
+import { RetentionService } from './retention.js'
+import { retentionRouter } from './retention-routes.js'
 import { feedCheckRouter } from './feed-check-routes.js'
 import { withRequestSignal } from './request-signal.js'
 import { AI_UNAVAILABLE, warnUnsafeAi } from './ai-client.js'
@@ -61,6 +63,8 @@ const synchronizer = standalone ? new StandaloneRuntime(database, standalone, co
   : new BackendSynchronizer(database, backend, config.sync.enabled, config.sync.minutes)
 const readwise = new ReadwiseClient(config.readwise)
 const kirby = new KirbyPublisher(config.kirby)
+const retention = new RetentionService(database, backend.identity)
+retention.start()
 const reader = new ReaderService(database, config.readerFallbackEnabled)
 const headlines = new HeadlineService(database, url => reader.fetch(url, 0), (stage, prompt, input, schema) =>
   runAiBatch(config, 'headlines', stage === 'write' ? config.headlines.writerModel : config.headlines.reviewerModel,
@@ -227,6 +231,7 @@ app.get('/api/events', (request, response) => {
   })
 })
 
+app.use('/api/retention', retentionRouter(retention))
 app.use('/api/feed-checks', feedCheckRouter(database, backend.identity, synchronizer instanceof StandaloneRuntime ? synchronizer : undefined))
 
 app.use('/api/organization', organizationRouter({ database, backend, synchronizer, navigation: () => entriesSource.navigation() }))
@@ -736,6 +741,7 @@ async function shutdown() {
   headlines.setEnabled(false)
   pulse.setEnabled(false)
   discussions.stopAll()
+  await retention.stop()
   await synchronizer.stop()
   await stopped
   await drainRequests()

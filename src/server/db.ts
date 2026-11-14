@@ -1,4 +1,6 @@
-import { DATABASE_VERSION, migrateFeedCheckSettings } from './feed-check-settings.js'
+import { migrateFeedCheckSettings } from './feed-check-settings.js'
+import { DATABASE_VERSION, migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
+import { RetentionStore } from './retention-store.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -116,7 +118,7 @@ export interface SyncAuditRecord {
   readToUnreadIds: string[]
 }
 
-export type ActivityKind = 'sync' | 'state' | 'feed' | 'report' | 'filter' | 'pulse'
+export type ActivityKind = 'sync' | 'state' | 'feed' | 'report' | 'filter' | 'pulse' | 'retention'
 
 export interface ActivityRecord {
   id: number
@@ -174,6 +176,7 @@ const BACKEND_CHECKPOINTS = new Set(['backfill_complete', 'backfill_continuation
 export class PaperDatabase {
   private readonly db: DatabaseSync
   private readonly databasePath: string
+  readonly retention: RetentionStore
   readonly identities: IdentityStore
   readonly organization: LocalOrganizationService
   readonly feedFetch: FeedFetchStore
@@ -198,11 +201,13 @@ export class PaperDatabase {
         this.backupBeforeMigration(11, 'search-rows')
         this.backupBeforeMigration(12, 'link-numbers')
         this.backupBeforeMigration(13, 'feed-checks')
+        this.backupBeforeMigration(14, 'retention')
         const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0)
         // Current-schema participants must not drop/recreate triggers on every
         // open. Coordinated bootstrap performs upgrades under exclusive access.
         if (version < DATABASE_VERSION || this.getSyncValue('fulltext_search_v1') !== 'true') this.migrate()
       }
+      this.retention = new RetentionStore(this.db)
       this.identities = new IdentityStore(this.db)
       this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
       this.feedFetch = new FeedFetchStore(this.db, id => this.assertLocalBackend(id))
@@ -314,7 +319,7 @@ export class PaperDatabase {
   importSourceEntries(backendId: string, subscriptionId: string, items: Array<{
     identity: SourceItemIdentity
     entry: Omit<Entry, 'id' | 'feedId' | 'read' | 'starred' | 'sourceOrder'>
-  }>, options: { checkpoint?: { key: string; value: string } | Array<{ key: string; value: string }>; feedTitle?: string } = {}): IdentityResolution[] {
+  }>, options: { checkpoint?: { key: string; value: string } | Array<{ key: string; value: string }>; feedTitle?: string; successfulFetchAt?: number } = {}): IdentityResolution[] {
     return transaction(this.db, () => {
       this.assertLocalBackend(backendId)
       this.identities.assertSubscription(backendId, subscriptionId)
@@ -333,6 +338,7 @@ export class PaperDatabase {
         return result
       })
       this.upsertEntries(entries)
+      if (options.successfulFetchAt !== undefined) this.retention.fetched(subscriptionId, results, options.successfulFetchAt)
       if (options.feedTitle) this.organization.adoptFeedTitle(backendId, subscriptionId, options.feedTitle)
       const checkpoints = options.checkpoint ? (Array.isArray(options.checkpoint) ? options.checkpoint : [options.checkpoint]) : []
       for (const checkpoint of checkpoints) this.identities.setCheckpoint(backendId, checkpoint.key, checkpoint.value)
@@ -434,6 +440,7 @@ export class PaperDatabase {
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) >= 11 && this.getSyncValue('fulltext_search_v1') === 'true') {
       if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 12) migrateLinkNumbers(this.db)
       if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 13) migrateFeedCheckSettings(this.db)
+      if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 14) migrateRetention(this.db)
       return
     }
     this.db.exec(`
@@ -731,6 +738,7 @@ export class PaperDatabase {
     migrateSearchRows(this.db)
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 12) migrateLinkNumbers(this.db)
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 13) migrateFeedCheckSettings(this.db)
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 14) migrateRetention(this.db)
   }
 
   linkNumber(kind: 'feed' | 'folder' | 'collection', id: string): number {
@@ -2032,6 +2040,7 @@ export class PaperDatabase {
       )
       const insert = this.db.prepare('INSERT OR IGNORE INTO briefing_entries (briefing_id, entry_id, section) VALUES (?, ?, ?)')
       for (const entry of entries) insert.run(record.id, entry.id, entry.section)
+      saveRetentionBriefingReferences(this.db, record.id, record.selection)
     })
   }
 

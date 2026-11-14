@@ -1,3 +1,4 @@
+import type { RetentionPolicy, RetentionPreview, RetentionView } from '../shared/retention'
 import type { FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarget } from '../shared/feed-checks'
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
 import type { PulsePayload } from '../shared/pulse'
@@ -25,6 +26,9 @@ function sourceRequestSignal(signal?: AbortSignal): AbortSignal | undefined {
 }
 
 export const api = {
+  retention: () => request<RetentionView>('/api/retention'),
+  previewRetention: (policy: RetentionPolicy) => request<RetentionPreview>('/api/retention/preview', { method: 'POST', body: JSON.stringify({ policy }) }),
+  saveRetention: (policy: RetentionPolicy, revision: number, token?: string) => request<RetentionView>('/api/retention', { method: 'POST', body: JSON.stringify({ policy, revision, token }) }),
   feedChecks: () => request<FeedChecksView>('/api/feed-checks'),
   checkFeeds: (body: FeedCheckRevision & FeedCheckTarget) => request<{ results: FeedCheckResult[]; snapshot: FeedChecksView }>('/api/feed-checks/now', { method: 'POST', body: JSON.stringify(body) }),
   setCheckInterval: (body: FeedCheckRevision & { feedId?: string; intervalMinutes: number | null }) => request<{ snapshot: FeedChecksView }>('/api/feed-checks/interval', { method: 'POST', body: JSON.stringify(body) }),
