@@ -59,9 +59,10 @@ and use Settings > Access to enable it again. Setup codes expire in 15 minutes.
 
 Schema v15 adds the authentication tables. Startup creates
 `paper.sqlite.before-owner-login-v15` after retention reaches v14 and before
-adding login. Upgrades from v13 create both `.before-retention-v14` and
-`.before-owner-login-v15`. Upgrades from the deployed retention v14 create only
-the login backup. The login backup contains schema v14 and no owner credentials.
+adding login. Upgrades from v13 create `.before-retention-v14`,
+`.before-owner-login-v15` and then `.before-greader-v16`. Upgrades from v14
+create the login and Reader API backups. The login backup contains schema v14
+and no owner credentials.
 Restore it with the v14 image to roll back login.
 Keep that private backup with the rest of your recovery files. A downgrade
 requires the matching older database; it does not preserve newer credentials.
@@ -104,11 +105,11 @@ migrations. Use the matching pre-upgrade data backup if a migration is not
 backward compatible. Retain both the original database and backup until you have
 verified the restored application.
 
-Paper 0.2.0-alpha.1 uses database schema v13.
-[Feed scheduling](feed-scheduling.md) describes the migration and automatic
-`.before-feed-checks-v13` backup.
+Paper 0.2.0-alpha.2 uses database schema v16.
+The [alpha.2 upgrade steps](#upgrade-from-020-alpha1-to-020-alpha2) describe
+the migration backups from schema v13.
 
-### Upgrade from 0.2.0-alpha.1 to the next release
+### Retention migration and recovery
 
 Schema v14 adds [retention](retention.md). Startup creates
 `<database-path>.before-retention-v14` before migrating. All retention limits
@@ -123,7 +124,8 @@ body and cannot restore deleted articles; restore a backup to recover them.
 
 Schema v15 then adds [owner login](#owner-login-recovery) and creates
 `<database-path>.before-owner-login-v15` from the v14 database. Upgrading an
-existing v14 installation creates only this login backup. Login starts off.
+existing v14 installation also creates the Reader API backup before schema
+v16. Login starts off.
 
 The first cleanup that would delete articles creates another consistent backup,
 `<database-path>.before-retention-first-delete`, including committed WAL data.
@@ -173,6 +175,53 @@ Include your usual proxy overrides in those Compose commands. Verify startup,
 articles, reading positions, saved state and AI availability when enabled.
 The pull helper's archive contains only the runtime image. Source installations
 can build the selected tag as described in the [README](../README.md#build-from-source).
+
+### Upgrade from 0.2.0-alpha.1 to 0.2.0-alpha.2
+
+Paper 0.2.0-alpha.2 uses schema v16. Startup migrates from v13 in order,
+creating these backups before each step:
+
+- `<database-path>.before-retention-v14` contains schema v13.
+- `<database-path>.before-owner-login-v15` contains schema v14.
+- `<database-path>.before-greader-v16` contains schema v15.
+
+Keep all three private backups. They do not replace a full data and
+configuration backup. Rolling back the image alone does not undo migrations.
+To return to alpha.1, restore the matching schema v13 backup.
+
+Login and the Reader API both stay off until enabled. Retention is optional;
+its first article deletion creates a separate
+`<database-path>.before-retention-first-delete` backup.
+Keep your backend, account, private configuration and Compose or proxy
+overrides. Do not rerun setup. See [owner access](access.md),
+[Reader apps](greader-api.md) and [retention](retention.md) before enabling them.
+
+Stop every briefing command and back up the full data directory and private
+configuration before updating. Without the Codex worker:
+
+```sh
+docker compose stop paper
+# Back up data and private configuration before continuing.
+git fetch origin tag v0.2.0-alpha.2
+git switch --detach v0.2.0-alpha.2
+sh scripts/pull-image.sh
+docker compose up -d --no-build --force-recreate paper
+```
+
+With the Codex worker, stop and recreate both services:
+
+```sh
+docker compose -f compose.yaml -f compose.ai.yaml stop paper paper-ai
+# Back up data, private configuration and ai-auth before continuing.
+git fetch origin tag v0.2.0-alpha.2
+git switch --detach v0.2.0-alpha.2
+docker compose -f compose.yaml -f compose.ai.yaml pull paper paper-ai
+docker compose -f compose.yaml -f compose.ai.yaml up -d --no-build --force-recreate paper paper-ai
+```
+
+Include your usual proxy overrides. Back up FreshRSS separately when used.
+Verify startup, articles, reading positions, saved state and AI availability
+when enabled. In standalone mode, check the feed schedule and Check now action.
 
 ### Upgrade from 0.1.0 to 0.2.0-alpha.1
 
