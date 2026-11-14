@@ -137,6 +137,7 @@ export interface MuteFilterRecord {
   feedId: string
   feedTitle: string
   matchCount: number
+  matching: boolean
   createdAt: string
 }
 
@@ -178,6 +179,7 @@ export class PaperDatabase {
   readonly feedFetch: FeedFetchStore
   private activeBackendId = ''
   private closed = false
+  private muteBackfill: Promise<void> | undefined
 
   constructor(databasePath: string, options: { readOnly?: boolean } = {}) {
     this.databasePath = databasePath
@@ -1342,26 +1344,43 @@ export class PaperDatabase {
 
   async previewMuteFilter(phrase: string, scope: MuteFilterScope, feedId = '') {
     const rule = { phrase, scope, feed_id: feedId }
-    const end = this.muteScanEnd()
+    const fields = muteFields(scope)
     const started = performance.now()
-    let cursor = 0
+    let cursor: { timestamp: number; id: string } | undefined
     let count = 0
     let scanned = 0
-    let samples: Array<{ id: string; timestamp: number }> = []
-    while (cursor < end && scanned < 10_240 && performance.now() - started < 500) {
-      const batch = this.scanMuteBatch(rule, cursor, end)
-      cursor = batch.cursor
-      scanned += batch.scanned
-      count += batch.matches.length
-      samples = [...samples, ...batch.matches].sort((a, b) => b.timestamp - a.timestamp).slice(0, 8)
+    let truncated = true
+    const samples: Array<{ id: string }> = []
+    while (scanned < 10_240 && performance.now() - started < 1000) {
+      const clauses: string[] = []
+      const parameters: Array<string | number> = []
+      if (feedId) { clauses.push('feed_id = ?'); parameters.push(feedId) }
+      if (cursor) { clauses.push('(timestamp, id) < (?, ?)'); parameters.push(cursor.timestamp, cursor.id) }
+      const rows = this.db.prepare(`SELECT id, timestamp, feed_id, ${fields.join(', ')} FROM entries
+        ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
+        ORDER BY timestamp DESC, id DESC LIMIT 256`).all(...parameters) as Array<Record<string, string | number>>
+      scanned += rows.length
+      for (const row of rows) {
+        if (!matchesMuteFields(rule, String(row.feed_id), fields.map(field => String(row[field])))) continue
+        count++
+        if (samples.length < 8) samples.push({ id: String(row.id) })
+      }
+      if (rows.length < 256) { truncated = false; break }
+      const last = rows.at(-1)!
+      cursor = { timestamp: Number(last.timestamp), id: String(last.id) }
       await new Promise<void>(resolve => setImmediate(resolve))
       if (this.closed) throw new Error('Database closed during filter preview')
+    }
+    if (truncated && cursor) {
+      truncated = Boolean(this.db.prepare(`SELECT 1 FROM entries
+        WHERE ${feedId ? 'feed_id = ? AND' : ''} (timestamp, id) < (?, ?) LIMIT 1`)
+        .get(...(feedId ? [feedId] : []), cursor.timestamp, cursor.id))
     }
     const items = samples.flatMap(({ id }) => {
       const entry = this.localEntry(id)
       return entry ? [entry] : []
     })
-    return { count, items, truncated: cursor < end }
+    return { count, items, truncated }
   }
 
   private muteScanEnd(): number {
@@ -1372,29 +1391,44 @@ export class PaperDatabase {
   // SQLite/JS boundary, and each query releases its read snapshot before writing.
   private scanMuteBatch(rule: MuteRule, cursor: number, end: number) {
     const fields = muteFields(rule.scope)
-    const ascii = /^[\x00-\x7f]*$/.test(rule.phrase)
-    const match = fields.map(field => `instr(lower(${field}), ?) > 0`).join(' OR ')
-    const projection = ascii ? `CASE WHEN (? = '' OR feed_id = ?) AND (${match}) THEN 1 ELSE 0 END AS matches`
-      : ['feed_id', ...fields].join(', ')
-    const parameters = ascii ? [rule.feed_id, rule.feed_id, ...fields.map(() => rule.phrase.toLowerCase())] : []
-    const rows = this.db.prepare(`SELECT rowid AS scan_rowid, id, timestamp, ${projection}
+    const rows = this.db.prepare(`SELECT rowid AS scan_rowid, id, feed_id, ${fields.join(', ')}
       FROM entries WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT 256`)
-      .all(...parameters, cursor, end) as Array<Record<string, string | number>>
-    const matches = rows.filter(row => ascii ? Boolean(row.matches) : matchesMuteFields(rule, String(row.feed_id), fields.map(field => String(row[field]))))
-      .map(row => ({ id: String(row.id), timestamp: Number(row.timestamp) }))
-    return { matches, scanned: rows.length, cursor: rows.length < 256 ? end : Number(rows.at(-1)!.scan_rowid) }
+      .all(cursor, end) as Array<Record<string, string | number>>
+    const matches = rows.filter(row => matchesMuteFields(rule, String(row.feed_id), fields.map(field => String(row[field]))))
+      .map(row => ({ id: String(row.id) }))
+    return { matches, cursor: rows.length < 256 ? end : Number(rows.at(-1)!.scan_rowid) }
   }
 
-  // A per-filter checkpoint also resumes a newly created filter interrupted by
-  // shutdown. Legacy ASCII filters need no repair; new ASCII filters get a pending key.
-  async backfillMuteFilters() {
+  // Share one runner across startup and concurrent creations. Re-query after
+  // each filter so rules added during a scan join the same queue.
+  backfillMuteFilters(): Promise<void> {
+    if (!this.muteBackfill) {
+      this.muteBackfill = this.runMuteBackfill().finally(() => { this.muteBackfill = undefined })
+    }
+    return this.muteBackfill
+  }
+
+  private async runMuteBackfill() {
     await new Promise<void>(resolve => setImmediate(resolve))
     if (this.closed) return
-    const rules = this.db.prepare('SELECT id, phrase, scope, feed_id FROM mute_filters').all() as Array<MuteRule & { id: string }>
-    for (const rule of rules) {
-      if (this.closed) return
-      const progress = this.getSyncValue(`mute_unicode_v1:${rule.id}`)
-      if (progress === 'done' || (!progress && /^[\x00-\x7f]*$/.test(rule.phrase))) continue
+    // Earlier builds also marked SQL-matched ASCII filters done. Reset their
+    // checkpoints once so they receive the shared JavaScript matcher too.
+    if (!this.getSyncValue('mute_js_v1')) {
+      transaction(this.db, () => {
+        const rules = this.db.prepare('SELECT id, phrase FROM mute_filters').all()
+        for (const rule of rules) {
+          if (/^[\x00-\x7f]*$/.test(String(rule.phrase))) {
+            this.db.prepare('DELETE FROM sync_state WHERE key = ?').run(`mute_unicode_v1:${rule.id}`)
+          }
+        }
+        this.setSyncValue('mute_js_v1', 'done')
+      })
+    }
+    while (!this.closed) {
+      const rule = this.db.prepare(`SELECT id, phrase, scope, feed_id FROM mute_filters
+        WHERE NOT EXISTS (SELECT 1 FROM sync_state WHERE key = 'mute_unicode_v1:' || mute_filters.id AND value = 'done')
+        ORDER BY created_at, id LIMIT 1`).get() as (MuteRule & { id: string }) | undefined
+      if (!rule) return
       await this.backfillMuteFilter(rule)
     }
   }
@@ -1415,7 +1449,13 @@ export class PaperDatabase {
           SELECT ?, id FROM entries WHERE id = ?`)
         for (const match of batch.matches) insert.run(rule.id, match.id)
         state.cursor = batch.cursor
-        this.setSyncValue(key, state.cursor >= state.end ? 'done' : JSON.stringify(state))
+        const done = state.cursor >= state.end
+        this.setSyncValue(key, done ? 'done' : JSON.stringify(state))
+        if (done) {
+          const count = Number(this.db.prepare('SELECT COUNT(*) AS count FROM muted_entries WHERE filter_id = ?').get(rule.id)!.count)
+          this.recordActivity({ kind: 'filter', origin: 'settings', summary: `Matched mute filter "${rule.phrase}"`, count,
+            details: { filterId: rule.id, scope: rule.scope, feedId: rule.feed_id } })
+        }
       })
       if (!exists) return
       await new Promise<void>(resolve => setImmediate(resolve))
@@ -1676,11 +1716,9 @@ export class PaperDatabase {
         .run(id, phrase, scope, feedId, createdAt)
       this.setSyncValue(`mute_unicode_v1:${id}`, JSON.stringify({ cursor: 0, end: this.muteScanEnd() }))
     })
-    await this.backfillMuteFilter({ id, phrase, scope, feed_id: feedId })
-    if (this.closed) throw new Error('Database closed during filter creation')
-    const filter = this.muteFilters().find(filter => filter.id === id)
-    if (!filter) throw new Error('Filter was removed during creation')
-    return filter
+    void this.backfillMuteFilters().catch(error => console.error('Mute filter matching failed; it will resume after restart.', error))
+    const feedTitle = String(this.db.prepare('SELECT title FROM feeds WHERE id = ?').get(feedId)?.title || '')
+    return { id, phrase, scope, feedId, feedTitle, createdAt, matchCount: 0, matching: true }
   }
 
   muteFilters(): MuteFilterRecord[] {
@@ -1699,12 +1737,16 @@ export class PaperDatabase {
       feedId: String(row.feed_id),
       feedTitle: String(row.feed_title),
       matchCount: Number(row.match_count),
+      matching: this.getSyncValue(`mute_unicode_v1:${row.id}`) !== 'done',
       createdAt: String(row.created_at),
     }))
   }
 
   deleteMuteFilter(id: string): boolean {
-    return Number(this.db.prepare('DELETE FROM mute_filters WHERE id = ?').run(id).changes) > 0
+    return transaction(this.db, () => {
+      this.db.prepare('DELETE FROM sync_state WHERE key = ?').run(`mute_unicode_v1:${id}`)
+      return Number(this.db.prepare('DELETE FROM mute_filters WHERE id = ?').run(id).changes) > 0
+    })
   }
 
   createArticleReport(input: {

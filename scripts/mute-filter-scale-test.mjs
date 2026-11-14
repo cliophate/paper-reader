@@ -19,10 +19,20 @@ if (mode === 'worker') {
   const started = performance.now()
   let heap = process.memoryUsage().heapUsed
   const sample = setInterval(() => { heap = Math.max(heap, process.memoryUsage().heapUsed) }, 5)
-  const result = operation === 'preview' ? await db.previewMuteFilter('école', 'content') : await db.createMuteFilter('école', 'content')
+  let result = operation === 'preview' ? await db.previewMuteFilter('école', 'content') : await db.createMuteFilter('école', 'content')
+  const responseMs = performance.now() - started
+  let backgroundMs
+  if (operation === 'create' && result.matching) {
+    assert.equal(result.matchCount, 0)
+    const backgroundStarted = performance.now()
+    await db.backfillMuteFilters()
+    backgroundMs = performance.now() - backgroundStarted
+    result = db.muteFilters().find(filter => filter.id === result.id)
+    assert.equal(result.matching, false)
+  }
   clearInterval(sample)
   heap = Math.max(heap, process.memoryUsage().heapUsed)
-  process.send({ result: { wallMs: performance.now() - started, heapMiB: heap / 2 ** 20,
+  process.send({ result: { wallMs: performance.now() - started, responseMs, backgroundMs, heapMiB: heap / 2 ** 20,
     rssMiB: process.resourceUsage().maxRSS / 1024, count: result.count ?? result.matchCount, truncated: result.truncated ?? false } })
   db.close()
   process.disconnect()
@@ -97,7 +107,7 @@ if (mode === 'worker') {
         assert.equal(exitCode, 0)
         assert.equal(report.writerFailures, 0)
         assert.ok(report.writerMaxMs < 5000)
-        if (operation === 'create') assert.equal(report.count, 200_000)
+        if (operation === 'create') { assert.equal(report.count, 200_000); assert.ok(report.responseMs < 1000) }
         else { assert.equal(report.truncated, true); assert.ok(report.count > 0 && report.count <= 10_240) }
       }
     }

@@ -61,8 +61,14 @@ retained state and checkpoints. It uses about 6 GiB of temporary storage
 while seeding its multi-KiB article bodies.
 
 After building, the mute-filter scale reproduction seeds 200,000 articles with
-10.6 KB bodies and measures preview, creation, peak RSS/heap and concurrent writer
-latency. It retains its synthetic database and results in a new temporary directory.
+10.6 KB bodies and measures preview time, creation response time, background
+completion, peak RSS/heap and concurrent writer latency. Creation returns a filter
+with `matching: true` and a partial `matchCount`. The filters list reports completion;
+Settings polls every two seconds while work is pending. One runner scans 256 rows
+at a time with the ingestion matcher, outside write transactions. Preview uses the
+existing timestamp/id indexes, applies feed scope first, and yields between batches
+until 10,240 rows or about one second. Incomplete counts are lower bounds.
+The script retains its synthetic database and results in a new temporary directory.
 Pass an optional path to a baseline module exporting `PaperDatabase` to compare it.
 
 ```sh

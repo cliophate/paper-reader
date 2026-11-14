@@ -33,6 +33,7 @@ describe('reader link numbers', () => {
     const existing = { ...article, contentHtml: '<p>Body-only mutephrase and searchneedle</p>' }
     db.upsertEntries([existing])
     await db.createMuteFilter('mutephrase', 'content')
+    await db.backfillMuteFilters()
     sql(connection => connection.prepare('UPDATE entries SET synced_at = ? WHERE id = ?').run('2020-01-01T00:00:00Z', article.id))
     const snapshot = () => sql(connection => ({
       entry: connection.prepare('SELECT * FROM entries WHERE id = ?').get(article.id),

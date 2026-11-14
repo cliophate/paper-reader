@@ -65,6 +65,18 @@ try {
   assert.equal(applied.results[0].status, 'created')
   const feedId = applied.results[0].id
   const page = await until(async () => { const value = (await request('/api/entries?kind=all&id=all&unread=0')).data; return value?.items.length === 2 && value })
+  const filter = await request('/api/filters', { phrase: 'standalone', scope: 'title', feedId })
+  assert.equal(filter.status, 201)
+  assert.equal(filter.data.matching, true)
+  assert.equal(filter.data.matchCount, 0)
+  const matched = await until(async () => {
+    const filters = (await request('/api/filters')).data
+    return filters.find(item => item.id === filter.data.id && !item.matching)
+  })
+  assert.equal(matched.matchCount, 2)
+  const activity = (await request('/api/activity')).data
+  assert.equal(activity.find(item => item.details.filterId === filter.data.id).count, 2)
+  assert.equal((await fetch(base + '/api/filters/' + filter.data.id, { method: 'DELETE' })).status, 200)
   const checkView = (await request('/api/feed-checks')).data
   const checkRevision = { expectedRevision: checkView.revision, expectedOrganizationRevision: checkView.organizationRevision }
   assert(checkView.feeds[0].lastSuccessAt > 0)

@@ -23,6 +23,24 @@ export function FiltersSettings({ feeds, onChanged, notify }: {
   }
   useEffect(() => { void load() }, [])
 
+  useEffect(() => {
+    if (!filters.some(filter => filter.matching)) return
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      try {
+        const next = await api.filters()
+        if (cancelled) return
+        setFilters(next)
+        if (filters.some(filter => filter.matching && next.some(item => item.id === filter.id && !item.matching))) await onChanged()
+      } catch (reason) {
+        if (cancelled) return
+        setError(reason instanceof Error ? reason.message : 'Paper could not load filters')
+        setFilters(current => [...current])
+      }
+    }, 2000)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [filters, onChanged])
+
   useEffect(() => { setPreview(null) }, [phrase, scope, feedId])
   const check = async () => {
     setBusy(true); setPreviewing(true); setError('')
@@ -39,7 +57,7 @@ export function FiltersSettings({ feeds, onChanged, notify }: {
       setPhrase('')
       setFilters(current => [filter, ...current])
       await onChanged()
-      notify(`${filter.matchCount} existing ${filter.matchCount === 1 ? 'article matches' : 'articles match'} this filter`)
+      notify('Filter added. Matching existing articles...')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Paper could not add the filter')
     } finally { setBusy(false) }
@@ -70,7 +88,7 @@ export function FiltersSettings({ feeds, onChanged, notify }: {
     {error && <p className="form-error">{error}</p>}
     <div className="settings-list">
       {filters.map(filter => <article className="settings-list-row" key={filter.id}>
-        <div><strong>"{filter.phrase}"</strong><span>{scopeLabel(filter.scope)}{filter.feedTitle ? ` in ${filter.feedTitle}` : ' in every feed'} · {filter.matchCount} hidden</span></div>
+        <div><strong>"{filter.phrase}"</strong><span>{scopeLabel(filter.scope)}{filter.feedTitle ? ` in ${filter.feedTitle}` : ' in every feed'} · {filter.matching ? 'Matching...' : `${filter.matchCount} hidden`}</span></div>
         <button onClick={() => void remove(filter)} disabled={busy} aria-label={`Remove filter ${filter.phrase}`}><Icon name="close" /> Remove</button>
       </article>)}
       {!filters.length && <div className="settings-empty">No filters yet.</div>}

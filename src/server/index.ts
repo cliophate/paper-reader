@@ -273,7 +273,6 @@ app.post('/api/filters', asyncRoute(async (request, response) => {
     throw error
   }
   const filter = await database.createMuteFilter(phrase, scope as import('./db.js').MuteFilterScope, feedId)
-  database.recordActivity({ kind: 'filter', origin: 'settings', summary: `Muted "${phrase}"`, count: filter.matchCount, details: { filterId: filter.id, scope, feedId } })
   response.status(201).json(filter)
 }))
 

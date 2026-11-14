@@ -149,10 +149,12 @@ describe('continuing Pulse collections', () => {
     const entries = [article('1'), article('2'), article('3')]
     save(entries)
     await db.createMuteFilter('feature 1', 'title')
+    await db.backfillMuteFilters()
     const service = new PulseService(db, vi.fn(), true, () => now)
     expect(service.list().collections[0].sources.map(source => source.id)).not.toContain('1')
     db.upsertEntries([article('4', 'Excluded item for Orion 9')])
     await db.createMuteFilter('Excluded item', 'title')
+    await db.backfillMuteFilters()
     await service.refresh()
     expect(db.pulseCandidates(now - DAY, now + DAY, false, 100)).toEqual([])
   })
@@ -250,7 +252,9 @@ describe('Pulse membership quality', () => {
     const entries = [article('1'), article('2'), article('3')]
     db.upsertEntries(entries)
     await db.createMuteFilter('feature 2', 'title')
+    await db.backfillMuteFilters()
     await db.createMuteFilter('feature 3', 'title')
+    await db.backfillMuteFilters()
     db.savePulseBatch([{ id: 'too-small', headline: 'Orion 9', scope: 'The Orion 9 release.', entryIds: ['1', '2', '3'] }], ['1', '2', '3'], new Date(now).toISOString())
     expect(db.pulseCollections()).toEqual([])
     expect(db.pulseCandidates(now - DAY, now + DAY, false, 10).map(entry => entry.id)).toEqual(['1'])

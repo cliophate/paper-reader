@@ -142,6 +142,7 @@ export interface MuteFilter {
   feedId: string
   feedTitle: string
   matchCount: number
+  matching: boolean
   createdAt: string
 }
 

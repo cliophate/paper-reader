@@ -134,6 +134,7 @@ describe('Paper read model', () => {
       entry({ id: 'star', title: 'The muted synthetic story', contentHtml: '<p>Commonneedle</p>', starred: true, timestamp: 10 }),
     ])
     await database.createMuteFilter('muted synthetic', 'title')
+    await database.backfillMuteFilters()
     const cases = [
       { kind: 'all' as const, id: 'all', unreadOnly: false, expected: ['unread', 'read', 'other'] },
       { kind: 'all' as const, id: 'all', unreadOnly: true, expected: ['unread', 'other'] },
@@ -356,7 +357,9 @@ describe('Paper read model', () => {
     ])
 
     const filter = await database.createMuteFilter('sponsoring the blog', 'title')
+    await database.backfillMuteFilters()
     await database.createMuteFilter('New podcast episode', 'title')
+    await database.backfillMuteFilters()
 
     expect(database.localNavigation().unread).toBe(1)
     expect(database.localEntry('sponsor')?.read).toBe(false)
