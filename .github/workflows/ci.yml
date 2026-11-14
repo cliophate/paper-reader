@@ -24,9 +24,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium webkit
-      - run: npm run test:browser
+      - run: npm run test:browser -- --trace=retain-on-failure
       - run: npm run build:server
       - run: npx playwright test --config playwright.routes.config.ts
+      - name: Upload browser failure traces
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-failures-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
   application:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
