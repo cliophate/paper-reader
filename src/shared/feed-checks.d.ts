@@ -11,7 +11,7 @@ export interface FeedCheckStatus {
   state: 'idle' | 'queued' | 'running'
 }
 export interface FeedChecksView {
-  backend: 'standalone' | 'freshrss'
+  backend: 'standalone' | 'freshrss' | 'miniflux'
   enabled: boolean
   revision: number
   organizationRevision: number

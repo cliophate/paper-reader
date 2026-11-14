@@ -17,9 +17,9 @@ beforeEach(() => {
   vi.spyOn(StandaloneFeedScheduler.prototype, 'runDue').mockResolvedValue({ attempted: 0, fetched: 0, notModified: 0, failed: 0, stale: 0, ambiguous: 0 })
 })
 afterEach(async () => { if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) }; await runtime.stop(); db.close(); vi.restoreAllMocks() })
-async function mount(remote = false) {
+async function mount(remote: 'freshrss' | 'miniflux' | false = false) {
   const app = express(); app.use(express.json()); app.use(requireSameOrigin('https://paper.example.test'))
-  app.use('/api/feed-checks', feedCheckRouter(db, remote ? { id: 'freshrss:fixture', kind: 'freshrss' } : backend.identity, remote ? undefined : runtime))
+  app.use('/api/feed-checks', feedCheckRouter(db, remote ? { id: `${remote}:fixture`, kind: remote } : backend.identity, remote ? undefined : runtime))
   server = await new Promise<Server>(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)) })
   const address = server.address(); base = `http://127.0.0.1:${typeof address === 'object' && address?.port}/api/feed-checks`
 }
@@ -79,10 +79,10 @@ it('checks the chosen folder once per feed and returns safe schedule fields', as
   expect(JSON.stringify(await snapshot())).not.toMatch(/leaseToken|etag|endpointGeneration|example.test/)
 })
 
-it('explains disabled collection and leaves FreshRSS controls unavailable', async () => {
-  await mount(true)
-  expect(await snapshot()).toMatchObject({ backend: 'freshrss', enabled: false, feeds: [] })
-  expect((await post('now', { expectedRevision: 0, expectedOrganizationRevision: 0, feedId })).body.error).toMatch(/FreshRSS manages/)
+it.each(['freshrss', 'miniflux'] as const)('leaves %s feed collection with the remote reader', async remote => {
+  await mount(remote)
+  expect(await snapshot()).toMatchObject({ backend: remote, enabled: false, feeds: [] })
+  expect((await post('now', { expectedRevision: 0, expectedOrganizationRevision: 0, feedId })).body.error).toContain(`${remote === 'miniflux' ? 'Miniflux' : 'FreshRSS'} manages`)
 })
 
 it('rejects checks when collection is disabled', async () => {

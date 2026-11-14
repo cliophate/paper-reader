@@ -9,6 +9,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { BriefingService } from './briefing.js'
 import { createAiChatModel, providerConfigured, providerAvailability, runAiBatch, aiEnabled } from './ai-provider.js'
 import { testOpenaiConnection } from './openai.js'
+import { BriefingLibraryService, BriefingReadError } from './briefing-library.js'
 import { DiscussionService, discussionSource } from './discussion.js'
 import { HeadlineService } from './headlines.js'
 import { openRuntimeStorage } from './runtime-storage.js'
@@ -25,6 +26,7 @@ import { previewFeed } from './feed-repair.js'
 import { FeedHttpError } from './feed-http.js'
 import { subscriptionToolsRoutes } from './subscription-tools-routes.js'
 import { freshRssImportStore } from './subscription-import-freshrss.js'
+import { minifluxImportStore } from './subscription-import-miniflux.js'
 import { discoveryTransport } from './discovery-transport.js'
 import { ReaderService } from './reader.js'
 import { fullTextRoute } from './fulltext-route.js'
@@ -73,6 +75,7 @@ const pulse = new PulseService(database, (prompt, input, schema) => runAiBatch(c
   providerConfigured(config) && config.collections.enabled)
 const topics = new TopicService(database, entriesSource, () => pulse.list().collections)
 const briefings = new BriefingService(config, database, entriesSource, reader, topics)
+const briefingLibrary = new BriefingLibraryService(database, ids => synchronizer.editEntries(ids, 'read', 'briefing'))
 const app = express()
 const discussions = new DiscussionService(database, createAiChatModel(config))
 logMemory('services ready')
@@ -101,7 +104,8 @@ app.use((_request, response, next) => {
   next()
 })
 app.use(requireSameOrigin(config.publicUrl))
-app.use('/api/subscription-tools', subscriptionToolsRoutes(standalone ? localImportStore(database, backend.identity.id) : freshRssImportStore(backend, synchronizer), discoveryTransport(config.trustedFeedOrigins)))
+app.use('/api/subscription-tools', subscriptionToolsRoutes(standalone ? localImportStore(database, backend.identity.id)
+  : backend.identity.kind === 'miniflux' ? minifluxImportStore(backend, synchronizer) : freshRssImportStore(backend, synchronizer), discoveryTransport(config.trustedFeedOrigins)))
 app.use(express.json({ limit: '2mb' }))
 app.use(express.urlencoded({ extended: false }))
 app.use('/api/settings/connections', (error: unknown, _request: Request, response: Response, _next: NextFunction) => {
@@ -333,7 +337,7 @@ app.patch('/api/reports/:id', (request, response) => {
 })
 
 app.get('/api/briefings', (_request, response) => {
-  response.json(database.listBriefings().map(briefingSummary))
+  response.json(database.listBriefings().map(briefing => briefingLibrary.summary(briefing)))
 })
 
 app.get('/api/topics', asyncRoute(async (request, response) => {
@@ -372,8 +376,16 @@ app.delete('/api/pulse/feedback/:id', (request, response) => {
 app.get('/api/briefings/:id', (request, response) => {
   const briefing = database.getBriefing(String(request.params.id))
   if (!briefing) return response.status(404).json({ error: 'Briefing not found' })
-  response.json({ ...briefingSummary(briefing), html: briefing.html, text: briefing.text })
+  response.json(briefingLibrary.detail(briefing))
 })
+
+app.post('/api/briefings/:id/read', asyncRoute(async (request, response) => {
+  try { response.json(await briefingLibrary.markRead(String(request.params.id))) }
+  catch (error) {
+    if (error instanceof BriefingReadError) return response.status(error.status).json({ error: error.message })
+    throw error
+  }
+}))
 
 app.post('/api/briefings/:id/feedback', (request, response) => {
   const id = String(request.params.id)
@@ -660,7 +672,8 @@ app.get('/briefings/:id/confirm', (request, response) => {
   const token = String(request.query.token || '')
   if (!briefing || !token || !briefings.verifyToken(briefing, token)) return response.status(404).send(messagePage('This link is not valid.', 'Paper could not find this briefing.'))
   const count = database.entryIdsForBriefing(briefing.id).length
-  if (briefing.acknowledgedAt) return response.send(messagePage('Already marked read.', `${count} entries from this briefing are read in Paper.`))
+  const counts = database.briefingReadCounts(briefing.id)
+  if (briefing.acknowledgedAt && !counts.unreadCount && !counts.missingCount) return response.send(messagePage('Already marked read.', `${count} entries from this briefing are read in Paper.`))
   response.send(confirmPage(briefing.id, token, count, briefing.kind))
 })
 
@@ -668,10 +681,10 @@ app.post('/briefings/:id/confirm', asyncRoute(async (request, response) => {
   const briefing = database.getBriefing(String(request.params.id))
   const token = String(request.body?.token || '')
   if (!briefing || !token || !briefings.verifyToken(briefing, token)) return response.status(404).send(messagePage('This link is not valid.', 'Paper did not change article state.'))
-  if (!briefing.acknowledgedAt) {
-    const ids = database.entryIdsForBriefing(briefing.id)
-    await synchronizer.editEntries(ids, 'read', 'briefing')
-    database.markAcknowledged(briefing.id)
+  try { await briefingLibrary.markRead(briefing.id) }
+  catch (error) {
+    if (error instanceof BriefingReadError) return response.status(error.status).send(messagePage('Could not mark this briefing read.', error.message))
+    throw error
   }
   response.send(messagePage('You are caught up.', 'Paper marked the entries in this briefing as read.'))
 }))
@@ -765,22 +778,6 @@ function parseStreamBody(input: Record<string, unknown> | undefined): StreamRef 
 
 function stringArray(input: unknown): string[] {
   return Array.isArray(input) ? input.map(String).filter(Boolean) : []
-}
-
-function briefingSummary(briefing: import('./db.js').BriefingRecord) {
-  return {
-    id: briefing.id,
-    kind: briefing.kind,
-    subject: briefing.subject,
-    status: briefing.status,
-    windowStart: briefing.windowStart,
-    cutoff: briefing.cutoff,
-    createdAt: briefing.createdAt,
-    deliveredAt: briefing.deliveredAt,
-    acknowledgedAt: briefing.acknowledgedAt,
-    feedback: database.getBriefingFeedback(briefing.id),
-    entryCount: database.entryIdsForBriefing(briefing.id).length,
-  }
 }
 
 function requireInternalSecret(request: Request, response: Response, next: NextFunction) {

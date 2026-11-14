@@ -2,7 +2,6 @@ import type { DatabaseSync } from 'node:sqlite'
 import { transaction } from './transaction.js'
 import { OrganizationError } from './organization.js'
 
-export const DATABASE_VERSION = 13
 export const DEFAULT_CHECK_INTERVAL = 15
 export const MANUAL_CHECK_COOLDOWN_MS = 60_000
 

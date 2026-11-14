@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { DATABASE_VERSION } from '../src/server/database-version.js'
 import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -270,7 +271,7 @@ describe('v8 migration and FreshRSS snapshots', () => {
     saved.close()
     const bytes = fs.readFileSync(backup)
     reopen()
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(13)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
     expect(db.localNavigation()).toEqual(db.numberNavigation(navigation))
     db.replaceNavigation(navigation)
     expect(db.localNavigation()).toEqual(db.numberNavigation(navigation))
@@ -288,13 +289,13 @@ describe('v8 migration and FreshRSS snapshots', () => {
     const backup = fs.readFileSync(`${file}.before-organization-v8`)
     sql(c => c.exec('DROP VIEW organization_revisions'))
     reopen()
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(13)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
     expect(fs.readFileSync(`${file}.before-organization-v8`)).toEqual(backup)
   })
 
   it('rejects newer schemas and corrupt pre-upgrade backups', () => {
     remoteFixture()
-    sql(c => c.exec('PRAGMA user_version = 14'))
+    sql(c => c.exec(`PRAGMA user_version = ${DATABASE_VERSION + 1}`))
     expect(() => new PaperDatabase(file)).toThrow(/newer Paper/)
     sql(c => c.exec('PRAGMA user_version = 7'))
     fs.writeFileSync(`${file}.before-organization-v8`, 'not a database')

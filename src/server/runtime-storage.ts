@@ -10,6 +10,7 @@ export async function openRuntimeStorage() {
   const storage = await openCoordinatedStorage(stateDirectory())
   try {
     const backend = createReaderBackend(config, storage.database)
+    await backend.initialize?.()
     storage.database.bindBackend(backend.identity)
     const secrets = runtimeSecrets(storage.stateDir)
     Object.assign(config, loadConfig(secrets))

@@ -26,9 +26,11 @@ export class BackendSynchronizer {
     private readonly enabled: boolean,
     private readonly syncMinutes: number[],
   ) {
-    if (backend.identity.kind !== 'freshrss') throw new Error('Local state cannot use remote snapshot synchronization')
+    if (backend.identity.kind === 'standalone') throw new Error('Local state cannot use remote snapshot synchronization')
     db.bindBackend(backend.identity)
   }
+
+  private get backendName() { return this.backend.identity.kind === 'miniflux' ? 'Miniflux' : 'FreshRSS' }
 
   start() {
     if (this.stopped || !this.enabled || this.timer) return
@@ -99,7 +101,7 @@ export class BackendSynchronizer {
         this.db.recordActivity({ kind: 'feed', origin: 'settings', summary: `Added ${title || url}`, count: 1, details: { url, title, folder } })
         return {}
       } catch {
-        return { refreshError: 'FreshRSS confirmed the subscription, but Paper could not refresh its local cache. Refresh before making more changes.' }
+        return { refreshError: `${this.backendName} confirmed the subscription, but Paper could not refresh its local cache. Refresh before making more changes.` }
       }
     })
   }
@@ -122,10 +124,18 @@ export class BackendSynchronizer {
 
   async applyOrganizationCommand(command: OrganizationCommand): Promise<{ refreshError?: string }> {
     return this.exclusive(async () => {
-      if (command.type !== 'rename-feed' && command.type !== 'move-feed' && command.type !== 'unsubscribe') throw new OrganizationError('invalid', 'FreshRSS does not support this organization operation.')
+      if (command.type !== 'rename-feed' && command.type !== 'move-feed' && command.type !== 'unsubscribe') throw new OrganizationError('invalid', 'This backend does not support this organization operation.')
       const capability = command.type === 'rename-feed' ? 'renameFeed' : command.type === 'move-feed' ? 'moveFeed' : 'unsubscribe'
       if (!this.backend.organizationCapabilities[capability]) throw new OrganizationError('invalid', 'This backend does not support this organization operation.')
       this.backend.validateFeedId(command.feedId, command.type === 'unsubscribe' ? 'remove' : 'edit')
+      if (this.backend.applyFeedCommand) {
+        await this.backend.applyFeedCommand(command)
+        try {
+          if (this.enabled) await this.pullNavigation()
+          this.db.recordActivity({ kind: 'feed', origin: 'sidebar', summary: `Organization: ${command.type}`, count: 1, details: { id: command.feedId } })
+          return {}
+        } catch { return { refreshError: `${this.backendName} confirmed the change, but Paper could not refresh its local cache. Reload before making more changes.` } }
+      }
       // Resolve metadata inside the write queue so a concurrent rename cannot
       // be overwritten by a move prepared against an older local snapshot.
       const navigation = await this.backend.navigation()
@@ -205,9 +215,12 @@ export class BackendSynchronizer {
     this.db.setSyncValue('last_sync_error', '')
     try {
       await this.pullNavigation()
-      await this.restoreSourceContent()
-      if (this.db.getSyncValue('backfill_complete') !== 'true') await this.backfill()
-      else await this.incremental(startedAt)
+      if (this.backend.importPage) await this.importChanges(startedAt)
+      else {
+        await this.restoreSourceContent()
+        if (this.db.getSyncValue('backfill_complete') !== 'true') await this.backfill()
+        else await this.incremental(startedAt)
+      }
       const reconciliation = await this.reconcileState()
       const completedAt = new Date().toISOString()
       this.db.setSyncValue('last_sync_completed_at', completedAt)
@@ -246,6 +259,29 @@ export class BackendSynchronizer {
       console.error('Paper synchronization failed', error)
       throw error
     }
+  }
+
+  private async importChanges(startedAt: Date) {
+    const backfill = this.db.getSyncValue('backfill_complete') !== 'true'
+    const before = this.db.getSyncValue('native_import_before') || startedAt.toISOString()
+    const previous = this.db.getSyncValue('native_changed_until')
+    const after = this.db.getSyncValue('native_import_after') || (!backfill && previous ? new Date(Date.parse(previous) - INCREMENTAL_OVERLAP_MS).toISOString() : '')
+    let continuation = this.db.getSyncValue('native_import_continuation')
+    const seen = new Set<string>(continuation ? [continuation] : [])
+    for (let pages = 0; pages < 10000; pages++) {
+      const page = await this.backend.importPage!({ limit: 250, continuation, changedAfter: after ? new Date(after) : undefined, changedBefore: new Date(before) })
+      if (page.continuation && seen.has(page.continuation)) throw new Error('Remote import continuation did not advance')
+      const complete = !page.continuation
+      this.db.saveRemotePage(page.items, {
+        native_import_before: complete ? '' : before, native_import_after: complete ? '' : after,
+        native_import_continuation: page.continuation,
+        ...(backfill ? { backfill_continuation: page.continuation } : {}),
+        ...(complete ? { backfill_complete: 'true', native_changed_until: before } : {}),
+      })
+      if (complete) return
+      continuation = page.continuation; seen.add(continuation)
+    }
+    throw new Error('Remote import exceeded the page limit; resume synchronization to continue')
   }
 
   private async restoreSourceContent() {
