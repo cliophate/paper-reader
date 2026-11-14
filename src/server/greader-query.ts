@@ -57,7 +57,28 @@ export function where(q: Query) {
 }
 export const FROM = 'FROM entries e JOIN article_arrivals a ON a.entry_id = e.id JOIN article_identities ai ON ai.id = e.id JOIN feeds f ON f.id = e.feed_id'
 type Row = Record<string, string | number | bigint | null | Uint8Array>
-export function rows(db: DatabaseSync, sql: string, args: SQLInputValue[] = []): Row[] { const stmt = db.prepare(sql); stmt.setReadBigInts(true); return stmt.all(...args) }
+export function rows(db: DatabaseSync, sql: string, args: SQLInputValue[] = [], budget = Infinity): Row[] {
+  const stmt = db.prepare(sql); stmt.setReadBigInts(true)
+  const result: Row[] = []; let bytes = 0
+  for (const row of stmt.iterate(...args)) {
+    bytes += Object.values(row).reduce<number>((sum, value) => sum + (typeof value === 'string' ? Buffer.byteLength(value) : 16), 0)
+    if (bytes > budget) throw new ReaderError('Response is too large.', 413)
+    result.push(row)
+  }
+  return result
+}
+function contentRows(db: DatabaseSync, sql: string, args: SQLInputValue[], limit: number) {
+  const stmt = db.prepare(sql); stmt.setReadBigInts(true)
+  const values: ReturnType<typeof item>[] = []; let bytes = 0, last: string | undefined, more = false
+  for (const row of stmt.iterate(...args)) {
+    if (values.length === limit) { more = true; break }
+    const value = item(db, row)
+    bytes += Buffer.byteLength(JSON.stringify(value)) + 1
+    if (bytes > 20 * 1024 * 1024) throw new ReaderError('Response is too large.', 413)
+    values.push(value); last = String(row.sequence)
+  }
+  return { values, last: more ? last : undefined }
+}
 function categories(db: DatabaseSync, feed: string) {
   const folders = db.prepare('SELECT title FROM folders JOIN feed_folders ON folder_id = folders.id WHERE feed_id = ? ORDER BY folders.position, folders.id').all(feed)
   return folders.length ? folders.map(row => `${LABEL}${row.title}`) : [`${LABEL}Uncategorized`]
@@ -88,23 +109,35 @@ export function page(db: DatabaseSync, q: Query, contents: boolean) {
   const high = q.high || String(rows(db, 'SELECT coalesce(max(sequence),0) AS n FROM article_arrivals')[0].n)
   const filter = where({ ...q, high })
   const scan = scanFrom(q, contents)
-  const result = rows(db, `SELECT ${contents ? CONTENT : 'a.sequence'} ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY a.sequence ${q.order} LIMIT ?`, [...filter.args, q.n + 1])
-  const more = result.length > q.n; result.splice(q.n)
-  return { high, last: more ? String(result.at(-1)!.sequence) : undefined, values: contents ? result.map(row => item(db, row)) : result.map(row => ({ id: String(row.sequence) })) }
+  const sql = `SELECT ${contents ? CONTENT : 'a.sequence'} ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY a.sequence ${q.order} LIMIT ?`
+  const args = [...filter.args, q.n + 1]
+  if (contents) return { high, ...contentRows(db, sql, args, q.n) }
+  const result = rows(db, sql, args), more = result.length > q.n; result.splice(q.n)
+  return { high, last: more ? String(result.at(-1)!.sequence) : undefined, values: result.map(row => ({ id: String(row.sequence) })) }
 }
 export function explicit(db: DatabaseSync, backend: string, ids: string[], order: string) {
-  return rows(db, `SELECT ${CONTENT} FROM article_arrivals a CROSS JOIN entries e ON e.id = a.entry_id CROSS JOIN article_identities ai ON ai.id = e.id CROSS JOIN feeds f ON f.id = e.feed_id WHERE ai.backend_id = ? AND a.sequence IN (${ids.map(() => '?').join(',')}) ORDER BY a.sequence ${order === 'ASC' ? 'ASC' : 'DESC'}`, [backend, ...ids.map(BigInt)]).map(row => item(db, row))
+  return contentRows(db, `SELECT ${CONTENT} FROM article_arrivals a CROSS JOIN entries e ON e.id = a.entry_id CROSS JOIN article_identities ai ON ai.id = e.id CROSS JOIN feeds f ON f.id = e.feed_id WHERE ai.backend_id = ? AND a.sequence IN (${ids.map(() => '?').join(',')}) ORDER BY a.sequence ${order === 'ASC' ? 'ASC' : 'DESC'}`, [backend, ...ids.map(BigInt)], 250).values
 }
 export function metadata(db: DatabaseSync, kind: string, backend: string) {
-  const feeds = rows(db, `SELECT f.*, l.number FROM feeds f JOIN link_numbers l ON l.target_id = f.id AND l.kind = 'feed' JOIN subscription_identities si ON si.id = f.id WHERE active = 1 AND si.backend_id = ? ORDER BY f.position, f.id`, [backend])
-  const folders = db.prepare('SELECT id, title FROM folders ORDER BY position, id').all()
-  if (kind === 'subscription/list') return { subscriptions: feeds.map(f => ({ id: `feed/${f.number}`, title: String(f.title), url: safeUrl(f.url), htmlUrl: safeUrl(f.site_url), iconUrl: safeUrl(f.icon_url), categories: categories(db, String(f.id)).map(id => ({ id, label: id.slice(LABEL.length) })) })) }
+  const folders = rows(db, 'SELECT id, title FROM folders ORDER BY position, id', [], 4 * 1024 * 1024)
   if (kind === 'tag/list') return { tags: [{ id: `${STATE}starred` }, { id: READING }, ...[...folders.map(f => String(f.title)), 'Uncategorized'].map(title => ({ id: `${LABEL}${title}`, type: 'folder' }))] }
+  const fields = kind === 'subscription/list' ? 'f.title, f.url, f.site_url, f.icon_url,' : ''
+  const feeds = rows(db, `SELECT ${fields} f.id, l.number FROM feeds f JOIN link_numbers l ON l.target_id = f.id AND l.kind = 'feed' JOIN subscription_identities si ON si.id = f.id WHERE active = 1 AND si.backend_id = ? ORDER BY f.position, f.id`, [backend], 4 * 1024 * 1024)
+  if (kind === 'subscription/list') {
+    let bytes = 0
+    const subscriptions = feeds.map(f => {
+      const value = { id: `feed/${f.number}`, title: String(f.title), url: safeUrl(f.url), htmlUrl: safeUrl(f.site_url), iconUrl: safeUrl(f.icon_url), categories: categories(db, String(f.id)).map(id => ({ id, label: id.slice(LABEL.length) })) }
+      bytes += Buffer.byteLength(JSON.stringify(value)) + 1
+      if (bytes > 4 * 1024 * 1024) throw new ReaderError('Response is too large.', 413)
+      return value
+    })
+    return { subscriptions }
+  }
   const counts = rows(db, `SELECT e.feed_id, count(*) AS n, max(e.first_seen_at) AS newest
     FROM entries e INDEXED BY greader_unread JOIN article_identities ai ON ai.id = e.id JOIN feeds f ON f.id = e.feed_id
     WHERE e.read = 0 AND ai.backend_id = ? AND f.active = 1 AND NOT EXISTS(SELECT 1 FROM muted_entries WHERE entry_id = e.id) GROUP BY e.feed_id`, [backend])
   const byFeed = new Map(counts.map(row => [String(row.feed_id), { count: Number(row.n), newest: BigInt(row.newest as bigint) }]))
-  const memberships = db.prepare('SELECT feed_id, folder_id FROM feed_folders').all()
+  const memberships = rows(db, 'SELECT feed_id, folder_id FROM feed_folders', [], 4 * 1024 * 1024)
   const members = new Map<string, Set<string>>()
   const categorized = new Set<string>()
   for (const row of memberships) { const key = String(row.folder_id); if (!members.has(key)) members.set(key, new Set()); members.get(key)!.add(String(row.feed_id)); categorized.add(String(row.feed_id)) }

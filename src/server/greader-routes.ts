@@ -42,6 +42,11 @@ async function params(req: Request, login: boolean) {
   for (const [key, value] of body) query.append(key, value)
   return query
 }
+function jsonResponse(res: Response, value: unknown, limit: number) {
+  const body = JSON.stringify(value)
+  if (Buffer.byteLength(body) > limit) throw new ReaderError('Response is too large.', 413)
+  res.type('json').send(body)
+}
 function integer(value: string | null, fallback = 0) {
   if (value === null) return fallback
   if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > Number.MAX_SAFE_INTEGER / 1000) throw new ReaderError('Invalid integer.')
@@ -86,12 +91,16 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
       const login = path === '/accounts/ClientLogin'
       let endpoint = path.startsWith('/reader/api/0/') ? path.slice(14) : ''
       let pathStream = ''
-      if (endpoint.startsWith('stream/contents/')) { pathStream = decodeURIComponent(endpoint.slice(16)); endpoint = 'stream/contents' }
+      if (endpoint.startsWith('stream/contents/')) {
+        try { pathStream = decodeURIComponent(endpoint.slice(16)) } catch { throw new ReaderError('Invalid stream encoding.') }
+        endpoint = 'stream/contents'
+      }
       if (login ? req.method !== 'POST' : !GREADER_ENDPOINTS[endpoint] || GREADER_ENDPOINTS[endpoint].method !== req.method) throw new ReaderError('Not found.', 404)
       const p = await params(req, login)
       const allowed = login ? ['Email', 'Passwd', 'output', 'client', 'accountType', 'service'] : [...GREADER_ENDPOINTS[endpoint].fields, 'output', 'client', 'ck']
       for (const key of p.keys()) if (!allowed.includes(key)) throw new ReaderError('Unsupported parameter.')
-      for (const key of new Set(p.keys())) if (!['i', 'it', 'xt', 's', 'a', 'r'].includes(key) && p.getAll(key).length !== 1) throw new ReaderError('Duplicate parameter.')
+      const repeated = endpoint === 'edit-tag' ? ['i', 'a', 'r'] : endpoint === 'subscription/edit' ? ['s', 'a', 'r'] : endpoint === 'disable-tag' ? ['s'] : endpoint === 'stream/items/contents' ? ['i'] : ['stream/items/ids', 'stream/contents'].includes(endpoint) ? ['it', 'xt'] : []
+      for (const key of new Set(p.keys())) if (!repeated.includes(key) && p.getAll(key).length !== 1) throw new ReaderError('Duplicate parameter.')
       if (login) {
         const app = await db.auth.checkApp(p.get('Email') || '', p.get('Passwd') || '', req.ip || '', String(auth.settings().username))
         if (!auth.enabled()) throw new ReaderError('Not found.', 404)
@@ -115,7 +124,7 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
         if (!mutation) {
           const r = p.get('r') || 'd'; if (!['d', 'n', 'o'].includes(r)) throw new ReaderError('Invalid order.')
           const body = await reads.run({ path: db.searchDatabasePath, kind: 'contents', backend, ids, order: r === 'o' ? 'ASC' : 'DESC' }, abort.signal, true)
-          res.json({ id: READING, updated: Math.floor(Date.now() / 1000), items: JSON.parse(body) }); return
+          jsonResponse(res, { id: READING, updated: Math.floor(Date.now() / 1000), items: JSON.parse(body) }, 20 * 1024 * 1024); return
         }
         const fields: { read?: boolean; starred?: boolean } = {}
         for (const [key, value] of p) if (key === 'a' || key === 'r') {
@@ -133,7 +142,7 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
         const order = p.get('r') || 'd', n = integer(p.get('n'), 20)
         if (!['d', 'n', 'o'].includes(order) || n < 1 || n > 10000 || p.getAll('it').length + p.getAll('xt').length > 16) throw new ReaderError('Invalid stream parameters.')
         const raw = { s: streamName, it: p.getAll('it').sort(), xt: p.getAll('xt').sort(), ot: integer(p.get('ot')), nt: integer(p.get('nt')), order }
-        const binding = JSON.stringify(raw)
+        const binding = auth.sign('cursor-request', JSON.stringify(raw))
         let q: Query
         if (p.has('c')) {
           const cursor = p.get('c')!, parts = cursor.split('.')
@@ -151,7 +160,7 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
           const result = JSON.parse(await reads.run({ path: db.searchDatabasePath, kind: endpoint === 'stream/items/ids' ? 'ids' : 'page', query: q }, abort.signal, true))
           let continuation: string | undefined
           if (result.last) { const payload = Buffer.from(JSON.stringify({ v: 1, binding, expires: Date.now() + 86400000, query: { ...q, high: result.high, last: result.last } })).toString('base64url'); continuation = `${payload}.${auth.sign('cursor', payload)}` }
-          res.json(endpoint === 'stream/items/ids' ? { itemRefs: result.values, ...(continuation ? { continuation } : {}) } : { id: streamName, updated: Math.floor(Date.now() / 1000), items: result.values, ...(continuation ? { continuation } : {}) }); return
+          jsonResponse(res, endpoint === 'stream/items/ids' ? { itemRefs: result.values, ...(continuation ? { continuation } : {}) } : { id: streamName, updated: Math.floor(Date.now() / 1000), items: result.values, ...(continuation ? { continuation } : {}) }, endpoint === 'stream/items/ids' ? 128 * 1024 : 20 * 1024 * 1024); return
         }
       } else if (['subscription/list', 'tag/list', 'unread-count'].includes(endpoint)) {
         const key = cacheKey()

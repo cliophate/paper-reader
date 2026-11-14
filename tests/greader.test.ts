@@ -4,18 +4,20 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import express from 'express'
-import { afterAll, beforeAll, expect, it } from 'vitest'
+import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import { request as httpRequest, type Server } from 'node:http'
 import { PaperDatabase } from '../src/server/db'
 import { ingestFeed } from '../src/server/feed-ingestion'
 import { GreaderAuth } from '../src/server/greader-auth'
 import { greaderRoutes } from '../src/server/greader-routes'
+import { GreaderPool } from '../src/server/greader-pool'
 import { AuthConnections } from '../src/server/auth-connections'
 import { LocalStateService } from '../src/server/local-state'
 import { itemNumber, longId, MAX_ID, READING, STATE, LABEL, page } from '../src/server/greader-query'
 import { requireAllowedHost, requireSameOrigin } from '../src/server/request-origin'
 import { authGate } from '../src/server/auth-routes'
 
+let connections: AuthConnections
 let dir: string, db: PaperDatabase, auth: GreaderAuth, api: ReturnType<typeof greaderRoutes>, server: Server, base: string, backend: string, password: string, bearer: string, token: string, feed: string
 beforeAll(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-greader-test-')); db = new PaperDatabase(path.join(dir, 'paper.sqlite'))
@@ -24,7 +26,7 @@ beforeAll(async () => {
     xml: `<rss version="2.0"><channel><title>Fixture</title>${Array.from({ length: 260 }, (_, i) => `<item><guid>${i}</guid><title>Article ${i}</title><link>https://example.test/${i}</link><description>${'Synthetic body. '.repeat(200)}</description><pubDate>2000-01-01T00:00:00Z</pubDate></item>`).join('')}</channel></rss>` })
   password = (await db.auth.createApp('synthetic', null)).password
   auth = new GreaderAuth(db.greaderDatabase, db.auth, true, 'http://localhost')
-  const app = express(), connections = new AuthConnections(db.auth)
+  const app = express(); connections = new AuthConnections(db.auth)
   app.use(requireAllowedHost('http://localhost')); app.use(requireSameOrigin('http://localhost')); app.use(authGate(db.auth, connections))
   api = greaderRoutes(db, auth, backend, new LocalStateService(db, backend), connections, async () => { throw new Error('Synthetic discovery refuses network access') })
   app.use(api.handler)
@@ -64,6 +66,37 @@ it('clamps pages, binds signed continuations and freezes arrival high water', as
   expect(data.items).toHaveLength(1)
   expect(data.items[0]).toMatchObject({ id: longId(BigInt(first.itemRefs[0].id)), title: expect.any(String), author: expect.any(String), published: expect.any(Number), crawlTimeMsec: expect.any(String), timestampUsec: expect.any(String), summary: { content: expect.any(String) }, origin: { streamId: expect.stringMatching(/^feed\/\d+$/) }, categories: expect.any(Array) })
 })
+it('rejects expired continuations and keeps their signing key across restart', async () => {
+  const fields: [string,string][] = [['s',READING],['n','2']]
+  const data = await (await call('stream/items/ids',fields)).json()
+  const [payload,signature] = data.continuation.split('.')
+  const reopened = new PaperDatabase(db.searchDatabasePath)
+  const restarted = new GreaderAuth(reopened.greaderDatabase,reopened.auth,true,'http://localhost')
+  expect(restarted.sign('cursor',payload)).toBe(signature)
+  reopened.close()
+  const saved = JSON.parse(Buffer.from(payload,'base64url').toString()); saved.expires=Date.now()-1
+  const expired = Buffer.from(JSON.stringify(saved)).toString('base64url')
+  expect((await call('stream/items/ids',[...fields,['c',`${expired}.${auth.sign('cursor',expired)}`]])).status).toBe(400)
+  expect((await call('stream/items/ids',[...fields,['c',data.continuation]])).status).toBe(200)
+})
+it('serves encoded folder contents and keeps continuation identity through rename', async () => {
+  const name = 'Path / + % Café', stream = `${LABEL}${name}`
+  const created = db.organization.apply(backend,db.organization.snapshot(backend).revision,[{type:'create-folder',title:name}]).results[0]
+  if (created.status !== 'applied') throw new Error('Fixture folder failed')
+  const folderId = created.id!
+  db.organization.apply(backend,db.organization.snapshot(backend).revision,[{type:'add-membership',feedId:feed,folderId}])
+  const fields: [string,string][] = [['s',stream],['n','2'],['r','o']]
+  const first = await (await call('stream/contents',fields)).json()
+  const encoded = await (await call(`stream/contents/${encodeURIComponent(stream)}`,[['n','2'],['r','o']])).json()
+  expect(encoded.items).toEqual(first.items)
+  expect(first.items[0].id).toBe(longId(1n))
+  db.organization.apply(backend,db.organization.snapshot(backend).revision,[{type:'rename-folder',folderId,title:'Renamed path'}])
+  const next = await (await call('stream/contents',[...fields,['c',first.continuation]])).json()
+  expect(next.items[0].id).toBe(longId(3n))
+  expect((await call('stream/contents',fields)).status).toBe(404)
+  db.organization.apply(backend,db.organization.snapshot(backend).revision,[{type:'remove-folder',folderId}])
+  expect((await call('stream/contents',[...fields,['c',first.continuation]])).status).toBe(404)
+})
 it('commits read and star once, preserves no-ops and rejects labels atomically', async () => {
   const sql = db.greaderDatabase, id = String(sql.prepare('SELECT entry_id FROM article_arrivals WHERE sequence = 1').get()!.entry_id)
   expect((await call('edit-tag', [['i', '1'], ['a', `${STATE}read`], ['a', `${STATE}starred`], ['T', token]], 'POST')).status).toBe(200)
@@ -84,6 +117,14 @@ it('enforces Auth, T, origin, host, methods and body bounds', async () => {
   expect(await new Promise(resolve => { const req = httpRequest(base + '/reader/api/0/token', { headers: { Host: 'evil.test' } }, res => { res.resume(); resolve(res.statusCode) }); req.end() })).toBe(421)
   expect((await call('subscription/import', [], 'POST')).status).toBe(404)
   expect((await call('stream/items/contents', [['i', '1'], ['T', 'x']], 'POST')).status).toBe(403)
+  expect((await call('stream/items/contents', [['i', '1'], ['r', 'o'], ['r', 'd']], 'POST')).status).toBe(400)
+})
+it('rejects oversized batches and login bodies without accepting cookie-only authority', async () => {
+  expect((await call('stream/items/contents',Array.from({length:251},(_,i)=>['i',String(i+1)]),'POST')).status).toBe(413)
+  expect((await call('edit-tag',[...Array.from({length:1001},(_,i):[string,string]=>['i',String(i+1)]),['a',`${STATE}read`],['T',token]],'POST')).status).toBe(413)
+  expect((await call('/accounts/ClientLogin',[['Email','reader'],['Passwd','x'.repeat(8192)]],'POST')).status).toBe(413)
+  expect((await call('token',[],'GET',{Authorization:'',Cookie:'paper_session=synthetic'})).status).toBe(401)
+  expect((await call('stream/contents/%E0%A4%A')).status).toBe(400)
 })
 it('filters arrival and modification times with inclusive boundaries and intersecting states', () => {
   const sql = db.greaderDatabase
@@ -162,6 +203,18 @@ it('limits authenticated traffic and rejects the owner password as an app passwo
 })
 it('revokes persistent bearer credentials and disables FreshRSS', async () => {
   expect(new GreaderAuth(db.greaderDatabase, db.auth, false, 'http://localhost').enabled()).toBe(false)
-  db.auth.revokeAllApps(); expect((await call('token')).status).toBe(401)
+  await delay(1100)
+  let entered!: () => void
+  const running = new Promise<void>(resolve => { entered=resolve })
+  const blocked = vi.spyOn(GreaderPool.prototype,'run').mockImplementationOnce((_input,signal) => {
+    entered(); return new Promise((_resolve,reject) => signal.addEventListener('abort',()=>reject(new Error('cancelled')),{once:true}))
+  })
+  const pending = call('stream/items/ids',[['s',READING]])
+  await running
+  db.auth.revokeAllApps(); connections.check()
+  const closed = await pending
+  expect(closed.status).toBe(401); expect(await closed.json()).toEqual({errors:['Unauthorized.']})
+  blocked.mockRestore()
+  expect((await call('token')).status).toBe(401)
   await db.auth.recover('disable'); expect(auth.enabled()).toBe(false)
 })

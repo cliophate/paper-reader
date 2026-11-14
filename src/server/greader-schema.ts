@@ -18,10 +18,13 @@ export function migrateGreader(db: DatabaseSync) {
       CREATE TRIGGER greader_insert AFTER INSERT ON entries BEGIN
         UPDATE entries SET greader_modified_ms = new.first_seen_at WHERE id = new.id;
       END;
-      CREATE TRIGGER greader_content AFTER UPDATE OF title, author, url, canonical_url, content_html, published_at, read, starred ON entries
+      CREATE TRIGGER greader_content AFTER UPDATE OF title, author, url, canonical_url, content_html, published_at ON entries
       WHEN old.greader_modified_ms = new.greader_modified_ms AND (old.title IS NOT new.title OR old.author IS NOT new.author OR old.url IS NOT new.url
         OR old.canonical_url IS NOT new.canonical_url OR old.content_html IS NOT new.content_html
-        OR old.published_at IS NOT new.published_at OR old.read IS NOT new.read OR old.starred IS NOT new.starred)
+        OR old.published_at IS NOT new.published_at)
+      BEGIN UPDATE entries SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE id = new.id; END;
+      CREATE TRIGGER greader_state AFTER UPDATE OF read, starred ON entries
+      WHEN old.greader_modified_ms = new.greader_modified_ms AND (old.read IS NOT new.read OR old.starred IS NOT new.starred)
       BEGIN UPDATE entries SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE id = new.id; END;
       CREATE TRIGGER greader_feed AFTER UPDATE OF title, url, site_url, active ON feeds
       WHEN old.title IS NOT new.title OR old.url IS NOT new.url OR old.site_url IS NOT new.site_url OR old.active IS NOT new.active

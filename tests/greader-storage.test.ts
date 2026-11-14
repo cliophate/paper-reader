@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { PaperDatabase } from '../src/server/db'
 import { GreaderOrganization } from '../src/server/greader-organization'
-import { LABEL, item, resolveStream, STATE } from '../src/server/greader-query'
+import { LABEL, item, resolveStream, STATE, explicit, metadata, page } from '../src/server/greader-query'
 import { GreaderPool } from '../src/server/greader-pool'
 import { GreaderAuth } from '../src/server/greader-auth'
 
@@ -89,6 +89,15 @@ it('keeps effective modification timestamps unchanged on identical imports and t
   const first = row().greader_modified_ms
   ingestFeed(db, options); expect(row().greader_modified_ms).toBe(first)
   ingestFeed(db, { ...options, xml: options.xml.replace('Unchanged','Changed') }); expect(Number(row().greader_modified_ms)).toBeGreaterThan(Number(first))
+  const sql = db.greaderDatabase, changed = row().greader_modified_ms
+  sql.exec("INSERT INTO mute_filters VALUES ('mute', 'Changed', 'all', '', '')")
+  sql.prepare("INSERT INTO muted_entries VALUES ('mute', ?)").run(row().id)
+  expect(Number(row().greader_modified_ms)).toBeGreaterThan(Number(changed))
+  const muted = row().greader_modified_ms
+  ingestFeed(db,{...options,xml:options.xml.replace('Unchanged','Changed')})
+  expect(row().greader_modified_ms).toBe(muted)
+  sql.exec("DELETE FROM muted_entries WHERE filter_id='mute'")
+  expect(Number(row().greader_modified_ms)).toBeGreaterThan(Number(muted))
 })
 
 it('rolls back a killed writer and releases its SQLite lock', async () => {
@@ -131,4 +140,65 @@ it('retains a read slot until response delivery ends', async () => {
   const queued = pool.run({},second.signal)
   await expect(pool.run({},second.signal)).rejects.toMatchObject({status:503})
   first.abort(); expect(await queued).toBe('bounded response'); await pool.close()
+})
+
+async function seedArticles(count: number) {
+  const { ingestFeed } = await import('../src/server/feed-ingestion')
+  const options = { backendId: backend, subscriptionId: feed, endpointGeneration: 'fixture', requestUrl: 'https://example.test/feed', responseUrl: 'https://example.test/feed', fetchedAt: new Date().toISOString() }
+  const xml = `<rss version="2.0"><channel><title>Fixture</title>${Array.from({length:count}, (_,i) => `<item><guid>${i}</guid><title>Item ${i}</title></item>`).join('')}</channel></rss>`
+  ingestFeed(db, {...options, xml})
+  return { ingestFeed, options, xml }
+}
+it('rejects content overflow before collecting the full batch', async () => {
+  await seedArticles(250)
+  db.greaderDatabase.prepare('UPDATE entries SET author = ?').run('x'.repeat(100000))
+  expect(() => explicit(db.greaderDatabase,backend,Array.from({length:250},(_,i)=>String(i+1)),'DESC')).toThrow(expect.objectContaining({status:413}))
+})
+it('keeps strict web undo and rolls back reader state when activity fails', async () => {
+  await seedArticles(2)
+  const { LocalStateService } = await import('../src/server/local-state')
+  const service = new LocalStateService(db,backend)
+  const ids = db.greaderDatabase.prepare('SELECT id FROM entries ORDER BY rowid').all().map(row=>String(row.id))
+  const undo = { token:'synthetic-undo', expiresAt:new Date(Date.now()+60000).toISOString() }
+  db.commitLocalEntryState(backend,ids,'read',{undo})
+  service.editReaderNumbers([1n,2n],{read:true})
+  expect(db.entryState(ids[0])!.revision).toBe(1)
+  service.editReaderNumbers([1n],{starred:true})
+  expect(()=>service.undo(undo.token)).toThrow()
+  expect(ids.map(id=>db.entryState(id)!.read)).toEqual([true,true])
+  const before = ids.map(id=>db.entryState(id))
+  db.greaderDatabase.exec("CREATE TRIGGER fail_reader_activity BEFORE INSERT ON activity_events BEGIN SELECT RAISE(ABORT, 'fixture'); END")
+  expect(()=>service.editReaderNumbers([1n,2n],{read:false,starred:false})).toThrow(/fixture/)
+  expect(ids.map(id=>db.entryState(id))).toEqual(before)
+})
+it('reconciles actual retention deletions without recycling arrivals or reimporting tombstones', async () => {
+  const { ingestFeed,options,xml } = await seedArticles(2)
+  const { defaultPolicy,DAY } = await import('../src/server/retention-store')
+  const { LocalStateService } = await import('../src/server/local-state')
+  ingestFeed(db,{...options,xml:'<rss version="2.0"><channel><title>Fixture</title></channel></rss>'})
+  const sql = db.greaderDatabase
+  sql.prepare('UPDATE entries SET first_seen_at = ?').run(Date.now()-200*DAY)
+  sql.exec('UPDATE entries SET starred=1 WHERE rowid=2')
+  const run = db.retention.start({...defaultPolicy(),unreadDays:1})
+  expect(db.retention.batch(run,true).done).toBe(true)
+  const q = {backend,stream:{kind:'state' as const,id:'reading-list'},it:[],xt:[],ot:0,nt:0,order:'DESC' as const,n:250}
+  expect(page(sql,q,false).values.map(row=>row.id)).toEqual(['2'])
+  expect(explicit(sql,backend,['1','2'],'DESC').map(row=>row.id)).toEqual(['tag:google.com,2005:reader/item/0000000000000002'])
+  expect(metadata(sql,'unread-count',backend)).toMatchObject({max:1})
+  new LocalStateService(db,backend).editReaderNumbers([1n,2n],{read:true})
+  expect(ingestFeed(db,{...options,xml}).results[0].status).toBe('tombstoned')
+  ingestFeed(db,{...options,xml:xml.replace('<guid>0</guid>','<guid>new</guid>')})
+  expect(Number(sql.prepare('SELECT max(sequence) n FROM article_arrivals').get()!.n)).toBeGreaterThan(2)
+})
+
+it('keeps all bulk chunks atomic and increments each changed revision once', async () => {
+  await seedArticles(2001)
+  const sql = db.greaderDatabase
+  sql.exec("CREATE TRIGGER fail_bulk_activity BEFORE INSERT ON activity_events BEGIN SELECT RAISE(ABORT, 'fixture'); END")
+  expect(()=>db.commitReaderBulk(backend,'SELECT rowid FROM entries',[])).toThrow(/fixture/)
+  expect(sql.prepare('SELECT sum(read) n FROM entries').get()!.n).toBe(0)
+  sql.exec('DROP TRIGGER fail_bulk_activity')
+  expect(db.commitReaderBulk(backend,'SELECT rowid FROM entries',[])).toBe(2001)
+  expect(sql.prepare('SELECT min(state_revision) low,max(state_revision) high FROM entries').get()).toMatchObject({low:1,high:1})
+  expect(db.commitReaderBulk(backend,'SELECT rowid FROM entries',[])).toBe(0)
 })

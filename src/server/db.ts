@@ -420,10 +420,20 @@ export class PaperDatabase {
   commitReaderBulk(backendId: string, selection: string, parameters: import('node:sqlite').SQLInputValue[]) {
     return transaction(this.db, () => {
       this.assertLocalBackend(backendId)
-      this.db.exec('CREATE TEMP TABLE IF NOT EXISTS greader_bulk_ids(row_number INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL); DELETE FROM greader_bulk_ids')
+      this.db.exec('CREATE TEMP TABLE IF NOT EXISTS greader_bulk_ids(row_number INTEGER PRIMARY KEY); DELETE FROM greader_bulk_ids')
       this.db.prepare(`INSERT INTO greader_bulk_ids ${selection}`).run(...parameters)
-      const result = this.db.prepare(`UPDATE entries SET read = 1, state_revision = state_revision + 1, greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE read = 0 AND rowid IN (SELECT row_number FROM greader_bulk_ids)`).run()
-      const count = Number(result.changes)
+      // Bound each SQLite statement's temporary journal while keeping the whole
+      // operation in this transaction. No article bodies or ID array enter JS.
+      const boundary = this.db.prepare('SELECT max(row_number) AS last FROM (SELECT row_number FROM greader_bulk_ids WHERE row_number > ? ORDER BY row_number LIMIT 1000)')
+      boundary.setReadBigInts(true)
+      const update = this.db.prepare(`UPDATE entries SET read = 1, state_revision = state_revision + 1, greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE read = 0 AND rowid IN (SELECT row_number FROM greader_bulk_ids WHERE row_number > ? AND row_number <= ?)`)
+      let last = 0n, count = 0
+      for (;;) {
+        const end = boundary.get(last)?.last as bigint | null
+        if (end === null) break
+        count += Number(update.run(last, end).changes)
+        last = end
+      }
       if (count) this.recordActivity({ kind: 'state', origin: 'greader', summary: `read: ${count} articles`, count, details: { operation: 'read' } })
       return count
     })
