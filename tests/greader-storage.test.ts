@@ -1,0 +1,102 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { afterEach, beforeEach, expect, it } from 'vitest'
+import { PaperDatabase } from '../src/server/db'
+import { GreaderOrganization } from '../src/server/greader-organization'
+import { LABEL, item, resolveStream, STATE } from '../src/server/greader-query'
+import { GreaderPool } from '../src/server/greader-pool'
+import { GreaderAuth } from '../src/server/greader-auth'
+
+let directory: string, db: PaperDatabase, backend: string, feed: string
+beforeEach(() => { directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-greader-storage-')); db = new PaperDatabase(path.join(directory, 'paper.sqlite')); backend = db.bindStandalone().id; feed = db.saveLocalSubscription(backend, { title: 'Fixture', url: 'https://example.test/feed' }) })
+afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
+const form = (values: Record<string,string>) => new URLSearchParams(values)
+it('backs up v15 privately, migrates once and preserves settings on reopen', () => {
+  db.close()
+  const raw = new DatabaseSync(path.join(directory,'paper.sqlite'))
+  for (const row of raw.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'greader_%'").all()) raw.exec(`DROP TRIGGER ${row.name}`)
+  for (const row of raw.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'greader_%'").all()) raw.exec(`DROP INDEX ${row.name}`)
+  raw.exec('DROP TABLE greader_settings; ALTER TABLE entries DROP COLUMN greader_modified_ms; PRAGMA user_version = 15'); raw.close()
+  db = new PaperDatabase(path.join(directory,'paper.sqlite'))
+  const backup = path.join(directory,'paper.sqlite.before-greader-v16')
+  expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
+  const prior = new DatabaseSync(backup, { readOnly: true }); expect(prior.prepare('PRAGMA user_version').get()!.user_version).toBe(15); prior.close()
+  expect(db.greaderDatabase.prepare('SELECT enabled FROM greader_settings').get()!.enabled).toBe(0)
+  const key = db.greaderDatabase.prepare('SELECT key FROM greader_settings').get()!.key
+  db.close(); db = new PaperDatabase(path.join(directory,'paper.sqlite'))
+  expect(db.greaderDatabase.prepare('SELECT key FROM greader_settings').get()!.key).toBe(key)
+})
+it('rolls back organization batches, rejects ambiguous moves, and retains empty folders', () => {
+  const organization = new GreaderOrganization(db, backend, async () => { throw new Error() })
+  const stream = `feed/${db.linkNumber('feed',feed)}`
+  organization.edit('subscription/edit', form({ s: stream, ac: 'edit', a: `${LABEL}A / + % Café` }))
+  organization.edit('subscription/edit', form({ s: stream, ac: 'edit', a: `${LABEL}Second`, r: `${LABEL}Uncategorized` }))
+  expect(() => organization.edit('subscription/edit', form({ s: stream, ac: 'edit', a: `${LABEL}Third`, t: 'Must roll back' }))).toThrow(/multi-folder/)
+  expect(db.greaderDatabase.prepare('SELECT title FROM feeds WHERE id = ?').get(feed)!.title).toBe('Fixture')
+  const before = db.organization.snapshot(backend)
+  expect(() => organization.edit('disable-tag', new URLSearchParams([['s',`${LABEL}Second`],['s',`${STATE}read`]]))).toThrow()
+  expect(db.organization.snapshot(backend)).toEqual(before)
+  organization.edit('rename-tag', form({ s: `${LABEL}Second`, dest: `${LABEL}Renamed` }))
+  expect(() => resolveStream(db.greaderDatabase, `${LABEL}Second`)).toThrow()
+  organization.edit('subscription/edit', form({ s: stream, ac: 'unsubscribe' }))
+  expect(resolveStream(db.greaderDatabase, `${LABEL}Renamed`).kind).toBe('folder')
+  organization.edit('subscription/edit', form({ s: stream, ac: 'subscribe' }))
+  expect(resolveStream(db.greaderDatabase, stream).id).toBe(feed)
+})
+it('makes quickadd idempotent, rejects duplicate URLs and creates only through discovery', async () => {
+  let requests = 0
+  const organization = new GreaderOrganization(db, backend, async url => { requests++; return { responseUrl: url, body: '<rss version="2.0"><channel><title>New feed</title></channel></rss>', contentType: 'application/rss+xml' } })
+  expect((await organization.quickadd('https://example.test/feed')).streamId).toBe(`feed/${db.linkNumber('feed',feed)}`)
+  expect(requests).toBe(0)
+  db.saveLocalSubscription(backend, { title: 'Duplicate', url: 'https://example.test/feed' })
+  await expect(organization.quickadd('https://example.test/feed')).rejects.toMatchObject({ status: 409 })
+  const result = await organization.quickadd('https://example.test/new'); expect(result.numResults).toBe(1); expect(requests).toBe(1)
+})
+it('clips oversized HTML as escaped text and keeps summary bytes bounded', () => {
+  const result = item(db.greaderDatabase, { sequence: 1n, first_seen_at: 1000n, published_at: '', title: '', author: '', feed_id: feed, feed_number: 1n, origin_title: '', site_url: '', url: 'https://example.test/article', content_html: '<script>'.repeat(10000), content_text: '<&'.repeat(10000), read: 0n, starred: 0n })
+  expect(Buffer.byteLength(result.summary.content)).toBeLessThanOrEqual(65536)
+  expect(result.summary.content).not.toContain('<script>'); expect(result.summary.content).toContain('&lt;')
+})
+it('enforces process deadlines and releases cancelled and queued jobs on shutdown', async () => {
+  const worker = path.join(directory, 'blocked.mjs'); fs.writeFileSync(worker, "process.once('message', () => { while(true) {} })")
+  const pool = new GreaderPool(new URL(`file://${worker}`), 2, 16, 100)
+  const controller = new AbortController()
+  const jobs = Array.from({length: 18}, () => pool.run({}, controller.signal).catch(error => error))
+  await expect(pool.run({}, controller.signal)).rejects.toMatchObject({status:503})
+  expect((await jobs[0]).status).toBe(503)
+  controller.abort(); await pool.close()
+  expect((await Promise.all(jobs)).every(error => error.status === 503)).toBe(true)
+})
+it('requires transport, standalone mode and credentials and retains administrator passwords when login starts', async () => {
+  const api = new GreaderAuth(db.greaderDatabase, db.auth, true, 'http://localhost')
+  expect(() => api.configure(true,'reader')).toThrow(/password/)
+  const app = await db.auth.createApp('Synthetic',null)
+  expect(() => new GreaderAuth(db.greaderDatabase,db.auth,true,'http://example.test').configure(true,'reader')).toThrow(/HTTPS/)
+  expect(() => new GreaderAuth(db.greaderDatabase,db.auth,false,'https://example.test').configure(true,'reader')).toThrow(/standalone/)
+  api.configure(true,'reader'); await db.auth.setup(db.auth.setupCode(),'owner','synthetic owner password')
+  expect((await db.auth.checkApp('reader',app.password,'127.0.0.1','reader')).id).toBe(app.id)
+  await db.auth.recover('revoke-all'); expect(api.enabled()).toBe(true)
+  await db.auth.recover('disable'); expect(api.enabled()).toBe(false)
+})
+
+it('keeps effective modification timestamps unchanged on identical imports and tracks mute changes', async () => {
+  const { ingestFeed } = await import('../src/server/feed-ingestion')
+  const options = { backendId: backend, subscriptionId: feed, endpointGeneration: 'fixture', requestUrl: 'https://example.test/feed', responseUrl: 'https://example.test/feed', fetchedAt: new Date().toISOString(), xml: '<rss version="2.0"><channel><title>Fixture</title><item><guid>one</guid><title>First</title><description>Unchanged</description></item></channel></rss>' }
+  ingestFeed(db, options)
+  const row = () => db.greaderDatabase.prepare('SELECT id, greader_modified_ms FROM entries').get()!
+  const first = row().greader_modified_ms
+  ingestFeed(db, options); expect(row().greader_modified_ms).toBe(first)
+  ingestFeed(db, { ...options, xml: options.xml.replace('Unchanged','Changed') }); expect(Number(row().greader_modified_ms)).toBeGreaterThan(Number(first))
+})
+
+it('rolls back a killed writer and releases its SQLite lock', async () => {
+  const worker = path.join(directory, 'writer.mjs')
+  fs.writeFileSync(worker, `import { DatabaseSync } from 'node:sqlite'; process.once('message', job => { const db = new DatabaseSync(job.path); db.exec("BEGIN IMMEDIATE; UPDATE feeds SET title = 'uncommitted'"); while(true) {} })`)
+  const pool = new GreaderPool(new URL(`file://${worker}`), 1, 4, 150)
+  await expect(pool.run({ path: db.searchDatabasePath }, new AbortController().signal)).rejects.toMatchObject({ status: 503 })
+  await pool.close()
+  expect(db.greaderDatabase.prepare('SELECT title FROM feeds WHERE id = ?').get(feed)!.title).toBe('Fixture')
+  expect(() => db.saveLocalSubscription(backend, { title: 'After cancellation', url: 'https://example.test/after' })).not.toThrow()
+})

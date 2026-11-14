@@ -9,14 +9,15 @@ export class AuthConnections {
   private timer?: ReturnType<typeof setInterval>
   constructor(private store: AuthStore) {}
 
-  register(token: string, response: Response): boolean {
+  register(token: string, response: Response, appPermitted?: () => boolean): boolean {
     const existing = this.connections.get(response)
     if (existing) return existing()
     const enabled = this.store.enabled(), revision = this.store.revision()
-    const permitted = () => enabled ? !!this.store.session(token)
-      : !this.store.enabled() && this.store.revision() === revision
+    const permitted = appPermitted || (() => enabled ? !!this.store.session(token)
+      : !this.store.enabled() && this.store.revision() === revision)
+    const denied = appPermitted ? { errors: ['Unauthorized.'] } : { error: 'Sign in to Paper.', code: 'login-required' }
     if (!permitted()) {
-      response.status(401).json({ error: 'Sign in to Paper.', code: 'login-required' })
+      response.status(401).json(denied)
       return false
     }
     const write = response.write.bind(response), end = response.end.bind(response)
@@ -29,7 +30,7 @@ export class AuthConnections {
         // Replace a pending body, such as private JSON, with the login error.
         response.removeHeader('Content-Length'); response.removeHeader('ETag')
         response.status(401).set('Content-Type', 'application/json; charset=utf-8')
-        end(JSON.stringify({ error: 'Sign in to Paper.', code: 'login-required' }))
+        end(JSON.stringify(denied))
         return
       }
       end()

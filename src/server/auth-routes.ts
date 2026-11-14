@@ -1,3 +1,4 @@
+import { greaderPath, type GreaderAuth } from './greader-auth.js'
 import { randomBytes } from 'node:crypto'
 import { AuthConnections } from './auth-connections.js'
 import express, { type Request, type Response, type NextFunction } from 'express'
@@ -21,7 +22,10 @@ export const PUBLIC_AUTH_ROUTES = [
   'GET /api/auth/status', 'POST /api/auth/setup', 'POST /api/auth/login',
   'POST /api/auth/passkeys/options', 'POST /api/auth/passkeys/verify',
 ]
-export function routeAccess(method: string, pathname: string): 'public' | 'token' | 'session' {
+export function routeAccess(method: string, pathname: string): 'public' | 'token' | 'session' | 'app' {
+  if (greaderPath(pathname)) {
+    try { if (!/(?:^|[\/\\])\.\.?(?:[\/\\]|$)/.test(decodeURIComponent(pathname))) return 'app' } catch { /* Malformed paths retain the session gate. */ }
+  }
   // Express defaults to case-insensitive routes with an optional final slash.
   pathname = pathname.toLowerCase().replace(/\/$/, '') || '/'
   const read = method === 'GET' || method === 'HEAD'
@@ -46,7 +50,7 @@ export function authGate(store: AuthStore, connections = new AuthConnections(sto
     if (connections.register(token, response)) next()
   }
 }
-export function authRoutes(store: AuthStore, publicUrl: string) {
+export function authRoutes(store: AuthStore, publicUrl: string, reader?: GreaderAuth) {
   const router = express.Router()
   const url = new URL(publicUrl)
   const secure = url.protocol === 'https:'
@@ -61,7 +65,7 @@ export function authRoutes(store: AuthStore, publicUrl: string) {
   }
   router.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next() })
   router.use(express.json({ limit: '16kb' }))
-  router.get('/status', (req, res) => res.json({ enabled: store.enabled(), authenticated: !!store.session(cookie(req)), passwordEnabled: !!store.owner()?.password_enabled, passkeys: store.passkeys().length > 0 }))
+  router.get('/status', (req, res) => res.json({ enabled: store.enabled(), authenticated: !!store.session(cookie(req)), passwordEnabled: !!store.owner()?.password_enabled, passkeys: store.passkeys().length > 0, reader: reader?.status() }))
   router.post('/setup', async (req, res) => {
     requireTransport()
     const revision = await store.attempt('setup', req.ip || '', () => store.setup(String(req.body?.code || ''), req.body?.username, req.body?.password))
@@ -105,6 +109,10 @@ export function authRoutes(store: AuthStore, publicUrl: string) {
   router.get('/access', (req, res) => res.json({ username: store.owner()!.username, passwordEnabled: !!store.owner()!.password_enabled,
     passkeys: store.passkeys().map(({ id, name, created, used }) => ({ id, name, created, used })),
     sessions: store.sessions().map(item => ({ ...item, current: item.id === store.session(cookie(req))?.id })), apps: store.apps() }))
+  router.post('/reader', (req, res) => {
+    if (!reader || typeof req.body?.enabled !== 'boolean') throw new AuthError('Choose whether reader apps are enabled.')
+    reader.configure(req.body.enabled, req.body.username || store.owner()!.username); res.json(reader.status())
+  })
   router.post('/logout', (req, res) => { res.locals.authSessionChange = true; store.logout(cookie(req)); res.clearCookie(sessionCookie, cookieOptions).json({ ok: true }) })
   router.post('/sessions/sign-out-others', (req, res) => { store.signOutOthers(cookie(req)); res.json({ ok: true }) })
   router.post('/password', async (req, res) => {

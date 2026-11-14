@@ -1,3 +1,5 @@
+import { GreaderAuth } from './greader-auth.js'
+import { greaderRoutes } from './greader-routes.js'
 import { RetentionService } from './retention.js'
 import { retentionRouter } from './retention-routes.js'
 import { AuthConnections } from './auth-connections.js'
@@ -52,6 +54,8 @@ const UNDO_LIFETIME_MS = 20_000
 warnUnsafeAi()
 const storage = await openRuntimeStorage()
 const { config, database, backend } = storage
+// Bulk Reader writes run elsewhere. Web requests must fail promptly on contention.
+database.greaderDatabase.exec('PRAGMA busy_timeout = 50')
 let shuttingDown = false
 const eventResponses = new Set<Response>()
 const authConnections = new AuthConnections(database.auth)
@@ -110,7 +114,10 @@ app.use((_request, response, next) => {
 })
 app.use(requireSameOrigin(config.publicUrl))
 app.use(authGate(database.auth, authConnections))
-app.use('/api/auth', authRoutes(database.auth, config.publicUrl))
+const readerAuth = new GreaderAuth(database.greaderDatabase, database.auth, !!standalone, config.publicUrl)
+const greader = greaderRoutes(database, readerAuth, backend.identity.id, standalone?.state, authConnections, discoveryTransport(config.trustedFeedOrigins))
+app.use(greader.handler)
+app.use('/api/auth', authRoutes(database.auth, config.publicUrl, readerAuth))
 app.use('/api/subscription-tools', subscriptionToolsRoutes(standalone ? localImportStore(database, backend.identity.id) : freshRssImportStore(backend, synchronizer), discoveryTransport(config.trustedFeedOrigins)))
 app.use(express.json({ limit: '2mb' }))
 app.use(express.urlencoded({ extended: false }))
@@ -709,6 +716,7 @@ app.get('*splat', (_request, response) => response.sendFile('index.html', { root
 
 app.use((error: Error, request: Request, response: Response, _next: NextFunction) => {
   if (response.destroyed) return
+  if ([5, 6].includes((error as Error & { errcode?: number }).errcode || 0)) return response.status(503).set('Retry-After', '1').json({ error: 'The library is busy. Try again.' })
   if (error instanceof SearchUnavailableError) return response.status(503).json({ error: error.message })
   if (error instanceof StateConflictError) return response.status(409).json({ code: 'state-conflict', error: error.message, states: error.states })
   if (error instanceof UndoExpiredError) return response.status(410).json({ error: error.message })
@@ -745,6 +753,7 @@ async function markReadWithUndo(ids: string[], expectedRevisions?: Record<string
 async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
+  await greader.close()
   clearInterval(memoryTimer)
   // Native SQLite can delay both worker termination and process.exit(). At the
   // deadline, OS teardown kills every thread and releases its locks without

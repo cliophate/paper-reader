@@ -1,0 +1,100 @@
+[
+  {
+    "client": "NetNewsWire",
+    "commit": "7908c801bf7c97fa7cca9ef78cf51b33fb853e6a",
+    "contentBatch": 150,
+    "stateBatch": 1000,
+    "pageSize": 1000,
+    "idForm": "long",
+    "concurrentContent": 1,
+    "loginFields": [],
+    "sequence": [
+      "token",
+      "subscription/list",
+      "tag/list",
+      "unread",
+      "starred",
+      "read",
+      "history",
+      "contents",
+      "edit-tag",
+      "quickadd",
+      "subscription/edit",
+      "rename-tag",
+      "disable-tag"
+    ],
+    "ordinaryOutput": true,
+    "quickaddQueryAndBody": false
+  },
+  {
+    "client": "Read You",
+    "commit": "d2b979ccad9a3e54b9499929a9dc2824578b0fd9",
+    "contentBatch": 100,
+    "stateBatch": 500,
+    "pageSize": 1000,
+    "idForm": "decimal",
+    "concurrentContent": 1,
+    "loginFields": [
+      [
+        "output",
+        "json"
+      ],
+      [
+        "client",
+        "ReadYou"
+      ],
+      [
+        "accountType",
+        "HOSTED_OR_GOOGLE"
+      ],
+      [
+        "service",
+        "reader"
+      ]
+    ],
+    "sequence": [
+      "token",
+      "user-info",
+      "subscription/list",
+      "unread",
+      "starred",
+      "read",
+      "history",
+      "contents",
+      "edit-tag",
+      "quickadd",
+      "subscription/edit",
+      "rename-tag",
+      "disable-tag"
+    ],
+    "ordinaryOutput": true,
+    "quickaddQueryAndBody": true
+  },
+  {
+    "client": "Capy Reader",
+    "commit": "39882fe5b9a1d62ceb588354dde3cfbeb903424b",
+    "contentBatch": 250,
+    "stateBatch": 250,
+    "pageSize": 10000,
+    "idForm": "long",
+    "concurrentContent": 8,
+    "loginFields": [],
+    "sequence": [
+      "token",
+      "subscription/list",
+      "tag/list",
+      "unread",
+      "starred",
+      "read",
+      "history",
+      "contents",
+      "edit-tag",
+      "quickadd",
+      "subscription/edit",
+      "rename-tag",
+      "disable-tag"
+    ],
+    "ordinaryOutput": true,
+    "quickaddQueryAndBody": false
+  }
+]

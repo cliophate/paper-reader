@@ -1,3 +1,4 @@
+import { GREADER_ENDPOINTS } from '../src/server/greader-routes'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -46,7 +47,8 @@ function inventory(extra = '') {
             // Inline middleware can answer requests, so each one is part of the snapshot.
             if (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg)) { routes.push(`USE ${prefix}(inline ${++inlineCount})`); continue }
             const name = ts.isCallExpression(arg) ? arg.expression.getText(source) : arg.getText(source)
-            if (name === 'express.static') routes.push('STATIC /*')
+            if (name === 'greader.handler') routes.push('USE /api/greader.php')
+            else if (name === 'express.static') routes.push('STATIC /*')
             else if (!middleware.has(name)) fail(arg)
           }
         } else {
@@ -63,6 +65,8 @@ function inventory(extra = '') {
     }
     visit(source)
   }
+  for (const [endpoint, declaration] of Object.entries(GREADER_ENDPOINTS)) routes.push(`${declaration.method} /api/greader.php/reader/api/0/${endpoint}`)
+  routes.push('POST /api/greader.php/accounts/ClientLogin', 'GET /api/greader.php/reader/api/0/stream/contents/:stream')
   return routes.sort()
 }
 let directory: string, child: ChildProcess, base: string
@@ -192,3 +196,8 @@ it.each(['setup', 'logout', 'sign-out-others', 'reset-password', 'remove-passkey
       }))
     } finally { controllers.forEach(controller => controller.abort()); db.close() }
   }, 15000)
+
+it('keeps Reader authentication within the exact path boundary', () => {
+  for (const p of ['/api/greader.php', '/api/greader.php/', '/api/greader.php/reader/api/0/token', '/api/greader.php/reader/api/0/stream/contents/user%2F-%2Flabel%2FA%2FB']) expect(routeAccess('GET', p)).toBe('app')
+  for (const p of ['/API/GREADER.PHP', '/api/greader.phpx', '/api/greader.php/../', '/api/greader.php%2freader', '/api/greader.php/%2e%2e/api']) expect(routeAccess('GET', p)).toBe('session')
+})
