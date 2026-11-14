@@ -3,7 +3,7 @@
 [Article identity and state ownership](article-identity.md) documents schema v7,
 the automatic pre-upgrade backup, account binding and recovery.
 [Feed ingestion](feed-ingestion.md) documents supported formats, identity matching
-and the successful-fetch contract for the future HTTP collector.
+and the successful-fetch contract for the HTTP collector.
 [Folder and subscription organization](organization.md) documents schema v8,
 revision-checked commands, collision rules and FreshRSS capability limits.
 [Feed discovery and OPML](subscription-tools.md) describes import identity policy,
@@ -96,6 +96,18 @@ build running at the same time:
 ```sh
 npx playwright test --config playwright.routes.config.ts
 ```
+
+## Bulk article state changes
+
+`/api/entries/state` rejects more than 1,000 IDs with HTTP 400. The shared client
+sends larger changes in sequential batches, including each batch's expected
+revisions. A successful standalone action retains every undo token and Undo
+restores every batch. If a later batch fails, the client attempts to undo the
+completed standalone batches. Concurrent edits or expired tokens can prevent
+part of an undo; Paper reports that failure and asks the reader to refresh.
+These requests are not one atomic transaction. FreshRSS has no conditional undo,
+so a failed action can leave completed batches applied; its Undo sends the
+inverse operation for all IDs.
 
 ## Docker integration test
 

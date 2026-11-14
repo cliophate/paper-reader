@@ -66,6 +66,7 @@ export interface UndoRecord {
 export type BriefingFeedback = 'useful' | 'too_broad' | 'missed'
 
 export interface PageOptions {
+  reverse?: boolean
   unreadOnly?: boolean
   limit?: number
   query?: string
@@ -181,6 +182,7 @@ export class PaperDatabase {
     this.databasePath = databasePath
     if (!options.readOnly) fs.mkdirSync(path.dirname(databasePath), { recursive: true })
     this.db = new DatabaseSync(databasePath, { readOnly: options.readOnly, timeout: BUSY_TIMEOUT_MS })
+    this.db.function('unicode_lower', { deterministic: true }, value => String(value ?? '').toLowerCase())
     try {
       if (options.readOnly) {
         if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) !== DATABASE_VERSION
@@ -1235,7 +1237,7 @@ export class PaperDatabase {
   }
 
   private pageCursor(stream: StreamRef, options: PageOptions) {
-    const ascending = this.streamOrder(stream) === 'oldest'
+    const ascending = (this.streamOrder(stream) === 'oldest') !== Boolean(options.reverse)
     const direction = ascending ? 'ASC' : 'DESC'
     const scope = crypto.createHash('sha256').update(JSON.stringify([stream.kind, stream.id, Boolean(options.unreadOnly), options.query || '', options.after || '', options.before || '', Boolean(options.includeMuted), direction])).digest('hex')
     let cursor: { scope?: string; boundary?: [number, number, string]; snapshot?: string; offset?: number } = {}
@@ -1338,9 +1340,9 @@ export class PaperDatabase {
   }
 
   previewMuteFilter(phrase: string, scope: MuteFilterScope, feedId = '') {
-    const title = 'instr(lower(title), lower(?)) > 0'
-    const content = 'instr(lower(content_text), lower(?)) > 0 OR instr(lower(excerpt), lower(?)) > 0'
-    const match = scope === 'title' ? title : scope === 'content' ? content : `${title} OR ${content} OR instr(lower(feed_title), lower(?)) > 0 OR instr(lower(author), lower(?)) > 0`
+    const title = 'instr(unicode_lower(title), unicode_lower(?)) > 0'
+    const content = 'instr(unicode_lower(content_text), unicode_lower(?)) > 0 OR instr(unicode_lower(excerpt), unicode_lower(?)) > 0'
+    const match = scope === 'title' ? title : scope === 'content' ? content : `${title} OR ${content} OR instr(unicode_lower(feed_title), unicode_lower(?)) > 0 OR instr(unicode_lower(author), unicode_lower(?)) > 0`
     const params = Array(scope === 'title' ? 1 : scope === 'content' ? 2 : 5).fill(phrase)
     const where = `WHERE (? = '' OR feed_id = ?) AND (${match})`
     const count = Number(this.db.prepare(`SELECT COUNT(*) AS count FROM entries ${where}`).get(feedId, feedId, ...params)?.count || 0)
@@ -1378,7 +1380,7 @@ export class PaperDatabase {
       WHERE source_domain IN ('androidpolice.com', 'www.androidpolice.com', 'androidauthority.com', 'www.androidauthority.com')
       AND (timestamp > ? OR read = 0 OR starred = 1)
       ORDER BY read ASC, timestamp DESC LIMIT 1000
-    `).all(Math.floor(Date.now() / 1000) - 7 * 86400)
+    `).all(Date.now() - 7 * 86400_000)
     // Finish the ID query before yielding so background work can checkpoint WAL.
     const lookup = this.db.prepare('SELECT * FROM entries WHERE id = ?')
     for (const candidate of rows) {
@@ -1599,9 +1601,9 @@ export class PaperDatabase {
     try {
       this.db.prepare('INSERT INTO mute_filters (id, phrase, scope, feed_id, created_at) VALUES (?, ?, ?, ?, ?)')
         .run(id, phrase, scope, feedId, createdAt)
-      const titleMatch = 'instr(lower(entries.title), lower(?)) > 0'
-      const contentMatch = 'instr(lower(entries.content_text), lower(?)) > 0 OR instr(lower(entries.excerpt), lower(?)) > 0'
-      const anyMatch = `${titleMatch} OR ${contentMatch} OR instr(lower(entries.feed_title), lower(?)) > 0 OR instr(lower(entries.author), lower(?)) > 0`
+      const titleMatch = 'instr(unicode_lower(entries.title), unicode_lower(?)) > 0'
+      const contentMatch = 'instr(unicode_lower(entries.content_text), unicode_lower(?)) > 0 OR instr(unicode_lower(entries.excerpt), unicode_lower(?)) > 0'
+      const anyMatch = `${titleMatch} OR ${contentMatch} OR instr(unicode_lower(entries.feed_title), unicode_lower(?)) > 0 OR instr(unicode_lower(entries.author), unicode_lower(?)) > 0`
       const match = scope === 'title' ? titleMatch : scope === 'content' ? contentMatch : anyMatch
       const parameters = scope === 'title' ? [phrase]
         : scope === 'content' ? [phrase, phrase]
@@ -2070,13 +2072,12 @@ function visibleEntryClause(alias: string): string {
 
 function entryMatchesMuteFilter(entry: Entry, rule: { phrase: string; scope: MuteFilterScope; feed_id: string }): boolean {
   if (rule.feed_id && rule.feed_id !== entry.feedId) return false
-  const phrase = rule.phrase.toLocaleLowerCase()
+  const phrase = rule.phrase.toLowerCase()
   if (!phrase) return false
-  const title = entry.title.toLocaleLowerCase()
-  const content = `${entry.excerpt}\n${plainText(entry.contentHtml)}`.toLocaleLowerCase()
-  if (rule.scope === 'title') return title.includes(phrase)
-  if (rule.scope === 'content') return content.includes(phrase)
-  return `${title}\n${entry.feedTitle}\n${entry.author}\n${content}`.toLocaleLowerCase().includes(phrase)
+  const fields = rule.scope === 'title' ? [entry.title]
+    : rule.scope === 'content' ? [entry.excerpt, plainText(entry.contentHtml)]
+    : [entry.title, entry.excerpt, plainText(entry.contentHtml), entry.feedTitle, entry.author]
+  return fields.some(value => value.toLowerCase().includes(phrase))
 }
 
 function parseObject(value: string): Record<string, unknown> {

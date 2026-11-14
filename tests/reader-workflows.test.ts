@@ -19,6 +19,32 @@ beforeEach(() => { directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-work
 afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
 
 describe('reading across changing lists', () => {
+  it.each(['title', 'content', 'any'] as const)('uses the same Unicode mute matching for preview, backfill and ingestion in %s', scope => {
+    const fields = scope === 'title' ? { title: 'ÉCOLE' } : scope === 'content' ? { contentHtml: '<p>ÉCOLE</p>' } : { author: 'ÉCOLE' }
+    db.upsertEntries([article(1, fields), article(2, { ...fields, feedId: 'feed/other' }), article(3)])
+    expect(db.previewMuteFilter('école', scope, 'feed/1').count).toBe(1)
+    const filter = db.createMuteFilter('école', scope, 'feed/1')
+    expect(filter.matchCount).toBe(1)
+    db.upsertEntries([article(4, fields)])
+    expect(db.muteFilters()[0].matchCount).toBe(2)
+    expect(db.previewMuteFilter('école', scope, 'feed/1').count).toBe(2)
+    expect(db.localEntriesPage(all).items.map(item => item.id).sort()).toEqual(['2', '3'])
+    expect(db.localNavigation().unread).toBe(2)
+  })
+
+  it.each(['newest', 'oldest'] as const)('pages backward from the true end with unread and mute filters, %s first', order => {
+    db.upsertEntries(Array.from({ length: 205 }, (_, n) => article(n + 1, { read: n % 2 === 0 })))
+    db.createMuteFilter('report 2', 'title')
+    const stream = { kind: 'feed' as const, id: 'feed/1', title: 'One' }
+    db.setStreamOrder(stream, order)
+    const expected = db.localEntriesPage(stream, { unreadOnly: true, limit: 250 }).items.map(item => item.id).reverse()
+    const first = db.localEntriesPage(stream, { unreadOnly: true, limit: 80, reverse: true })
+    expect(first.items.map(item => item.id)).toEqual(expected.slice(0, 80))
+    const second = db.localEntriesPage(stream, { unreadOnly: true, limit: 80, reverse: true, continuation: first.continuation })
+    expect(second.items.map(item => item.id)).toEqual(expected.slice(80))
+    expect(second.continuation).toBe('')
+  })
+
   it.each(['newest', 'oldest'] as const)('does not skip unread items after reading a page, %s first', order => {
     db.upsertEntries([1, 2, 3, 4, 5].map(n => article(n)))
     db.setStreamOrder(all, order)

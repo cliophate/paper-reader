@@ -17,6 +17,7 @@ export interface EntryOptions {
 }
 
 export interface EntryPageOptions {
+  reverse?: boolean
   signal?: AbortSignal
   unreadOnly?: boolean
   limit?: number

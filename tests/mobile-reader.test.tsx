@@ -81,6 +81,60 @@ async function edge(target = 'video', cancel = false, release = true) {
 }
 
 describe('mobile reader switching', () => {
+  it('leaves browser modifiers untouched while preserving Shift+A, help and command shortcuts', async () => {
+    initialPage.items[0] = { ...post('a'), kind: 'article' }
+    await mount()
+    for (const modifier of ['ctrlKey', 'metaKey', 'altKey']) {
+      for (const key of ['f', 'A', 'j', '/', '?']) {
+        const event = new KeyboardEvent('keydown', { key, [modifier]: true, shiftKey: key === 'A', bubbles: true, cancelable: true })
+        await act(async () => { window.dispatchEvent(event) })
+        expect(event.defaultPrevented).toBe(false)
+      }
+    }
+    expect(api.fullText).not.toHaveBeenCalled()
+    expect(api.markStreamRead).not.toHaveBeenCalled()
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    vi.mocked(api.markStreamRead).mockResolvedValue({ ok: true, count: 0 })
+    const shiftA = new KeyboardEvent('keydown', { key: 'A', shiftKey: true, cancelable: true })
+    await act(async () => { window.dispatchEvent(shiftA) })
+    expect(shiftA.defaultPrevented).toBe(true)
+    expect(api.markStreamRead).toHaveBeenCalledOnce()
+    await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true })) })
+    expect(container.textContent).toContain('Keyboard shortcuts')
+    await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+    const command = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, cancelable: true })
+    await act(async () => { window.dispatchEvent(command) })
+    expect(command.defaultPrevented).toBe(true)
+  })
+
+  it.each([false, true])('enters the preceding folder at its last article and continues paging backward, sync=%s', async sync => {
+    const events = new Map<string, EventListener>()
+    vi.stubGlobal('EventSource', class {
+      addEventListener(name: string, listener: EventListener) { events.set(name, listener) }
+      removeEventListener() {}
+      close() {}
+    })
+    history.replaceState(null, '', '/?kind=category&id=tech&title=Tech&entry=c&pane=article&unread=0')
+    vi.mocked(api.entry).mockResolvedValue({ entry: post('c') })
+    vi.mocked(api.entries).mockImplementation(async (target, unread, query, cursor, signal, dates, reverse) => {
+      if (target.id === 'tech') return { items: [post('c')], continuation: '' }
+      if (!reverse) return { items: [post('first'), post('80')], continuation: 'forward' }
+      return cursor ? { items: [post('80')], continuation: '' } : { items: [post('99'), post('100')], continuation: '', previousContinuation: 'backward' }
+    })
+    await mount()
+    const previous = async () => { await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k' })) }) }
+    await previous()
+    expect(container.querySelector('.article-title')?.textContent || container.textContent).toContain('Post 100')
+    if (sync) {
+      await act(async () => { events.get('sync')!(new Event('sync')) })
+      expect(container.textContent).not.toContain('Post first')
+    }
+    await previous()
+    await previous()
+    expect(api.entries).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'instagram' }), false, '', 'backward', expect.any(AbortSignal), {}, true)
+    expect(container.textContent).toContain('Post 80')
+  })
+
   it.each([true, false])('counts loaded rows using the active unread filter, unread=%s', async unreadOnly => {
     history.replaceState(null, '', `/?kind=category&id=instagram&title=Instagram&pane=stories&unread=${unreadOnly ? '1' : '0'}`)
     initialPage.items = Array.from({ length: 9 }, (_, index) => ({ ...post(String(index)), read: index === 0 }))
@@ -826,7 +880,7 @@ describe('reader workflow improvements', () => {
     vi.mocked(api.previewRead).mockResolvedValue({ token: 'reviewed', count: 2 })
     await mount()
     await act(async () => { await vi.advanceTimersByTimeAsync(300) })
-    expect(api.entries).toHaveBeenCalledWith(expect.objectContaining({ kind: 'all' }), false, 'design', '', undefined, { after: '', before: '' })
+    expect(api.entries).toHaveBeenCalledWith(expect.objectContaining({ kind: 'all' }), false, 'design', '', undefined, { after: '', before: '' }, false)
     await click(container.querySelector('[aria-label="Mark search results read"]'))
     expect(api.previewRead).toHaveBeenCalledWith(expect.objectContaining({ kind: 'all' }), 'design', '', '')
     expect(api.markStreamRead).not.toHaveBeenCalled()

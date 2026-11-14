@@ -33,6 +33,19 @@ describe('backend feed identifiers', () => {
 })
 
 describe('FreshRSS stream paths', () => {
+  it('requests the remote tail in reverse order with unread filtering and continuation', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response('Auth=synthetic-token'))
+      .mockResolvedValueOnce(Response.json({ items: [], continuation: '80' }))
+    vi.stubGlobal('fetch', fetcher)
+    const client = new FreshRssClient({ baseUrl: 'http://freshrss', username: 'fixture', apiPassword: 'synthetic' })
+    await client.entriesPage({ kind: 'feed', id: 'feed/42', title: 'Fixture' }, { reverse: true, unreadOnly: true, continuation: '40', limit: 80 })
+    const url = new URL(String(fetcher.mock.calls[1][0]))
+    expect(url.searchParams.get('r')).toBe('o')
+    expect(url.searchParams.get('xt')).toBe('user/-/state/com.google/read')
+    expect(url.searchParams.get('c')).toBe('40')
+    expect(url.searchParams.get('n')).toBe('80')
+  })
+
   it('uses the full Google Reader state path for starred entries', () => {
     expect(streamPath({ kind: 'starred', id: 'starred', title: 'Starred' })).toBe('user/-/state/com.google/starred')
   })

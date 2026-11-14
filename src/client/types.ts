@@ -66,6 +66,7 @@ export interface Entry {
 }
 
 export interface EntryPage {
+  previousContinuation?: string
   order?: 'newest' | 'oldest'
   items: Entry[]
   continuation: string

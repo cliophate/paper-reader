@@ -247,7 +247,7 @@ export class FreshRssClient implements ReaderBackend {
     const params = new URLSearchParams({
       output: 'json',
       n: String(Math.min(Math.max(options.limit || 100, 1), 1000)),
-      r: 'n',
+      r: options.reverse ? 'o' : 'n',
     })
     if (options.unreadOnly) params.append('xt', READ)
     if (options.after) params.set('ot', String(Math.floor(options.after.getTime() / 1000)))

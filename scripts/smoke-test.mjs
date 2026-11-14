@@ -118,6 +118,8 @@ try {
   const numberedNavigation = (await request('/api/navigation')).data
   for (const folder of numberedNavigation.folders) assert(Number.isSafeInteger(folder.linkNumber))
   for (const feed of [...numberedNavigation.uncategorized, ...numberedNavigation.folders.flatMap(folder => folder.feeds)]) assert(Number.isSafeInteger(feed.linkNumber))
+  const oversized = await request('/api/entries/state', { ids: Array.from({ length: 1001 }, () => id), operation: 'read' })
+  assert.equal(oversized.status, 400, 'Oversize state requests must be rejected without truncation')
   assert.equal((await request('/api/entries/state', { ids: [id], operation: 'read' }, { Origin: 'https://untrusted.example' })).status, 403)
   assert.equal((await request('/api/entries/state', { ids: [id], operation: 'read' })).status, 200)
   assert.equal((await request('/api/entries/state', { ids: [id], operation: 'star' })).status, 200)

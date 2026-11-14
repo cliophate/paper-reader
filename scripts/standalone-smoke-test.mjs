@@ -81,6 +81,8 @@ try {
   assert.equal(interval.status, 200)
   assert.equal((await request('/api/feed-checks/now', { ...checkRevision, feedId })).status, 409)
   const entry = page.items[0]
+  const oversized = await request('/api/entries/state', { ids: Array.from({ length: 1001 }, () => entry.id), operation: 'read' })
+  assert.equal(oversized.status, 400, 'Oversize state requests must be rejected without truncation')
   const changed = await request('/api/entries/state', { ids: [entry.id], operation: 'read', expectedRevisions: { [entry.id]: 0 }, undo: true })
   assert.equal(changed.status, 200); assert(changed.data.undoToken)
   assert.equal((await request('/api/entries/state', { ids: [entry.id], operation: 'star', expectedRevisions: { [entry.id]: 0 } })).status, 409)
