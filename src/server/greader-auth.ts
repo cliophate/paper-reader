@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { AuthError, authText, type AppCredential, type AuthStore } from './auth-store.js'
 
-export class ReaderError extends Error { constructor(message: string, readonly status = 400) { super(message) } }
+export class ReaderError extends Error { constructor(message: string, readonly status = 400, readonly retryAfter?: number) { super(message) } }
 export function equal(a: string, b: string) { const left = Buffer.from(a), right = Buffer.from(b); return left.length === right.length && timingSafeEqual(left, right) }
 export class GreaderAuth {
   constructor(readonly db: DatabaseSync, readonly store: AuthStore, readonly standalone: boolean, readonly publicUrl: string) {}
@@ -44,3 +44,11 @@ export class GreaderAuth {
 }
 // Express routes ignore case, so every case variant stays a terminal API path.
 export function greaderPath(path: string) { return /^\/api\/greader\.php(?:\/|$)/i.test(path) }
+
+// Call only inside the transaction that commits the reader mutation.
+export function assertReaderCredential(db: DatabaseSync, app: Pick<AppCredential, 'id' | 'generation' | 'globalGeneration'>) {
+  const row = db.prepare(`SELECT a.generation, m.generation AS global_generation, s.enabled
+    FROM auth_apps a CROSS JOIN auth_meta m CROSS JOIN greader_settings s
+    WHERE a.id = ? AND a.revoked IS NULL AND a.scope = 'reader-sync' AND m.id = 1 AND s.id = 1`).get(app.id)
+  if (!row?.enabled || row.generation !== app.generation || row.global_generation !== app.globalGeneration) throw new ReaderError('Unauthorized.', 401)
+}

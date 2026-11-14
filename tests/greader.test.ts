@@ -17,6 +17,7 @@ import { itemNumber, longId, MAX_ID, READING, STATE, LABEL, page } from '../src/
 import { requireAllowedHost, requireSameOrigin } from '../src/server/request-origin'
 import { authGate } from '../src/server/auth-routes'
 
+const discovery = vi.fn<import('../src/server/feed-discovery').DiscoveryTransport>(async () => { throw new Error('Synthetic discovery refuses network access') })
 let connections: AuthConnections
 let dir: string, db: PaperDatabase, auth: GreaderAuth, api: ReturnType<typeof greaderRoutes>, server: Server, base: string, backend: string, password: string, bearer: string, token: string, feed: string
 beforeAll(async () => {
@@ -28,7 +29,7 @@ beforeAll(async () => {
   auth = new GreaderAuth(db.greaderDatabase, db.auth, true, 'http://localhost')
   const app = express(); connections = new AuthConnections(db.auth)
   app.use(requireAllowedHost('http://localhost')); app.use(requireSameOrigin('http://localhost')); app.use(authGate(db.auth, connections))
-  api = greaderRoutes(db, auth, backend, new LocalStateService(db, backend), connections, async () => { throw new Error('Synthetic discovery refuses network access') })
+  api = greaderRoutes(db, auth, backend, new LocalStateService(db, backend), connections, discovery)
   app.use(api.handler)
   server = app.listen(0, '127.0.0.1'); await new Promise<void>(r => server.once('listening', r)); base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/greader.php`
 }, 15000)
@@ -145,13 +146,10 @@ it('omits deleted content and accepts retries for deleted state IDs', async () =
 })
 it.each(clients)('replays $client source-derived sync and management requests', async client => {
   async function request(endpoint: string, pairs: [string, string][] = [], method = 'GET') {
-    for (;;) {
-      const queryOutput = method === 'POST' && client.client !== 'NetNewsWire'
-      const response = await call(queryOutput ? endpoint + (endpoint.includes('?') ? '&' : '?') + 'output=json' : endpoint, queryOutput ? pairs : [...pairs, ['output', 'json']], method)
-      if (response.status === 429) { await response.text(); await delay(1000); continue }
-      expect(response.status, await response.clone().text()).toBe(200)
-      return response
-    }
+    const queryOutput = method === 'POST' && client.client !== 'NetNewsWire'
+    const response = await call(queryOutput ? endpoint + (endpoint.includes('?') ? '&' : '?') + 'output=json' : endpoint, queryOutput ? pairs : [...pairs, ['output', 'json']], method)
+    expect(response.status, await response.clone().text()).toBe(200)
+    return response
   }
   const login = await call('/accounts/ClientLogin', [['Email', 'reader'], ['Passwd', password], ...client.loginFields as [string,string][]], 'POST')
   expect(login.status).toBe(200); expect(/Auth=(.+)/.exec(await login.text())![1]).toBe(bearer)
@@ -197,14 +195,55 @@ it.each(clients)('replays $client source-derived sync and management requests', 
   await request('rename-tag', [['s', `${LABEL}Unicode / + % Café`], ['dest', `${LABEL}Moved / + % Café`], ['T', token]], 'POST')
   await request('disable-tag', [['s', `${LABEL}Moved / + % Café`], ['T', token]], 'POST')
 }, 30000)
+
+it.each(['subscription/quickadd', 'subscription/edit'])('cancels paused %s after revocation without changing subscriptions or article state', async endpoint => {
+  const app = await db.auth.createApp('Pending discovery', null)
+  const credential = db.auth.apps().find(value => value.id === app.id)!
+  const headers = { Authorization: `GoogleLogin auth=${auth.token(credential, 'auth')}` }
+  let entered!: () => void, resume!: () => void, finished!: () => void
+  const waiting = new Promise<void>(resolve => { entered = resolve })
+  const gate = new Promise<void>(resolve => { resume = resolve })
+  const done = new Promise<void>(resolve => { finished = resolve })
+  let signal: AbortSignal | undefined
+  discovery.mockImplementationOnce(async (url, requestSignal) => {
+    signal = requestSignal; entered(); await gate
+    finished()
+    return { responseUrl: url, body: '<rss version="2.0"><channel><title>Blocked discovery</title></channel></rss>', contentType: 'application/rss+xml' }
+  })
+  const before = {
+    organization: db.organization.metadata(backend),
+    state: db.greaderDatabase.prepare('SELECT id, read, starred, state_revision, greader_modified_ms FROM entries ORDER BY id').all(),
+    activity: db.greaderDatabase.prepare('SELECT count(*) n FROM activity_events').get(),
+  }
+  const fields: [string, string][] = endpoint.endsWith('quickadd') ? [['quickadd', 'https://example.test/pending']] : [['s', 'feed/https://example.test/pending'], ['ac', 'subscribe'], ['a', `${LABEL}Must not exist`]]
+  const pending = call(endpoint, [...fields, ['T', auth.token(credential, 'T')]], 'POST', headers)
+  await waiting
+  db.auth.revokeApp(app.id); connections.check()
+  expect((await pending).status).toBe(401)
+  expect(signal?.aborted).toBe(true)
+  resume(); await done; await delay(20)
+  expect(db.greaderDatabase.prepare("SELECT id FROM feeds WHERE url = 'https://example.test/pending'").get()).toBeUndefined()
+  expect(db.organization.metadata(backend)).toEqual(before.organization)
+  expect(db.greaderDatabase.prepare('SELECT id, read, starred, state_revision, greader_modified_ms FROM entries ORDER BY id').all()).toEqual(before.state)
+  expect(db.greaderDatabase.prepare('SELECT count(*) n FROM activity_events').get()).toEqual(before.activity)
+})
+it('rejects organization batches above 100 before discovery or metadata work', async () => {
+  const snapshot = vi.spyOn(db.organization, 'metadata')
+  for (const ac of ['edit', 'subscribe']) {
+    const response = await call('subscription/edit', [...Array.from({ length: 101 }, (): [string, string] => ['s', 'feed/https://example.test/oversized']), ['ac', ac], ['T', token]], 'POST')
+    expect(response.status).toBe(413)
+  }
+  expect(snapshot).not.toHaveBeenCalled()
+  snapshot.mockRestore()
+})
 it('limits authenticated traffic and rejects the owner password as an app password', async () => {
   await db.auth.setup(db.auth.setupCode(), 'reader', 'synthetic owner password')
   const rejected = await call('/accounts/ClientLogin', [['Email', 'reader'], ['Passwd', 'synthetic owner password']], 'POST')
   expect(rejected.status).toBe(401)
-  const responses = await Promise.all(Array.from({ length: 45 }, () => call('token')))
+  const responses = await Promise.all(Array.from({ length: 150 }, () => call('token')))
   expect(responses.some(response => response.status === 429)).toBe(true)
-  for (const response of responses) { if (response.status === 429) expect(response.headers.get('retry-after')).toBeTruthy(); await response.text() }
-})
+  for (const response of responses) { if (response.status === 429) expect(Number(response.headers.get('retry-after'))).toBeGreaterThanOrEqual(1); await response.text() }
+}, 15000)
 it('revokes persistent bearer credentials and disables FreshRSS', async () => {
   expect(new GreaderAuth(db.greaderDatabase, db.auth, false, 'http://localhost').enabled()).toBe(false)
   await delay(1100)

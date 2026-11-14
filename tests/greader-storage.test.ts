@@ -220,3 +220,54 @@ it('keeps quickadd behind the production private-address policy', async () => {
     expect(db.greaderDatabase.prepare('SELECT count(*) n FROM feeds').get()!.n).toBe(1)
   } finally { await new Promise<void>(resolve=>server.close(()=>resolve())) }
 })
+
+it.each(['app', 'global', 'disabled'])('checks %s revocation inside discovery and bulk write transactions without connection polling', async invalidation => {
+  const { assertReaderCredential } = await import('../src/server/greader-auth')
+  const { LocalStateService } = await import('../src/server/local-state')
+  await seedArticles(2)
+  await db.auth.createApp('Synthetic pending mutation', null)
+  const credential = db.auth.apps()[0], sql = db.greaderDatabase
+  const auth = new GreaderAuth(sql, db.auth, true, 'http://localhost')
+  auth.configure(true, 'reader')
+  let resume!: () => void
+  const gate = new Promise<void>(resolve => { resume = resolve })
+  const organization = new GreaderOrganization(db, backend, async url => {
+    await gate
+    return { responseUrl: url, body: '<rss version="2.0"><channel><title>Pending</title></channel></rss>', contentType: 'application/rss+xml' }
+  })
+  const authorize = () => { expect(sql.isTransaction).toBe(true); assertReaderCredential(sql, credential) }
+  const quickadd = organization.quickadd('https://example.test/pending-quickadd', authorize)
+  const subscribe = organization.subscribe(form({ s: 'feed/https://example.test/pending-subscribe', ac: 'subscribe' }), authorize)
+  const before = db.organization.metadata(backend)
+  if (invalidation === 'app') db.auth.revokeApp(credential.id)
+  // A generation-only change tests the global comparison independently of revoked rows.
+  if (invalidation === 'global') sql.exec('UPDATE auth_meta SET generation = generation + 1')
+  if (invalidation === 'disabled') auth.configure(false, 'reader')
+  const rejectedQuickadd = expect(quickadd).rejects.toMatchObject({ status: 401 })
+  const rejectedSubscribe = expect(subscribe).rejects.toMatchObject({ status: 401 })
+  resume(); await Promise.all([rejectedQuickadd, rejectedSubscribe])
+  expect(db.organization.metadata(backend)).toEqual(before)
+  expect(() => new LocalStateService(db, backend).editReaderNumbers([1n], { read: true }, authorize)).toThrow(expect.objectContaining({ status: 401 }))
+  expect(() => organization.edit('subscription/edit', form({ s: `feed/${db.linkNumber('feed', feed)}`, ac: 'unsubscribe' }), authorize)).toThrow(expect.objectContaining({ status: 401 }))
+  const pool = new GreaderPool(new URL('../src/server/greader-bulk.ts', import.meta.url), 1, 4, 15000)
+  try {
+    await expect(pool.run({ path: db.searchDatabasePath, credential, query: { backend, stream: { kind: 'state', id: 'reading-list' }, it: [], xt: [], ot: 0, nt: 0, order: 'DESC', n: 250 }, ts: '0' }, new AbortController().signal)).rejects.toMatchObject({ status: 401 })
+  } finally { await pool.close() }
+  expect(sql.prepare('SELECT sum(read) read, sum(state_revision) revision FROM entries').get()).toMatchObject({ read: 0, revision: 0 })
+  expect(db.organization.metadata(backend)).toEqual(before)
+})
+
+it('passes disconnect cancellation through discovery and prevents a late transport from writing', async () => {
+  const controller = new AbortController()
+  let resume!: () => void
+  const gate = new Promise<void>(resolve => { resume = resolve })
+  const organization = new GreaderOrganization(db, backend, async (url, signal) => {
+    expect(signal).toBe(controller.signal)
+    await gate
+    return { responseUrl: url, body: '<rss version="2.0"><channel/></rss>', contentType: 'application/rss+xml' }
+  })
+  const pending = organization.quickadd('https://example.test/disconnected', () => {}, controller.signal)
+  const rejected = expect(pending).rejects.toThrow()
+  controller.abort(); resume(); await rejected
+  expect(db.greaderDatabase.prepare("SELECT id FROM feeds WHERE url = 'https://example.test/disconnected'").get()).toBeUndefined()
+})

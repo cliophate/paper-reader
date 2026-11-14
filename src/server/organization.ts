@@ -65,6 +65,20 @@ export class LocalOrganizationService {
     })
   }
 
+  // Reader management needs organization identity, not article navigation counts.
+  metadata(backendId: string) {
+    return transaction(this.db, () => {
+      this.assertLocal(backendId)
+      return {
+        revision: this.revision(backendId),
+        feeds: this.db.prepare(`SELECT f.*, CAST(l.number AS TEXT) AS number FROM feeds f
+          LEFT JOIN link_numbers l ON l.target_id = f.id AND l.kind = 'feed'`).all(),
+        folders: this.db.prepare('SELECT id, title FROM folders').all(),
+        memberships: this.db.prepare('SELECT feed_id, folder_id FROM feed_folders').all(),
+      }
+    })
+  }
+
   // Subscription imports use this in their existing transaction so a stale
   // organization snapshot cannot overwrite a newly added or renamed feed.
   subscriptionChanged(backendId: string) {
@@ -109,7 +123,7 @@ export class LocalOrganizationService {
     })
   }
 
-  private revision(backendId: string): number {
+  revision(backendId: string): number {
     return Number(this.db.prepare('SELECT revision FROM organization_revisions WHERE backend_id = ?').get(backendId)?.revision || 0)
   }
 

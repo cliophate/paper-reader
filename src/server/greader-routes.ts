@@ -2,9 +2,10 @@ import { SubscriptionInputError } from './opml.js'
 import type { Request, Response, NextFunction } from 'express'
 import type { PaperDatabase } from './db.js'
 import { AuthError } from './auth-store.js'
-import { GreaderAuth, ReaderError, equal, greaderPath } from './greader-auth.js'
+import { GreaderAuth, ReaderError, assertReaderCredential, equal, greaderPath } from './greader-auth.js'
+import { GreaderLimits } from './greader-limits.js'
 import { GreaderPool } from './greader-pool.js'
-import { GreaderOrganization } from './greader-organization.js'
+import { GreaderOrganization, organizationSources } from './greader-organization.js'
 import { itemNumber, resolveStream, READING, STATE, type Query } from './greader-query.js'
 import type { LocalStateService } from './local-state.js'
 import type { AuthConnections } from './auth-connections.js'
@@ -52,20 +53,9 @@ function integer(value: string | null, fallback = 0) {
   if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > Number.MAX_SAFE_INTEGER / 1000) throw new ReaderError('Invalid integer.')
   return Number(value)
 }
-class Limits {
-  private buckets = new Map<string, { tokens: number; at: number }>()
-  take(key: string, rate: number, burst: number) {
-    const now = Date.now()
-    for (const [id, value] of this.buckets) if (now - value.at > 60000) this.buckets.delete(id)
-    const bucket = this.buckets.get(key) || { tokens: burst, at: now }
-    bucket.tokens = Math.min(burst, bucket.tokens + (now - bucket.at) * rate / 1000); bucket.at = now
-    if (bucket.tokens < 1) throw new ReaderError('Too many requests.', 429)
-    bucket.tokens--; this.buckets.set(key, bucket)
-  }
-}
 export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: string, state: LocalStateService | undefined, connections: AuthConnections, transport: DiscoveryTransport) {
   const reads = new GreaderPool(), writer = new GreaderPool(new URL('./greader-bulk.js', import.meta.url), 1, 4, 15_000)
-  const organization = new GreaderOrganization(db, backend, transport), limits = new Limits()
+  const organization = new GreaderOrganization(db, backend, transport), limits = new GreaderLimits()
   let checkpointPending = false
   const maintenance = new AbortController()
   const checkpoint = () => {
@@ -110,11 +100,13 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
       }
       const header = req.header('authorization') || '', app = auth.authenticate(header)
       if (!connections.register('', res, () => { try { auth.authenticate(header); return true } catch { return false } })) return
+      const authorize = () => { abort.signal.throwIfAborted(); assertReaderCredential(db.greaderDatabase, app) }
       const mutation = req.method === 'POST' && endpoint !== 'stream/items/contents'
-      limits.take('account', 20, 80); limits.take(app.id, 10, 40)
-      if (mutation) limits.take('writes', 2, 10)
       if ((mutation || p.has('T')) && !equal((p.get('T') || '').replace(/\r?\n$/, ''), auth.token(app, 'T'))) { res.set('X-Reader-Google-Bad-Token', 'true'); throw new ReaderError('Invalid token.', 403) }
       if (p.has('output') && p.get('output') !== 'json') throw new ReaderError('Only JSON is supported.')
+      if (['subscription/edit', 'rename-tag', 'disable-tag'].includes(endpoint)) organizationSources(p)
+      await limits.acquire(app.id, mutation, abort.signal)
+      authorize()
       // Read You and Capy send this body back verbatim, newline included.
       if (endpoint === 'token') { res.type('text/plain').send(`${auth.token(app, 'T')}\n`); return }
       if (endpoint === 'user-info') { res.json({ userId: 'paper', userName: String(auth.settings().username), userProfileId: 'paper', userEmail: '' }); return }
@@ -136,7 +128,7 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
           fields[field] = set
         }
         if (!Object.keys(fields).length) throw new ReaderError('Supply a state change.')
-        state!.editReaderNumbers(ids.map(BigInt), fields)
+        state!.editReaderNumbers(ids.map(BigInt), fields, authorize)
       } else if (['stream/items/ids', 'stream/contents', 'mark-all-as-read'].includes(endpoint)) {
         if (p.getAll('s').length > 1 || p.getAll('r').length > 1) throw new ReaderError('Supply one stream and order.')
         const streamName = pathStream || p.get('s') || ''
@@ -156,7 +148,7 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
         } else q = { backend, stream: resolveStream(sql, streamName), it: raw.it.map(s => resolveStream(sql, s)), xt: raw.xt.map(s => resolveStream(sql, s)), ot: raw.ot, nt: raw.nt, order: order === 'o' ? 'ASC' : 'DESC', n: Math.min(n, 250) }
         if (endpoint === 'mark-all-as-read') {
           const ts = p.get('ts') || '0'; if (!/^\d{1,19}$/.test(ts) || BigInt(ts) > 9223372036854775807n) throw new ReaderError('Invalid cutoff.')
-          await writer.run({ path: db.searchDatabasePath, query: q, ts }, abort.signal); state?.invalidate(); checkpoint()
+          await writer.run({ path: db.searchDatabasePath, query: q, ts, credential: app }, abort.signal); state?.invalidate(); checkpoint()
         } else {
           const result = JSON.parse(await reads.run({ path: db.searchDatabasePath, kind: endpoint === 'stream/items/ids' ? 'ids' : 'page', query: q }, abort.signal, true))
           let continuation: string | undefined
@@ -170,23 +162,23 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
         if (endpoint === 'unread-count' && key === cacheKey()) countsCache = { key, expires: Date.now() + 1000, body }
         res.type('json').send(body); return
       } else if (endpoint === 'subscription/quickadd') {
-        limits.take('discovery', 1 / 6, 10)
+        limits.discovery()
         if (discoveries >= 2) throw new ReaderError('Discovery is busy.', 503)
         discoveries++
-        try { const result = await organization.quickadd(p.get('quickadd') || ''); res.json(result); return } finally { discoveries-- }
+        try { const result = await organization.quickadd(p.get('quickadd') || '', authorize, abort.signal); res.json(result); return } finally { discoveries-- }
       } else if (endpoint === 'subscription/edit' && p.get('ac') === 'subscribe') {
-        limits.take('discovery', 1 / 6, 10)
+        limits.discovery()
         if (discoveries >= 2) throw new ReaderError('Discovery is busy.', 503)
-        discoveries++; try { await organization.subscribe(p) } finally { discoveries-- }
-      } else organization.edit(endpoint, p)
+        discoveries++; try { await organization.subscribe(p, authorize, abort.signal) } finally { discoveries-- }
+      } else organization.edit(endpoint, p, authorize)
       res.type('text/plain').send('OK')
     } catch (error) {
       if (res.destroyed || res.headersSent) return
       const known = error instanceof ReaderError || error instanceof AuthError
       const status = known ? error.status : error instanceof SubscriptionInputError ? 400 : 503
-      if ([429, 503].includes(status)) res.set('Retry-After', String(error instanceof AuthError ? error.retryAfter || 1 : 1))
+      if ([429, 503].includes(status)) res.set('Retry-After', String((error instanceof AuthError || error instanceof ReaderError) ? error.retryAfter || 1 : 1))
       res.status(status).json({ errors: [known ? error.message : error instanceof SubscriptionInputError ? 'Could not use that feed URL.' : 'Could not complete the reader request.'] })
     }
   }
-  return { handler, async close() { clearInterval(checkpointTimer); maintenance.abort(); await Promise.all([reads.close(), writer.close()]) } }
+  return { handler, async close() { clearInterval(checkpointTimer); limits.close(); maintenance.abort(); await Promise.all([reads.close(), writer.close()]) } }
 }
