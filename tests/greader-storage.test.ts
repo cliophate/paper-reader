@@ -308,7 +308,46 @@ it('uses indexed arrival, article and feed modification paths for sparse increme
   const q = { backend, stream: { kind: 'state' as const, id: 'reading-list' }, it: [], xt: [], ot: Math.ceil(Date.now() / 1000) + 60, nt: 0, order: 'DESC' as const, n: 250 }
   const filter = where(q), scan = scanPageFrom(db.greaderDatabase, q)
   const plan = db.greaderDatabase.prepare(`EXPLAIN QUERY PLAN SELECT a.sequence ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY a.sequence DESC LIMIT 251`).all(...filter.args).map(row => row.detail).join('; ')
-  for (const index of ['greader_arrived', 'greader_modified', 'greader_feed_modified', 'greader_feed_items']) expect(plan).toContain(index)
+  for (const index of ['entries_first_seen_idx', 'greader_modified', 'greader_feed_modified', 'entries_feed_published_idx']) expect(plan).toContain(index)
   expect(plan).not.toMatch(/SCAN (e|a)\b/)
 })
 
+
+
+it.each(['unread', 'starred'])('uses the partial index for sparse %s pages', async state => {
+  await seedArticles(5)
+  const sql = db.greaderDatabase
+  sql.exec('UPDATE entries SET read = 1, starred = 0')
+  sql.exec(`UPDATE entries SET ${state === 'unread' ? 'read = 0' : 'starred = 1'} WHERE rowid IN (2, 4)`)
+  const q = { backend, stream: { kind: 'state' as const, id: state }, it: [], xt: [], ot: 0, nt: 0, order: 'DESC' as const, n: 250 }
+  const filter = where(q), scan = scanPageFrom(sql, q)
+  const plan = sql.prepare(`EXPLAIN QUERY PLAN SELECT a.sequence ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY a.sequence DESC LIMIT 251`).all(...filter.args).map(row => row.detail).join('; ')
+  expect(plan).toContain(`USING ${state === 'unread' ? 'COVERING ' : ''}INDEX greader_${state}`)
+  expect(plan).not.toMatch(/SCAN a\b/)
+  expect(page(sql, q, false).values.map(row => row.id)).toEqual(['4', '2'])
+})
+
+
+it.each(['web state', 'reader state', 'undo', 'retention'])('advances the clock with one article update for %s', async writer => {
+  await seedArticles(1)
+  const { LocalStateService } = await import('../src/server/local-state')
+  const { defaultPolicy, DAY } = await import('../src/server/retention-store')
+  const sql = db.greaderDatabase, service = new LocalStateService(db, backend)
+  const id = String(sql.prepare('SELECT id FROM entries').get()!.id)
+  const undo = { token: 'clock-undo', expiresAt: new Date(Date.now() + 60000).toISOString() }
+  if (writer === 'undo') service.editEntries([id], 'read', { undo })
+  // A future clock exercises the monotonic branch without depending on timers.
+  const before = Date.now() + 10 * 365 * DAY
+  sql.prepare('UPDATE entries SET first_seen_at = ?, greader_modified_ms = ?').run(Date.now() - 200 * DAY, before)
+  sql.exec(`CREATE TABLE article_updates (id TEXT);
+    CREATE TRIGGER count_article_updates AFTER UPDATE ON entries BEGIN INSERT INTO article_updates VALUES (new.id); END`)
+  if (writer === 'web state') service.editEntries([id], 'read')
+  else if (writer === 'reader state') service.editReaderNumbers([1n], { read: true, starred: true })
+  else if (writer === 'undo') service.undo(undo.token)
+  else {
+    const run = db.retention.start({ ...defaultPolicy(), autoReadDays: 1 })
+    service.retentionBatch(run, true)
+  }
+  expect(sql.prepare('SELECT greader_modified_ms n FROM entries').get()!.n).toBe(before + 1)
+  expect(sql.prepare('SELECT count(*) n FROM article_updates').get()!.n).toBe(1)
+})

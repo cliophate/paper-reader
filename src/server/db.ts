@@ -394,7 +394,11 @@ export class PaperDatabase {
       const value = operation === 'read' || operation === 'star'
       const fields = options.fields || { [column]: value }
       const changed = states.filter(state => (fields.read !== undefined && state.read !== fields.read) || (fields.starred !== undefined && state.starred !== fields.starred))
-      for (const state of changed) this.db.prepare('UPDATE entries SET read = ?, starred = ?, state_revision = state_revision + 1 WHERE id = ?').run(Number(fields.read ?? state.read), Number(fields.starred ?? state.starred), state.id)
+      // Prepare once per batch, and advance the clock in the state write so the
+      // fallback trigger does not rewrite each article during bulk changes.
+      const update = this.db.prepare(`UPDATE entries SET read = ?, starred = ?, state_revision = state_revision + 1,
+        greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE id = ?`)
+      for (const state of changed) update.run(Number(fields.read ?? state.read), Number(fields.starred ?? state.starred), state.id)
       if (fields.read === false) {
         const exempt = this.db.prepare('UPDATE retention_auto_read SET exempt = 1 WHERE entry_id = ?')
         for (const state of states) exempt.run(state.id)

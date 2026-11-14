@@ -72,7 +72,7 @@ export class LocalOrganizationService {
       return {
         revision: this.revision(backendId),
         feeds: this.db.prepare(`SELECT f.*, CAST(l.number AS TEXT) AS number FROM feeds f
-          LEFT JOIN link_numbers l ON l.target_id = f.id AND l.kind = 'feed'`).all(),
+          LEFT JOIN link_numbers l ON l.target_id = f.id AND l.kind = 'feed' ORDER BY f.position, f.id`).all(),
         // Same order as navigation, so callers pick the same default folder.
         folders: this.db.prepare('SELECT id, title FROM folders ORDER BY position, title COLLATE NOCASE').all(),
         memberships: this.db.prepare('SELECT feed_id, folder_id FROM feed_folders ORDER BY position, feed_id').all(),

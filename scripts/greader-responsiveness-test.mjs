@@ -149,18 +149,25 @@ try {
   assert.equal((await once(prepare, 'exit'))[0], 0)
   const check = new PaperDatabase(file, { readOnly: true })
   assert.equal(check.entryState('synthetic-1').starred, true)
-  for (const stream of ['unread', 'starred']) {
-    const q = { backend: backend.id, stream: { kind: 'state', id: stream }, it: [], xt: [], ot: 0, nt: 0, order: 'DESC', n: 250 }
+  for (const stream of ['unread', 'starred', 'sparse-starred']) {
+    if (stream === 'sparse-starred') {
+      const sparse = spawn(process.execPath, ['--input-type=module', '-e', `import { DatabaseSync } from 'node:sqlite'; const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA busy_timeout=5000; UPDATE entries SET starred=0 WHERE starred=1; UPDATE entries SET starred=1 WHERE rowid IN (2,3)'); db.close()`, file], { env: {}, stdio: 'ignore' })
+      assert.equal((await once(sparse, 'exit'))[0], 0)
+    }
+    const state = stream === 'sparse-starred' ? 'starred' : stream
+    const q = { backend: backend.id, stream: { kind: 'state', id: state }, it: [], xt: [], ot: 0, nt: 0, order: 'DESC', n: 250 }
     const filter = where(q), scan = scanPageFrom(check.greaderDatabase,q)
-    console.log(`${stream} plan:`, check.greaderDatabase.prepare(`EXPLAIN QUERY PLAN SELECT a.sequence ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY a.sequence DESC LIMIT 251`).all(...filter.args).map(row => row.detail).join('; '))
-    const result = JSON.parse((await call('stream/items/ids', [['s', `user/-/state/com.google/${stream}`], ['n', '250']])).text)
-    assert.equal(result.itemRefs.length, stream === 'unread' ? 2 : 250)
+    const plan = check.greaderDatabase.prepare(`EXPLAIN QUERY PLAN SELECT a.sequence ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY a.sequence DESC LIMIT 251`).all(...filter.args).map(row => row.detail).join('; ')
+    console.log(`${stream} plan:`, plan)
+    if (stream !== 'starred') assert(plan.includes(`INDEX greader_${state}`), plan)
+    const result = JSON.parse((await call('stream/items/ids', [['s', `user/-/state/com.google/${state}`], ['n', '250']])).text)
+    assert.equal(result.itemRefs.length, stream === 'starred' ? 250 : 2)
   }
   const dated = { backend: backend.id, stream: { kind: 'state', id: 'reading-list' }, it: [], xt: [], ot: Math.ceil(Date.now()/1000) + 60, nt: 0, order: 'DESC', n: 250 }
   const datedFilter = where(dated), datedScan = scanPageFrom(check.greaderDatabase,dated)
   const datePlan = check.greaderDatabase.prepare(`EXPLAIN QUERY PLAN SELECT a.sequence ${datedScan.from} WHERE ${datedFilter.sql}${datedScan.extra} ORDER BY a.sequence DESC LIMIT 251`).all(...datedFilter.args).map(row => row.detail).join('; ')
   console.log('sparse date plan:', datePlan)
-  for (const index of ['greader_arrived', 'greader_modified', 'greader_feed_modified', 'greader_feed_items']) assert(datePlan.includes(index), datePlan)
+  for (const index of ['entries_first_seen_idx', 'greader_modified', 'greader_feed_modified', 'entries_feed_published_idx']) assert(datePlan.includes(index), datePlan)
   assert(!/SCAN (e|a)\b/.test(datePlan), datePlan)
   check.close()
   const controllers = Array.from({length:8}, () => new AbortController())

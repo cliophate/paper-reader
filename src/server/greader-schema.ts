@@ -4,6 +4,9 @@ import { transaction } from './transaction.js'
 export function migrateGreader(db: DatabaseSync) {
   transaction(db, () => {
     if (db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'greader_settings'").get()) { db.exec('PRAGMA user_version = 16'); return }
+    // Reuse the existing feed, arrival and search-scope indexes. Keep the
+    // modification clock out of state indexes so a clock update touches only
+    // greader_modified. Unread counts need feed and arrival without HTML reads.
     db.exec(`CREATE TABLE greader_settings (
       id INTEGER PRIMARY KEY CHECK(id = 1), enabled INTEGER NOT NULL DEFAULT 0,
       username TEXT NOT NULL DEFAULT '', key TEXT NOT NULL, updated INTEGER NOT NULL DEFAULT 0);
@@ -11,13 +14,10 @@ export function migrateGreader(db: DatabaseSync) {
       ALTER TABLE feeds ADD COLUMN greader_modified_ms INTEGER NOT NULL DEFAULT 0;
       CREATE INDEX greader_feed_modified ON feeds(greader_modified_ms, id);
       ALTER TABLE entries ADD COLUMN greader_modified_ms INTEGER NOT NULL DEFAULT 0;
-      CREATE INDEX greader_feed_items ON entries(feed_id, id, first_seen_at, greader_modified_ms, read, starred);
       UPDATE entries SET greader_modified_ms = first_seen_at;
-      CREATE INDEX greader_scope ON entries(id, feed_id, read, starred, first_seen_at, greader_modified_ms);
       CREATE INDEX greader_modified ON entries(greader_modified_ms, id);
-      CREATE INDEX greader_arrived ON entries(first_seen_at, id);
-      CREATE INDEX greader_unread ON entries(id, feed_id, first_seen_at, greader_modified_ms, starred, read) WHERE read = 0;
-      CREATE INDEX greader_starred ON entries(id, feed_id, first_seen_at, greader_modified_ms, starred, read) WHERE starred = 1;
+      CREATE INDEX greader_unread ON entries(id, feed_id, first_seen_at, read) WHERE read = 0;
+      CREATE INDEX greader_starred ON entries(id) WHERE starred = 1;
       CREATE TRIGGER greader_insert AFTER INSERT ON entries BEGIN
         UPDATE entries SET greader_modified_ms = new.first_seen_at WHERE id = new.id;
       END;

@@ -103,7 +103,7 @@ export function scanFrom(q: Query, contents = false, arrivalFirst = false) {
   const starred = streams.some(s => s.kind === 'state' && s.id === 'starred')
   const tail = ' CROSS JOIN article_identities ai ON ai.id = e.id CROSS JOIN feeds f ON f.id = e.feed_id'
   if ((unread || starred) && !arrivalFirst) return { from: `FROM entries e INDEXED BY greader_${unread ? 'unread' : 'starred'} CROSS JOIN article_arrivals a ON a.entry_id = e.id${tail}`, extra: unread ? ' AND e.read = 0' : ' AND e.starred = 1' }
-  return { from: `FROM article_arrivals a CROSS JOIN entries e ${contents ? '' : 'INDEXED BY greader_scope'} ON e.id = a.entry_id${tail}`, extra: '' }
+  return { from: `FROM article_arrivals a CROSS JOIN entries e ${contents || q.ot || q.nt ? '' : 'INDEXED BY entries_search_scope_idx'} ON e.id = a.entry_id${tail}`, extra: '' }
 }
 export function scanPageFrom(db: DatabaseSync, q: Query, contents = false) {
   // Sparse incremental sync starts at the three modification/arrival indexes.
@@ -111,9 +111,9 @@ export function scanPageFrom(db: DatabaseSync, q: Query, contents = false) {
   if (q.ot) {
     const since = Math.trunc(q.ot * 1000)
     const paths = [
-      `SELECT id FROM entries INDEXED BY greader_arrived WHERE first_seen_at >= ${since}`,
+      `SELECT id FROM entries INDEXED BY entries_first_seen_idx WHERE first_seen_at >= ${since}`,
       `SELECT id FROM entries INDEXED BY greader_modified WHERE greader_modified_ms >= ${since}`,
-      `SELECT id FROM entries INDEXED BY greader_feed_items WHERE feed_id IN (SELECT id FROM feeds INDEXED BY greader_feed_modified WHERE greader_modified_ms >= ${since})`,
+      `SELECT id FROM entries INDEXED BY entries_feed_published_idx WHERE feed_id IN (SELECT id FROM feeds INDEXED BY greader_feed_modified WHERE greader_modified_ms >= ${since})`,
     ]
     // UNION ALL lets this bounded density probe stop without sorting candidates.
     const large = db.prepare(`SELECT 1 FROM (${paths.join(' UNION ALL ')}) LIMIT 1 OFFSET 1000`).get()

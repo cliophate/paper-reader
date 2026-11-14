@@ -449,3 +449,34 @@ it.each([14, 15])('reuses a schema %i first-deletion backup after the login upgr
   expect(db.retention.lastRun()?.deleted).toBe(2)
   expect(fs.readFileSync(backup)).toEqual(bytes)
 })
+
+it('lists retention controls in navigation order without counting article history', () => {
+  seed(1)
+  const first = db.saveLocalSubscription(backend.id, { title: 'First ungrouped', url: 'https://example.test/first' })
+  const second = db.saveLocalSubscription(backend.id, { title: 'Second ungrouped', url: 'https://example.test/second' })
+  const inactive = db.saveLocalSubscription(backend.id, { title: 'Inactive', url: 'https://example.test/inactive' })
+  sql.prepare('UPDATE feeds SET position = 2 WHERE id = ?').run(first)
+  sql.prepare('UPDATE feeds SET position = 1 WHERE id = ?').run(second)
+  sql.prepare('UPDATE feeds SET active = 0 WHERE id = ?').run(inactive)
+  const folders: string[] = []
+  for (const title of ['Z folder', 'A folder']) {
+    const result = db.organization.apply(backend.id, db.organization.metadata(backend.id).revision, [{ type: 'create-folder', title }]).results[0]
+    if (result.status !== 'applied' || !result.id) throw Error('fixture')
+    folders.push(result.id)
+    db.organization.apply(backend.id, db.organization.metadata(backend.id).revision, [{ type: 'add-membership', feedId: feed, folderId: result.id }])
+  }
+  sql.exec('UPDATE folders SET position = 0')
+  db.retention.save(policy({ feedDays: { [feed]: 5, [inactive]: 10 }, folderDays: { [folders[0]]: 20, missing: 30 } }), 0)
+  const navigation = vi.spyOn(db, 'localNavigation').mockImplementation(() => { throw Error('Progress must not scan article counts') })
+  try {
+    const view = service.view()
+    expect(view.folders.map(folder => folder.id)).toEqual([folders[1], folders[0]])
+    expect(view.feeds).toEqual([
+      { id: second, title: 'Second ungrouped', folderIds: [] },
+      { id: first, title: 'First ungrouped', folderIds: [] },
+      { id: feed, title: 'Fixture', folderIds: [folders[1], folders[0]] },
+    ])
+    expect(view.policy.feedDays).toEqual({ [feed]: 5 })
+    expect(view.policy.folderDays).toEqual({ [folders[0]]: 20 })
+  } finally { navigation.mockRestore() }
+})
