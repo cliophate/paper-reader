@@ -90,10 +90,11 @@ test('mobile panes survive back, forward and refresh', async ({ page }) => {
   const articlePath = `/folder/${folder.linkNumber}/a/a/${article.linkNumber}?unread=0`
   await ready(page, articlePath)
   await expect(page.locator('.app')).toHaveAttribute('data-mobile-pane', 'article')
-  await page.goBack()
+  // These are same-document transitions; ready waits for the destination state.
+  await page.evaluate(() => history.back())
   await ready(page, `/folder/${folder.linkNumber}/a?unread=0&pane=stories`)
   await expect(page.locator('.app')).toHaveAttribute('data-mobile-pane', 'stories')
-  await page.goForward()
+  await page.evaluate(() => history.forward())
   await ready(page, articlePath)
   await page.reload()
   await ready(page, articlePath)
@@ -101,7 +102,7 @@ test('mobile panes survive back, forward and refresh', async ({ page }) => {
   await page.getByRole('button', { name: 'Sources', exact: true }).click()
   await ready(page, `/folder/${folder.linkNumber}/a?unread=0`)
   await expect(page.locator('.app')).toHaveAttribute('data-mobile-pane', 'sources')
-  await page.goBack()
+  await page.evaluate(() => history.back())
   await ready(page, articlePath)
   await expect(page.locator('.app')).toHaveAttribute('data-mobile-pane', 'article')
 })

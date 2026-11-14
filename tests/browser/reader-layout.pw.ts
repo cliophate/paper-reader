@@ -143,6 +143,8 @@ for (const viewport of [{ width: 393, height: 875 }, { width: 820, height: 1180 
       await openReader(page)
       const middle = await page.locator('.article-scroll').evaluate(el => 96 + (el.scrollHeight - el.clientHeight - 192) * 0.46)
       await scrollTo(page, middle)
+      // A frame can run before WebKit delivers the scroll event.
+      await expect(hidden(page)).toHaveCount(1)
       await page.locator('.article-view').focus()
       await expect(hidden(page)).toHaveCount(0)
       const before = await geometry(page)
