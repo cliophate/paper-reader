@@ -8,6 +8,7 @@ import type { PaperDatabase } from './db.js'
 import type { BackendIdentity } from './identity.js'
 import type { RetentionPolicy, RetentionPreview, RetentionView } from '../shared/retention.js'
 import { DAY, evaluate, RETENTION_BATCH, validatePolicy } from './retention-store.js'
+import { decodeHtmlText } from './text.js'
 
 export class RetentionService {
   private timer?: ReturnType<typeof setInterval>
@@ -27,7 +28,7 @@ export class RetentionService {
     const organization = this.backend.kind === 'standalone' ? this.db.organization.metadata(this.backend.id) : null
     const folders = (organization?.folders || []).map(row => ({ id: String(row.id), title: String(row.title) }))
     const activeFeeds = new Map((organization?.feeds || []).filter(row => Number(row.active) === 1)
-      .map(row => [String(row.id), { id: String(row.id), title: String(row.title), folderIds: [] as string[] }]))
+      .map(row => [String(row.id), { id: String(row.id), title: decodeHtmlText(String(row.title)), folderIds: [] as string[] }]))
     const groupedFeeds: Array<{ id: string; title: string; folderIds: string[] }> = []
     for (const folder of folders) for (const member of organization?.memberships || []) {
       const feed = activeFeeds.get(String(member.feed_id))

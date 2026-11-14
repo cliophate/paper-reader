@@ -453,7 +453,7 @@ it.each([14, 15])('reuses a schema %i first-deletion backup after the login upgr
 it('lists retention controls in navigation order without counting article history', () => {
   seed(1)
   const first = db.saveLocalSubscription(backend.id, { title: 'First ungrouped', url: 'https://example.test/first' })
-  const second = db.saveLocalSubscription(backend.id, { title: 'Second ungrouped', url: 'https://example.test/second' })
+  const second = db.saveLocalSubscription(backend.id, { title: 'Second &amp; ungrouped', url: 'https://example.test/second' })
   const inactive = db.saveLocalSubscription(backend.id, { title: 'Inactive', url: 'https://example.test/inactive' })
   sql.prepare('UPDATE feeds SET position = 2 WHERE id = ?').run(first)
   sql.prepare('UPDATE feeds SET position = 1 WHERE id = ?').run(second)
@@ -472,7 +472,7 @@ it('lists retention controls in navigation order without counting article histor
     const view = service.view()
     expect(view.folders.map(folder => folder.id)).toEqual([folders[1], folders[0]])
     expect(view.feeds).toEqual([
-      { id: second, title: 'Second ungrouped', folderIds: [] },
+      { id: second, title: 'Second & ungrouped', folderIds: [] },
       { id: first, title: 'First ungrouped', folderIds: [] },
       { id: feed, title: 'Fixture', folderIds: [folders[1], folders[0]] },
     ])
