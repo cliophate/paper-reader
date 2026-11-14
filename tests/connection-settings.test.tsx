@@ -6,7 +6,7 @@ import { ConnectionSettings } from '../src/client/components/ConnectionSettings'
 import { api } from '../src/client/api'
 import type { ConnectionsSettings } from '../src/shared/connections'
 
-vi.mock('../src/client/api', () => ({ api: { connections: vi.fn(), updateConnections: vi.fn() } }))
+vi.mock('../src/client/api', () => ({ api: { connections: vi.fn(), updateConnections: vi.fn(), testAiConnection: vi.fn() } }))
 let root: Root
 let container: HTMLDivElement
 let settings: ConnectionsSettings
@@ -15,13 +15,19 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
   settings = {
-    ai: { enabled: false, codexEnabled: true, discussionEnabled: true, briefingsEnabled: true, headlinesEnabled: true, collectionsEnabled: true },
+    ai: { provider: 'codex', enabled: false, codexEnabled: true, discussionEnabled: true, briefingsEnabled: true, headlinesEnabled: true, collectionsEnabled: true },
+    openai: { baseUrl: 'https://api.example.test/v1', discussionModel: 'discussion', headlinesModel: 'headlines', groupingModel: 'grouping', shortlistModel: 'shortlist', editorModel: 'editor', tokenConfigured: true, tokenSource: 'environment' },
     readwise: { enabled: true, location: 'later', tokenConfigured: true, tokenSource: 'environment' },
     kirby: { enabled: false, publishUrl: '', tokenConfigured: false, tokenSource: null },
   }
   vi.mocked(api.connections).mockResolvedValue(settings)
   vi.mocked(api.updateConnections).mockImplementation(async patch => {
     if (patch.readwise) settings = { ...settings, readwise: { ...settings.readwise, ...patch.readwise, tokenConfigured: patch.readwise.token === null ? false : true, tokenSource: patch.readwise.token === null ? null : 'settings' } }
+    if (patch.ai) settings = { ...settings, ai: { ...settings.ai, ...patch.ai } }
+    if (patch.openai) {
+      const { token, ...fields } = patch.openai
+      settings = { ...settings, openai: { ...settings.openai, ...fields, tokenConfigured: token === null ? false : true, tokenSource: token === null ? null : 'settings' } }
+    }
     return settings
   })
 })
@@ -104,6 +110,47 @@ describe('connection settings forms', () => {
     expect(form('Readwise Reader').querySelector('[role="alert"]')?.textContent).toContain('Could not save')
     expect(form('Readwise Reader').querySelector('[role="status"]')).toBeNull()
     expect(changed).not.toHaveBeenCalled()
+  })
+
+  it('tests the selected API model and key without saving or enabling features', async () => {
+    settings.ai.enabled = true
+    vi.mocked(api.testAiConnection).mockResolvedValue({ available: true, message: 'API connected.' })
+    await render()
+    const ai = form('AI features'), select = ai.querySelector('select')!
+    expect([...select.options].map(option => option.value)).toEqual(['none', 'codex', 'openai'])
+    await act(async () => { select.value = 'openai'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+    const key = ai.querySelector<HTMLInputElement>('input[type="password"]')!
+    expect(key.value).toBe('')
+    expect(ai.textContent).toContain('PAPER_TRUSTED_AI_ORIGINS')
+    expect(ai.textContent).toContain('provided by the server environment')
+    await enter(key, 'synthetic-api-key')
+    const model = [...ai.querySelectorAll('label')].find(label => label.textContent === 'Discussion model')!.querySelector('input')!
+    await enter(model, 'changed-model')
+    const test = [...ai.querySelectorAll('button')].find(button => button.textContent === 'Test connection')!
+    await act(async () => test.click())
+    expect(api.updateConnections).not.toHaveBeenCalled()
+    expect(api.testAiConnection).toHaveBeenCalledWith(expect.objectContaining({ token: 'synthetic-api-key', discussionModel: 'changed-model' }))
+    expect(api.testAiConnection).toHaveBeenCalledOnce()
+    expect(key.value).toBe('synthetic-api-key')
+    expect(ai.textContent).toContain('API connected.')
+  })
+
+  it('stages API key removal and keeps the form input when saving fails', async () => {
+    settings.ai.provider = 'openai'
+    await render()
+    const ai = form('AI features')
+    const remove = [...ai.querySelectorAll('button')].find(button => button.textContent === 'Remove key')!
+    await act(async () => remove.click())
+    expect(api.updateConnections).not.toHaveBeenCalled()
+    await submit(ai)
+    expect(api.updateConnections).toHaveBeenCalledWith({ ai: settings.ai, openai: expect.objectContaining({ token: null }) })
+    const key = ai.querySelector<HTMLInputElement>('input[type="password"]')!
+    await enter(key, 'synthetic-unsaved-key')
+    vi.mocked(api.updateConnections).mockRejectedValue(new Error('Could not save connection settings.'))
+    await submit(ai)
+    expect(key.value).toBe('synthetic-unsaved-key')
+    expect(api.testAiConnection).not.toHaveBeenCalled()
+    expect(ai.textContent).toContain('Could not save connection settings.')
   })
 
   it('shows a retry after a load failure', async () => {

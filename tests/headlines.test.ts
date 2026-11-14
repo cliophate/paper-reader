@@ -107,6 +107,18 @@ describe('clear headlines', () => {
     expect(service.decorate(changed).displayTitle).toBeUndefined()
   })
 
+  it('invalidates cached headlines when the selected provider model changes', async () => {
+    let version = 'openai:first-model'
+    service = new HeadlineService(db, fetchArticle, model, true, () => version)
+    await service.run()
+    expect(service.decorate(entry()).displayTitle).toBe(title)
+    version = 'openai:second-model'
+    expect(service.decorate(entry()).displayTitle).toBeUndefined()
+    await service.run()
+    expect(model).toHaveBeenCalledTimes(4)
+    expect(service.decorate(entry()).displayTitle).toBe(title)
+  })
+
   it('discards a result when the source changes while it is being reviewed', async () => {
     model.mockImplementation(async stage => {
       if (stage === 'write') return { results: [{ id: 'one', action: 'rewrite', title, evidence: ['Samsung Notes supports the S Pen'] }] }

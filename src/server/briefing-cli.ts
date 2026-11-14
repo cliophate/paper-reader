@@ -1,4 +1,5 @@
-import { AI_UNAVAILABLE, aiExecutionConfigured, warnUnsafeAi } from './ai-client.js'
+import { AI_UNAVAILABLE, warnUnsafeAi } from './ai-client.js'
+import { aiEnabled, providerConfigured } from './ai-provider.js'
 import { BriefingService } from './briefing.js'
 import { openRuntimeStorage } from './runtime-storage.js'
 import { ConnectionSettings } from './connections.js'
@@ -16,7 +17,7 @@ const storage = await openRuntimeStorage()
 try {
 const { config, database, backend } = storage
 new ConnectionSettings(config)
-if (config.codex.enabled && config.ai.briefingsEnabled && !aiExecutionConfigured()) throw new Error(AI_UNAVAILABLE)
+if (aiEnabled(config) && config.ai.briefingsEnabled && !providerConfigured(config)) throw new Error(AI_UNAVAILABLE)
 const repository = new PaperRepository(database)
 const reader = new ReaderService(database, config.readerFallbackEnabled)
 const entries = backend.identity.kind === 'standalone' || config.sync.localReads && database.getSyncValue('backfill_complete') === 'true' ? repository : backend

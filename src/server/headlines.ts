@@ -76,7 +76,9 @@ export class HeadlineService {
   private lastErrorAt: string | null = null
   private lastCompletedAt: string | null = null
   constructor(private readonly db: PaperDatabase, private readonly fetchArticle: (url: string) => Promise<{ contentHtml: string }>,
-    private readonly model: HeadlineModel, private enabled = true, private readonly modelVersion = '') {}
+    private readonly model: HeadlineModel, private enabled = true, private readonly modelVersionSource: string | (() => string) = '') {}
+
+  private get modelVersion() { return typeof this.modelVersionSource === 'function' ? this.modelVersionSource() : this.modelVersionSource }
 
   setEnabled(enabled: boolean) {
     if (enabled === this.enabled) return

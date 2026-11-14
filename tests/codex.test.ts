@@ -32,6 +32,7 @@ beforeEach(async () => {
   vi.stubEnv('PAPER_SIGNING_SECRET', 'synthetic-signing-secret')
   vi.stubEnv('READWISE_TOKEN', 'synthetic-reader-token')
   vi.stubEnv('OPENAI_API_KEY', 'synthetic-api-key')
+  vi.stubEnv('PAPER_OPENAI_API_KEY', 'synthetic-paper-api-key')
   vi.stubEnv('CODEX_HOME', path.join(directory, 'must-not-inherit'))
   const bin = path.join(directory, 'codex')
   await fs.copyFile(new URL('./fixtures/fake-codex.mjs', import.meta.url), bin)

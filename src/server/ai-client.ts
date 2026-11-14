@@ -1,7 +1,7 @@
 import http from 'node:http'
 import { Readable } from 'node:stream'
 import { AiError, AI_FAILURES, AI_QUEUE_WAIT_MS, type AiFailure } from './ai-errors.js'
-export const AI_UNAVAILABLE = 'AI is unavailable. Configure and start the isolated AI worker. See Settings > Reading & connections.'
+export const AI_UNAVAILABLE = 'AI is unavailable. Select and configure an AI provider. See Settings > Reading & connections.'
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 export function aiExecutionConfigured() {

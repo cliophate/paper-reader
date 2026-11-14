@@ -10,7 +10,7 @@ import type { NavigationPayload } from '../src/server/types.js'
 
 vi.mock('../src/server/codex.js', () => ({ runCodex: vi.fn() }))
 
-const config = { ai: { briefingsEnabled: true }, codex: { enabled: true, configDir: '/synthetic-profile' }, briefing: {}, publicUrl: 'http://fixture.test', timeZone: 'UTC' } as Config
+const config = { ai: { enabled: true, provider: 'codex', briefingsEnabled: true }, codex: { enabled: true, configDir: '/synthetic-profile' }, briefing: {}, publicUrl: 'http://fixture.test', timeZone: 'UTC' } as Config
 const navigation: NavigationPayload = { folders: [], uncategorized: [], unread: 0, starred: 0 }
 function pending<T>() {
   let resolve!: (value: T) => void

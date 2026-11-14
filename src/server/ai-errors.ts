@@ -3,7 +3,7 @@ export const AI_FAILURES = ['auth', 'model_access', 'schema', 'timeout', 'spawn'
 export type AiFailure = typeof AI_FAILURES[number]
 
 const messages: Record<AiFailure, string> = {
-  auth: 'AI login expired or was rejected. Log in to Codex in the worker again.',
+  auth: 'AI credentials were rejected. Check the API key in Settings or log in to Codex in the worker again.',
   model_access: 'AI model access was rejected. Choose a model your account can use in Settings.',
   schema: 'AI returned an invalid response. Please try again.',
   timeout: 'AI took too long. Please try again.',
@@ -11,7 +11,7 @@ const messages: Record<AiFailure, string> = {
   output_limit: 'AI exceeded the response size limit. Please try again.',
   cancelled: 'Response stopped',
   busy: 'AI is busy, try again shortly.',
-  unknown: 'AI request failed. Check the worker logs for the request ID, then try again.',
+  unknown: 'AI request failed. Check the provider configuration, then try again.',
 }
 
 export class AiError extends Error {

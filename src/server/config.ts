@@ -1,4 +1,5 @@
 import path from 'node:path'
+import type { AiProvider } from '../shared/connections.js'
 
 function value(name: string, fallback = ''): string {
   return process.env[name]?.trim() || fallback
@@ -27,11 +28,11 @@ function minuteList(name: string, fallback: number[]): number[] {
   return minutes.length ? [...new Set(minutes)].sort((left, right) => left - right) : fallback
 }
 
-function feedOrigins(): string[] {
-  return value('PAPER_TRUSTED_FEED_ORIGINS').split(',').filter(part => part.trim()).map(part => {
+function trustedOrigins(name: string): string[] {
+  return value(name).split(',').filter(part => part.trim()).map(part => {
     const url = new URL(part.trim())
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
-      throw new Error('PAPER_TRUSTED_FEED_ORIGINS must contain HTTP/HTTPS origins without credentials or paths')
+      throw new Error(`${name} must contain HTTP/HTTPS origins without credentials or paths`)
     }
     return url.origin
   })
@@ -58,6 +59,8 @@ export function loadConfig(secrets?: { internalSecret: string; signingSecret: st
   const backend = value('PAPER_BACKEND', 'freshrss')
   if (backend !== 'freshrss' && backend !== 'standalone') throw new Error('PAPER_BACKEND must be freshrss or standalone')
   if (backend === 'standalone' && value('PAPER_LOCAL_READS', 'true') !== 'true') throw new Error('Standalone mode requires PAPER_LOCAL_READS=true')
+  const provider = value('PAPER_AI_PROVIDER', value('CODEX_ENABLED') === 'true' ? 'codex' : 'none') as AiProvider
+  if (!['none', 'codex', 'openai'].includes(provider)) throw new Error('PAPER_AI_PROVIDER must be none, codex or openai')
   const stateDir = stateDirectory()
   return {
     backend,
@@ -65,7 +68,17 @@ export function loadConfig(secrets?: { internalSecret: string; signingSecret: st
     host: value('HOST', '127.0.0.1'),
     readerFallbackEnabled: value('PAPER_READER_FALLBACK_ENABLED', 'false') === 'true',
     timeZone: timeZone(),
-    trustedFeedOrigins: feedOrigins(),
+    trustedFeedOrigins: trustedOrigins('PAPER_TRUSTED_FEED_ORIGINS'),
+    openai: {
+      baseUrl: value('PAPER_OPENAI_BASE_URL', 'https://api.openai.com/v1'),
+      token: value('PAPER_OPENAI_API_KEY'),
+      trustedOrigins: trustedOrigins('PAPER_TRUSTED_AI_ORIGINS'),
+      discussionModel: value('PAPER_OPENAI_DISCUSSION_MODEL', 'gpt-4.1-mini'),
+      headlinesModel: value('PAPER_OPENAI_HEADLINES_MODEL', 'gpt-4.1-mini'),
+      groupingModel: value('PAPER_OPENAI_GROUPING_MODEL', 'gpt-4.1-mini'),
+      shortlistModel: value('PAPER_OPENAI_SHORTLIST_MODEL', 'gpt-4.1-mini'),
+      editorModel: value('PAPER_OPENAI_EDITOR_MODEL', 'gpt-4.1-mini'),
+    },
     publicUrl: value('PUBLIC_URL', 'http://localhost:8080').replace(/\/$/, ''),
     stateDir,
     databasePath: path.join(stateDir, 'paper.sqlite'),
@@ -86,7 +99,7 @@ export function loadConfig(secrets?: { internalSecret: string; signingSecret: st
       token: value('KIRBY_PUBLISH_TOKEN'),
     },
     internalSecret: value('PAPER_INTERNAL_SECRET', secrets?.internalSecret) || required('PAPER_INTERNAL_SECRET'),
-    ai: { discussionEnabled: true, briefingsEnabled: true },
+    ai: { provider, enabled: provider !== 'none', discussionEnabled: true, briefingsEnabled: true },
     collections: {
       enabled: value('PAPER_COLLECTIONS_ENABLED', 'true') === 'true',
       model: value('PAPER_COLLECTION_MODEL', value('CODEX_SHORTLIST_MODEL', 'gpt-5.6-luna')),

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { startOpenaiFixture } from '../tests/fixtures/openai-provider.mjs'
 import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
 import fs from 'node:fs/promises'
@@ -43,6 +44,7 @@ const fixture = http.createServer(async (req, res) => {
   res.statusCode = 404; send({ error: 'Optional helper is not installed in this fixture' })
 })
 fixture.listen(0, '127.0.0.1'); await once(fixture, 'listening')
+const openai = await startOpenaiFixture()
 let child, logs = ''
 async function availablePort() {
   const server = http.createServer().listen(0, '127.0.0.1'); await once(server, 'listening')
@@ -66,7 +68,7 @@ async function start(state, localReads = true) {
       FRESHRSS_USERNAME: 'fixture', FRESHRSS_API_PASSWORD: 'synthetic-password',
       PAPER_INTERNAL_SECRET: 'synthetic-internal-secret-only-for-tests', PAPER_SIGNING_SECRET: 'synthetic-signing-secret-only-for-tests',
       PAPER_SYNC_MINUTES: '28,58', PAPER_SYNC_ENABLED: 'true', PAPER_LOCAL_READS: String(localReads),
-      CODEX_ENABLED: 'false',
+      CODEX_ENABLED: 'false', PAPER_TRUSTED_AI_ORIGINS: openai.origin,
     },
   })
   child.stdout.on('data', chunk => { logs += chunk }); child.stderr.on('data', chunk => { logs += chunk })
@@ -149,6 +151,30 @@ try {
   assert.equal((await request('/api/readwise', { url: 'https://example.test/', title: 'Fixture' })).status, 503)
   assert.equal((await request('/api/status')).data.readwiseConfigured, false)
   assert.equal((await fs.stat(path.join(temporary, 'data', 'connections.json'))).mode & 0o777, 0o600)
+  const probe = await request('/api/settings/connections/test-ai', { openai: { baseUrl: `${openai.origin}/v1`, token: 'synthetic-smoke-api-key', discussionModel: 'probe' } })
+  assert.equal(probe.data.available, true)
+  assert.equal(openai.requests.length, 1)
+  assert.equal((await request('/api/status')).data.discussionConfigured, false)
+  assert.equal((await fetch(settingsUrl).then(response => response.json())).openai.tokenConfigured, false)
+  const apiSettings = await patchSettings({ ai: { enabled: true, provider: 'openai', discussionEnabled: true, headlinesEnabled: false, collectionsEnabled: false },
+    openai: { baseUrl: `${openai.origin}/v1`, token: 'synthetic-smoke-api-key', discussionModel: 'stream' } })
+  assert.equal(apiSettings.status, 200)
+  assert.equal(apiSettings.data.openai.tokenConfigured, true)
+  assert(!JSON.stringify(apiSettings.data).includes('synthetic-smoke-api-key'))
+  assert.equal((await request('/api/status')).data.discussionConfigured, true)
+  assert.equal((await request('/api/settings/connections/test-ai', {}, { Origin: 'https://untrusted.example' })).status, 403)
+  assert.equal(openai.requests.length, 1)
+  const tested = await request('/api/settings/connections/test-ai', {})
+  assert.equal(tested.data.available, true)
+  assert.equal(openai.requests.length, 2)
+  assert.equal(openai.requests[0].body.max_tokens, 8)
+  assert.equal(openai.requests[0].authorization, 'Bearer synthetic-smoke-api-key')
+  await patchSettings({ openai: { discussionModel: 'status-401' } })
+  const rejectedKey = await request('/api/settings/connections/test-ai', {})
+  assert.equal(rejectedKey.data.available, false)
+  assert(!JSON.stringify(rejectedKey).includes('synthetic-smoke-api-key'))
+  await patchSettings({ ai: { enabled: false } })
+  assert.equal((await request('/api/status')).data.discussionConfigured, false)
   const manifest = await fetch(`${base}/offline-assets.json`).then(response => response.json())
   for (const asset of manifest) assert.equal((await fetch(`${base}${asset}`)).status, 200)
   assert((await fetch(`${base}/sw.js`).then(response => response.text())).includes('paper-shell-v3-'))
@@ -160,9 +186,13 @@ try {
   assert.equal(restoredSettings.readwise.location, 'archive')
   assert.equal(restoredSettings.readwise.tokenConfigured, true)
   assert.equal(restoredSettings.ai.briefingsEnabled, false)
+  assert.equal(restoredSettings.ai.provider, 'openai')
+  assert.equal(restoredSettings.openai.tokenConfigured, true)
+  assert(!JSON.stringify(restoredSettings).includes('synthetic-smoke-api-key'))
   await patchSettings({ readwise: { enabled: true, token: '' } })
   assert.equal((await request('/api/status')).data.readwiseConfigured, true)
-  await patchSettings({ readwise: { token: null }, kirby: { token: null } })
+  await patchSettings({ readwise: { token: null }, kirby: { token: null }, openai: { token: null } })
+  assert.equal((await fetch(settingsUrl).then(response => response.json())).openai.tokenConfigured, false)
   assert.equal((await request('/api/status')).data.readwiseConfigured, false)
   assert.equal((await fetch(settingsUrl).then(response => response.json())).kirby.tokenConfigured, false)
   const restored = (await request('/api/entries/item', { id })).data.entry
@@ -206,6 +236,7 @@ try {
   assert(!logs.includes('synthetic-smoke-secret'))
   assert(!logs.includes('synthetic-smoke-reader-token'))
   assert(!logs.includes('synthetic-smoke-kirby-token'))
+  assert(!logs.includes('synthetic-smoke-api-key'))
   // Run configuration initialization only against a disposable copy.
   const setup = path.join(temporary, 'setup'); await fs.mkdir(path.join(setup, 'scripts'), { recursive: true })
   await fs.copyFile('scripts/init-config.mjs', path.join(setup, 'scripts/init-config.mjs'))
@@ -216,10 +247,10 @@ try {
   assert.equal((await fs.stat(path.join(setup, '.env'))).mode & 0o777, 0o600)
   assert(!first.includes('PAPER_SIGNING_SECRET=replace-me'))
   assert.equal(run().status, 1); assert.equal(await fs.readFile(path.join(setup, '.env'), 'utf8'), first)
-  console.log('Smoke checks passed: FreshRSS import and parity, local and remote reads/search, adapter ID validation, state writes, private connection settings, disabled integrations and briefing CLI, token masking and removal, origin checks, offline assets, restart/restore, and configuration initialization.')
+  console.log('Smoke checks passed: FreshRSS import and parity, local and remote reads/search, adapter ID validation, state writes, private connection settings, API provider tests and key redaction, disabled integrations and briefing CLI, token masking and removal, origin checks, offline assets, restart/restore, and configuration initialization.')
 } catch (error) {
   console.error(logs.slice(-4000)); throw error
 } finally {
-  await stop(); await new Promise(resolve => fixture.close(resolve))
+  await stop(); await openai.close(); await new Promise(resolve => fixture.close(resolve))
   await fs.rm(temporary, { recursive: true, force: true })
 }
