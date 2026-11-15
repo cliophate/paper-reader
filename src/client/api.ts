@@ -3,6 +3,7 @@ import type { FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarge
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
 import type { PulsePayload } from '../shared/pulse'
 import type { ConnectionsSettings, ConnectionsUpdate } from '../shared/connections'
+import type { BriefingReadResult } from '../shared/briefings'
 import type { ActivityRecord, ArticleReport, BriefingDetail, BriefingSummary, CoverageFeedback, Entry, EntryPage, FullArticle, MuteFilter, NavigationPayload, StreamRef, XThreadPost } from './types'
 
 export class ApiError extends Error {
@@ -47,6 +48,7 @@ export const api = {
   navigation: () => request<NavigationPayload>('/api/navigation'),
   briefings: () => request<BriefingSummary[]>('/api/briefings'),
   briefing: (id: string) => request<BriefingDetail>(`/api/briefings/${encodeURIComponent(id)}`),
+  markBriefingRead: (id: string) => request<BriefingReadResult>(`/api/briefings/${encodeURIComponent(id)}/read`, { method: 'POST', body: '{}' }),
   briefingFeedback: (id: string, feedback: 'useful' | 'too_broad' | 'missed') =>
     request<{ ok: boolean; feedback: string }>(`/api/briefings/${encodeURIComponent(id)}/feedback`, { method: 'POST', body: JSON.stringify({ feedback }) }),
   pulse: () => request<PulsePayload>('/api/pulse'),

@@ -49,6 +49,7 @@
   "POST /api/auth/sessions/sign-out-others": "session",
   "POST /api/auth/setup": "public",
   "POST /api/briefings/:id/feedback": "session",
+  "POST /api/briefings/:id/read": "session",
   "POST /api/discussion": "session",
   "POST /api/discussion/message": "session",
   "POST /api/discussion/stop": "session",

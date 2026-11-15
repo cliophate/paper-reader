@@ -1,3 +1,5 @@
+export type { BriefingSelection } from '../shared/briefings.js'
+
 export type StreamKind = 'all' | 'starred' | 'category' | 'feed'
 
 export interface StreamRef {
@@ -66,27 +68,4 @@ export interface NavigationPayload {
   starred: number
   folders: Folder[]
   uncategorized: Feed[]
-}
-
-export interface BriefingSelection {
-  intro?: string
-  news: Array<{
-    collectionId?: string
-    backgroundEntryIds?: string[]
-    headline: string
-    summary: string
-    entryIds: string[]
-    role?: 'lead' | 'brief'
-    imageEntryId?: string
-  }>
-  worthNoticing: Array<{
-    entryId: string
-    reason: string
-    summary: string
-  }>
-  social: Array<{
-    entryId: string
-    summary: string
-    imageEntryId?: string
-  }>
 }
