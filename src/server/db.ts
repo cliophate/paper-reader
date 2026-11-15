@@ -302,7 +302,7 @@ export class PaperDatabase {
     return transaction(this.db, () => {
       const active = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
       const identity: BackendIdentity = active ? this.identities.backend(active) : { id: `standalone:${crypto.randomUUID()}`, kind: 'standalone' }
-      if (identity.kind !== 'standalone') throw new Error('This database belongs to FreshRSS. Use a separate data directory for standalone mode.')
+      if (identity.kind !== 'standalone') throw new Error(`This database belongs to ${identity.kind === 'miniflux' ? 'Miniflux' : 'FreshRSS'}. Use a separate data directory for standalone mode.`)
       this.bindBackend(identity)
       return identity
     })

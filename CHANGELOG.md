@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Add a native Miniflux backend for Miniflux 2.3.2 or newer. Paper syncs
+  through the REST API with a dedicated API key and refreshes changed article
+  content in the background. See [docs/miniflux.md](docs/miniflux.md).
+- Schema v17 allows Miniflux as a reader backend. Upgrades create
+  `.before-miniflux-v17`.
+- The web briefing view shows the saved selection in Paper instead of the
+  email in a frame. Marking a briefing read asks for confirmation in place and
+  updates each source's status.
+- Pulse keeps valid collection memberships when the model returns an unusable
+  excerpt. Only that excerpt is dropped.
+- Installation tests run with Podman as well as Docker.
+
 ## 0.2.0-alpha.2
 
 An alpha release with changes since [0.2.0-alpha.1](https://github.com/cliophate/paper-reader/releases/tag/v0.2.0-alpha.1).
