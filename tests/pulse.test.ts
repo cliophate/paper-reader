@@ -276,7 +276,22 @@ describe('Pulse membership quality', () => {
     expect(result[0].entryIds).toEqual(['1', '2', '3'])
     expect(result[0].developments?.['1']).toBe(entries[0].title)
     model.mockResolvedValue({ decisions: entries.map((_, i) => ({ entryId: `a${i + 1}`, relevant: true, duplicateOf: '', excerpt: 'A made up factual development' })) })
-    await expect(reviewPulseGroups(model, groups, entries, [])).rejects.toThrow('Unsupported')
+    const withoutExcerpts = await reviewPulseGroups(model, groups, entries, [])
+    expect(withoutExcerpts[0].entryIds).toEqual(['1', '2', '3', '4'])
+    expect(Object.values(withoutExcerpts[0].developments!)).toEqual(['', '', '', ''])
+  })
+
+  it.each(['invented', 'short', 'long'])('drops a %s excerpt without losing supported excerpts or memberships', async invalid => {
+    const body = 'A source passage with a detailed explanation of the camera change. '.repeat(8).trim()
+    const entries = [article('1', undefined, { contentHtml: `<p>${body}</p>` }), article('2'), article('3')]
+    const groups = validatePulseGroups(proposal(entries), entries, [])
+    const excerpt = invalid === 'invented' ? 'An unsupported factual claim' : invalid === 'short' ? 'source' : body
+    const model = vi.fn().mockResolvedValue({ decisions: entries.map((entry, i) => ({ entryId: `a${i + 1}`, relevant: true, duplicateOf: '', excerpt: i === 0 ? excerpt : entry.title })) })
+    const result = await reviewPulseGroups(model, groups, entries, [])
+    expect(result[0].entryIds).toEqual(['1', '2', '3'])
+    expect(result[0].developments).toEqual({ '1': '', '2': entries[1].title, '3': entries[2].title })
+    model.mockResolvedValue({ decisions: entries.map((_, i) => ({ entryId: i === 0 ? 'unknown' : `a${i + 1}`, relevant: true, duplicateOf: '', excerpt: '' })) })
+    await expect(reviewPulseGroups(model, groups, entries, [])).rejects.toThrow('Invalid membership review')
   })
 
   it('recognizes syndicated text across different headlines and URLs', () => {
