@@ -17,7 +17,7 @@ function Days({ label, value, onChange, suggested = 30, inherit = false }: {
   </label>
 }
 
-export function RetentionSettings({ backend }: { backend: 'standalone' | 'freshrss' }) {
+export function RetentionSettings({ backend }: { backend: 'standalone' | 'freshrss' | 'miniflux' }) {
   const [view, setView] = useState<RetentionView | null>(null)
   const [draft, setDraft] = useState<RetentionPolicy | null>(null)
   const [revision, setRevision] = useState(0)
@@ -57,7 +57,7 @@ export function RetentionSettings({ backend }: { backend: 'standalone' | 'freshr
   const deleting = draft && (draft.readDays !== null || draft.unreadDays !== null)
   return <section className="retention-settings" aria-label="Retention">
     <h4>Retention</h4>
-    {backend === 'freshrss' && <p>FreshRSS owns article history. Paper only cleans its full-text cache here.</p>}
+    {backend !== 'standalone' && <p>{backend === 'miniflux' ? 'Miniflux' : 'FreshRSS'} owns article history. Paper only cleans its full-text cache here.</p>}
     {draft && view && <form onSubmit={event => { event.preventDefault(); void perform(false) }}>
       <fieldset disabled={busy}>
         {backend === 'standalone' && <>

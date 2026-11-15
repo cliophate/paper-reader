@@ -1,3 +1,4 @@
+import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -45,7 +46,7 @@ afterEach(async () => { await service.stop(); sql.close(); db.close(); fs.rmSync
 it('defaults every limit off and validates days and FreshRSS restrictions', () => {
   expect(db.retention.settings()).toEqual({ policy: defaultPolicy(), revision: 0 })
   for (const readDays of [0, -1, 2.5, 36501, '10', undefined]) expect(() => validatePolicy({ ...policy(), readDays }, true)).toThrow()
-  expect(() => validatePolicy(policy({ autoReadDays: 5 }), false)).toThrow(/FreshRSS/)
+  expect(() => validatePolicy(policy({ autoReadDays: 5 }), false)).toThrow(/remote reader/)
   expect(validatePolicy(policy({ cacheDays: 30 }), false).cacheDays).toBe(30)
 })
 
@@ -217,7 +218,7 @@ describe('schema v14', () => {
     for (const index of ['article_aliases_entry_idx', 'article_fingerprints_entry_idx', 'article_cache_age_idx', 'article_reports_entry_idx']) sql.exec(`DROP INDEX ${index}`)
     sql.exec('PRAGMA user_version = 13')
     db = new PaperDatabase(file); service = new RetentionService(db, backend)
-    expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(16)
+    expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
     const saved = new DatabaseSync(file + '.before-retention-v14', { readOnly: true })
     expect(saved.prepare('PRAGMA user_version').get()?.user_version).toBe(13)
     expect(saved.prepare('SELECT COUNT(*) n FROM entries').get()?.n).toBe(1); saved.close()
@@ -310,7 +311,7 @@ it('rolls back a failed migration and retains the same backup on retry', async (
   expect(sql.prepare("SELECT name FROM sqlite_master WHERE name = 'retention_settings'").get()).toBeUndefined()
   const saved = fs.readFileSync(file + '.before-retention-v14')
   db = new PaperDatabase(file); service = new RetentionService(db, backend)
-  expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(16)
+  expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
   expect(fs.readFileSync(file + '.before-retention-v14')).toEqual(saved)
 })
 

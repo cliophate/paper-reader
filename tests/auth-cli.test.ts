@@ -1,3 +1,4 @@
+import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -51,7 +52,7 @@ it.each([13, 14])('upgrades schema %i through retention v14 to login v15 and pre
   storage.close()
   database = new PaperDatabase(file)
   const upgraded = new DatabaseSync(file, { readOnly: true })
-  expect(upgraded.prepare('PRAGMA user_version').get()!.user_version).toBe(16)
+  expect(upgraded.prepare('PRAGMA user_version').get()!.user_version).toBe(DATABASE_VERSION)
   expect(upgraded.prepare('PRAGMA integrity_check').get()!.integrity_check).toBe('ok')
   upgraded.close()
   const loginBackup = file + '.before-owner-login-v15'
@@ -62,7 +63,7 @@ it.each([13, 14])('upgrades schema %i through retention v14 to login v15 and pre
   backup.close()
   expect(fs.statSync(loginBackup).mode & 0o777).toBe(0o600)
   expect(fs.readdirSync(directory).filter(name => name.includes('.before-')).sort()).toEqual([
-    'paper.sqlite.before-greader-v16', 'paper.sqlite.before-owner-login-v15', ...(version === 13 ? ['paper.sqlite.before-retention-v14'] : []),
+    'paper.sqlite.before-greader-v16', 'paper.sqlite.before-miniflux-v17', 'paper.sqlite.before-owner-login-v15', ...(version === 13 ? ['paper.sqlite.before-retention-v14'] : []),
   ])
   if (version === 13) {
     const retentionBackup = new DatabaseSync(file + '.before-retention-v14', { readOnly: true })

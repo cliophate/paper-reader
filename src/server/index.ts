@@ -32,6 +32,7 @@ import { previewFeed } from './feed-repair.js'
 import { FeedHttpError } from './feed-http.js'
 import { subscriptionToolsRoutes } from './subscription-tools-routes.js'
 import { freshRssImportStore } from './subscription-import-freshrss.js'
+import { minifluxImportStore } from './subscription-import-miniflux.js'
 import { discoveryTransport } from './discovery-transport.js'
 import { ReaderService } from './reader.js'
 import { fullTextRoute } from './fulltext-route.js'
@@ -120,7 +121,8 @@ const readerAuth = new GreaderAuth(database.greaderDatabase, database.auth, !!st
 const greader = greaderRoutes(database, readerAuth, backend.identity.id, standalone?.state, authConnections, discoveryTransport(config.trustedFeedOrigins))
 app.use(greader.handler)
 app.use('/api/auth', authRoutes(database.auth, config.publicUrl, readerAuth))
-app.use('/api/subscription-tools', subscriptionToolsRoutes(standalone ? localImportStore(database, backend.identity.id) : freshRssImportStore(backend, synchronizer), discoveryTransport(config.trustedFeedOrigins)))
+app.use('/api/subscription-tools', subscriptionToolsRoutes(standalone ? localImportStore(database, backend.identity.id)
+  : backend.identity.kind === 'miniflux' ? minifluxImportStore(backend, synchronizer) : freshRssImportStore(backend, synchronizer), discoveryTransport(config.trustedFeedOrigins)))
 app.use(express.json({ limit: '2mb' }))
 app.use(express.urlencoded({ extended: false }))
 app.use('/api/settings/connections', (error: unknown, _request: Request, response: Response, _next: NextFunction) => {

@@ -19,6 +19,10 @@ export const FRESHRSS_ORGANIZATION_CAPABILITIES: Readonly<OrganizationCapabiliti
   conditionalWrites: false, renameFeed: true, moveFeed: true, unsubscribe: true,
 })
 
+export const MINIFLUX_ORGANIZATION_CAPABILITIES: Readonly<OrganizationCapabilities> = Object.freeze({
+  ...FRESHRSS_ORGANIZATION_CAPABILITIES, stableFolderIds: true,
+})
+
 export class OrganizationError extends Error {
   constructor(readonly code: OrganizationErrorCode, message: string, readonly currentRevision?: number) {
     super(message)

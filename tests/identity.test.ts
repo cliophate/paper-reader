@@ -1,3 +1,4 @@
+import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -361,7 +362,7 @@ describe('v7 migration recovery', () => {
     expect(db.discussion(id)?.entryId).toBe(id)
     expect(db.syncEntryIds(all)).toEqual([id])
     reopen()
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(16)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
     expect(sql(c => c.prepare('SELECT COUNT(*) AS n FROM article_arrivals').get()?.n)).toBe(1)
     expect(fs.readFileSync(backup)).toEqual(before)
     expect(fs.readFileSync(organizationBackup)).toEqual(organizationBefore)
@@ -375,7 +376,7 @@ describe('v7 migration recovery', () => {
     expect(sql(c => c.prepare('PRAGMA table_info(entries)').all().map(row => row.name))).not.toContain('state_revision')
     sql(c => c.exec('DROP VIEW article_arrivals'))
     reopen()
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(16)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
   })
 
   it('rolls back interrupted source adoption without leaving aliases or completion markers', () => {

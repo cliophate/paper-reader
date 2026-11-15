@@ -110,7 +110,7 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
     </fieldset>
     {preview && <form className="opml-preview" aria-label="Confirm subscription import" onSubmit={event => submit(event, apply)}>
       <h4 ref={previewHeading} tabIndex={-1}>Review {preview.rows.length} subscription{preview.rows.length === 1 ? '' : 's'}</h4>
-      <p>Duplicate policy: reuse a named subscription or skip it. Reuse keeps its title and URL. Distinct subscriptions are never merged by URL.{!preview.multipleMemberships && ' FreshRSS cannot create a second subscription with an already subscribed URL.'}</p>
+      <p>Duplicate policy: reuse a named subscription or skip it. Reuse keeps its title and URL. Distinct subscriptions are never merged by URL.{!preview.multipleMemberships && ` ${preview.backend === 'miniflux' ? 'Miniflux' : 'FreshRSS'} cannot create a second subscription with an already subscribed URL.`}</p>
       {preview.warnings.map(warning => <p key={warning}>{warning}</p>)}
       <fieldset disabled={busy}>
         {preview.rows.map(row => {
@@ -133,7 +133,7 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
             {choice.action !== 'skip' && <>
               {preview.multipleMemberships ? <label>Destination folders, one per line<textarea value={choice.folders?.join('\n') ?? ''} onChange={event => update(row.key, { folders: event.target.value.split('\n').filter(Boolean) })} rows={2} /></label> : <label>Destination for {row.title}<select value={choice.folders === null ? 'keep' : choice.folders[0] ? `folder:${choice.folders[0]}` : 'none'} onChange={event => update(row.key, { folders: event.target.value === 'keep' ? null : event.target.value.startsWith('folder:') ? [event.target.value.slice(7)] : [] })}>
                 {choice.action === 'reuse' && <option value="keep">Keep existing folders</option>}
-                <option value="none">Uncategorized</option>{folderOptions.map(folder => <option key={folder} value={`folder:${folder}`}>{folder}</option>)}
+                {(preview.backend !== 'miniflux' || choice.action === 'create') && <option value="none">{preview.backend === 'miniflux' ? 'Miniflux default category' : 'Uncategorized'}</option>}{folderOptions.map(folder => <option key={folder} value={`folder:${folder}`}>{folder}</option>)}
               </select></label>}
               {(choice.action === 'create' || preview.multipleMemberships) && <label>Use a different flat folder name<input type="text" maxLength={120} value={folderDrafts[row.key] || ''} onChange={event => update(row.key, { folders: event.target.value ? [event.target.value] : [] }, event.target.value)} placeholder="New folder name" /></label>}
             </>}
