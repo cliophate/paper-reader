@@ -1,6 +1,6 @@
 # Article retention
 
-Open **Settings > Backend & data > Retention**. Every limit starts off.
+Open **Settings > Backend & data > Article cleanup**. Every limit starts off.
 Standalone Paper can auto-mark articles read and delete old read or unread
 articles using separate limits. Age starts at `entries.first_seen_at`, when
 Paper first stored the article. Publication dates do not control cleanup.
@@ -9,7 +9,7 @@ Unknown legacy arrival dates stay protected.
 Auto-read uses the feed override first. Otherwise it checks every folder the
 feed belongs to. Among folder overrides, **Never** wins; otherwise the largest
 number of days wins. Without an override, the global limit applies. **Inherit**
-removes an override. The feed selector in Retention settings shows the effective
+removes an override. The feed selector in Article cleanup shows the effective
 limit and its source as you edit. Read and unread deletion limits are global.
 
 Auto-read happens before deletion evaluation, so an article marked read uses the
