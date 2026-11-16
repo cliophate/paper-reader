@@ -162,6 +162,13 @@ accounts and feeds. It checks two-way state sync, feed repair, connection
 settings, proxy authentication, and backup restoration. It removes its test
 containers and network when finished.
 
+For the FreshRSS/proxy checks with rootless Podman, build a runtime image and run
+`PAPER_CONTAINER_ENGINE=podman PAPER_TEST_IMAGE=localhost/paper-public:test python3 scripts/test-installation.py`.
+The shared helper adds `keep-id` for explicit container users and SELinux labels
+for disposable bind mounts. The AI worker checks require Docker Compose and are
+skipped with Podman; run `scripts/test-ai-worker.py` separately with Docker Compose.
+The default Docker path continues to run both sets of checks.
+
 The local HTTP provider fixture in `tests/fixtures/openai-provider.mjs` exercises
 structured JSON, JSON-mode fallback, SSE, cancellation, limits, credential
 handling and the private-origin gate. It does not contact a real provider.
