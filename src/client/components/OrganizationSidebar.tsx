@@ -288,7 +288,7 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
         }}><Icon name="edit" /></button>}
       </div>
     </div>
-    {editing && <p className="organization-note">{capabilities?.conditionalWrites ? 'Use grips to reorder and options to edit. Select feeds to move them together. Changes save immediately.' : 'FreshRSS supports feed edits and unsubscribe. Folder management and ordering are unavailable. Bulk changes can partly succeed; concurrent remote edits cannot be revision-checked.'}</p>}
+    {editing && <p className="organization-note">{capabilities?.conditionalWrites ? 'Use grips to reorder and options to edit. Select feeds to move them together. Changes save immediately.' : `${snapshot?.backend === 'miniflux' ? 'Miniflux' : 'FreshRSS'} supports feed edits and unsubscribe. Folder management and ordering are unavailable. Bulk changes can partly succeed; concurrent remote edits cannot be revision-checked.`}</p>}
     {!online && <p className="organization-note">Connect to organize feeds.</p>}
     {feedback && <p className="organization-feedback" role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p>}
     {(needsReload || !snapshot) && <button disabled={busy || !online} onClick={() => void reload()}>Reload organization</button>}
@@ -305,7 +305,7 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
         {expanded.has(folder.id) && renderFeeds(folder.id)}
       </div>
     })}
-    {((editing && !namedUncategorized) || (navigation?.uncategorized || []).some(feed => !unreadOnly || feed.unread > 0) || (drag?.kind === 'feed' && !namedUncategorized)) && <div className="folder">
+    {snapshot?.backend !== 'miniflux' && ((editing && !namedUncategorized) || (navigation?.uncategorized || []).some(feed => !unreadOnly || feed.unread > 0) || (drag?.kind === 'feed' && !namedUncategorized)) && <div className="folder">
       <button className="folder-row" {...rowProps(folderRow(null))} aria-expanded={expanded.has(null)} onClick={() => toggle(null)}><Icon name="chevron" className={expanded.has(null) ? 'rotated' : ''} /><span className="source-label">Uncategorized</span>{uncategorizedUnread > 0 && <span className="source-count">{uncategorizedUnread}</span>}</button>
       {expanded.has(null) && renderFeeds(null)}
     </div>}
@@ -331,7 +331,7 @@ export function OrganizationSidebar({ snapshot, navigation, active, unreadOnly, 
       })}
       {(menu.target.kind === 'feed' ? capabilities?.unsubscribe : capabilities?.removeFolder) && <button role="menuitem" className="danger" disabled={!writable} onClick={() => begin({ type: 'remove', target: menu.target })}>{menu.target.kind === 'feed' ? 'Unsubscribe' : 'Remove folder'}</button>}
     </OrganizationMenu>, document.body)}
-    {action && createPortal(<OrganizationDialog action={action} folders={folders} multipleMemberships={!!capabilities?.multipleMemberships} defaultFolderLabel={namedUncategorized ? 'Default folder' : 'Uncategorized'} busy={busy} writable={writable} feedback={feedback} needsReload={needsReload} onReload={() => void reload()} onClose={closeAction} onSubmit={(commands, labels, moving) => void apply(commands, labels, moving)} />, document.body)}
+    {action && createPortal(<OrganizationDialog action={action} folders={folders} multipleMemberships={!!capabilities?.multipleMemberships} requireCategory={snapshot?.backend === 'miniflux'} defaultFolderLabel={namedUncategorized ? 'Default folder' : 'Uncategorized'} busy={busy} writable={writable} feedback={feedback} needsReload={needsReload} onReload={() => void reload()} onClose={closeAction} onSubmit={(commands, labels, moving) => void apply(commands, labels, moving)} />, document.body)}
   </section>
 }
 
@@ -347,15 +347,15 @@ function OrganizationMenu({ menu, onClose, children }: { menu: { target?: Target
   return <div ref={ref} className="feed-context-menu organization-menu" role="menu" aria-label={`${title} options`} style={{ left: menu.left, top: menu.top }} onKeyDown={event => { if (event.key !== 'Tab') event.stopPropagation(); if (event.key === 'Escape') { event.preventDefault(); onClose() } }}><strong>{title}</strong>{children}</div>
 }
 
-function OrganizationDialog({ action, folders, multipleMemberships, defaultFolderLabel, busy, writable, feedback, needsReload, onReload, onClose, onSubmit }: {
-  action: Action; folders: Folder[]; multipleMemberships: boolean; defaultFolderLabel: string; busy: boolean; writable: boolean
+function OrganizationDialog({ action, folders, multipleMemberships, requireCategory, defaultFolderLabel, busy, writable, feedback, needsReload, onReload, onClose, onSubmit }: {
+  action: Action; folders: Folder[]; multipleMemberships: boolean; requireCategory: boolean; defaultFolderLabel: string; busy: boolean; writable: boolean
   feedback: { error: boolean; text: string } | null; needsReload: boolean; onReload: () => void; onClose: () => void
   onSubmit: (commands: OrganizationCommand[], labels: string[], moving?: Member[]) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   useDialogFocus(ref)
   const [title, setTitle] = useState(action.type === 'rename' ? targetTitle(action.target) : '')
-  const [destination, setDestination] = useState(action.type === 'merge' ? folders.find(folder => folder.id !== action.folder.id)?.id || '' : '')
+  const [destination, setDestination] = useState(action.type === 'merge' ? folders.find(folder => folder.id !== action.folder.id)?.id || '' : requireCategory ? folders[0]?.id || '' : '')
   const heading = action.type === 'unsubscribe' ? `Unsubscribe from ${action.members.length} ${action.members.length === 1 ? 'feed' : 'feeds'}?` : action.type === 'create' ? 'New folder' : action.type === 'rename' ? `Rename ${action.target.kind}` : action.type === 'move' ? 'Move feeds' : action.type === 'merge' ? `Merge ${action.folder.title}` : action.target.kind === 'feed' ? `Unsubscribe from ${targetTitle(action.target)}?` : `Remove ${targetTitle(action.target)}?`
   const submit = () => {
     if (action.type === 'unsubscribe') onSubmit(action.members.map(member => ({ type: 'unsubscribe', feedId: member.feed.id })), action.members.map(member => member.feed.title), action.members)
@@ -369,8 +369,8 @@ function OrganizationDialog({ action, folders, multipleMemberships, defaultFolde
     <h2 id="organization-dialog-title">{heading}</h2>
     <form onSubmit={event => { event.preventDefault(); if (writable) submit() }}>
       {(action.type === 'create' || action.type === 'rename') && <label>Name<input value={title} required maxLength={4096} onChange={event => setTitle(event.target.value)} /></label>}
-      {(action.type === 'move' || action.type === 'merge') && <label>Destination<select value={destination} onChange={event => setDestination(event.target.value)}>{action.type === 'move' && <option value="">{defaultFolderLabel}</option>}{folders.filter(folder => action.type !== 'merge' || folder.id !== action.folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.title}</option>)}</select></label>}
-      {action.type === 'move' && <><p>{action.members.map(member => member.feed.title).join(', ')}</p>{!multipleMemberships && <p>FreshRSS returns feeds without a chosen folder to its default category, which may appear as a named folder.</p>}{multipleMemberships && <p>Moves remove only the selected source membership. Other folders keep this feed. Choosing Uncategorized removes that membership; the feed appears there only when no memberships remain.</p>}</>}
+      {(action.type === 'move' || action.type === 'merge') && <label>Destination<select value={destination} onChange={event => setDestination(event.target.value)}>{action.type === 'move' && !requireCategory && <option value="">{defaultFolderLabel}</option>}{folders.filter(folder => action.type !== 'merge' || folder.id !== action.folder.id).map(folder => <option key={folder.id} value={folder.id}>{folder.title}</option>)}</select></label>}
+      {action.type === 'move' && <><p>{action.members.map(member => member.feed.title).join(', ')}</p>{requireCategory && <p>Each Miniflux feed belongs to one category. Choose its destination category.</p>}{!multipleMemberships && !requireCategory && <p>FreshRSS returns feeds without a chosen folder to its default category, which may appear as a named folder.</p>}{multipleMemberships && <p>Moves remove only the selected source membership. Other folders keep this feed. Choosing Uncategorized removes that membership; the feed appears there only when no memberships remain.</p>}</>}
       {action.type === 'merge' && <p>The destination keeps its name and order. New feeds append in source order, duplicate memberships appear once, and other folders keep their feeds. The source folder is removed.</p>}
       {action.type === 'unsubscribe' && <p>This stops new articles from {action.members.map(member => member.feed.title).join(', ')}. Saved article history, stars and reading positions stay available.</p>}
       {action.type === 'remove' && <p>{action.target.kind === 'folder' ? 'Subscriptions stay active. Feeds with no other folders move to Uncategorized. Feeds in other folders remain there. Article history, stars and reading positions stay saved.' : 'This stops new articles from this feed. Saved article history, stars and reading positions stay available.'}</p>}

@@ -18,7 +18,7 @@ export function validatePolicy(input: unknown, standalone: boolean): RetentionPo
       || !Object.values(overrides).every(days)) throw new Error('Invalid auto-read overrides.')
   }
   if (!standalone && (value.autoReadDays !== null || value.readDays !== null || value.unreadDays !== null
-    || Object.keys(value.folderDays).length || Object.keys(value.feedDays).length)) throw new Error('FreshRSS owns article history. Only cache cleanup is available here.')
+    || Object.keys(value.folderDays).length || Object.keys(value.feedDays).length)) throw new Error('The remote reader owns article history. Only cache cleanup is available here.')
   return { autoReadDays: value.autoReadDays, readDays: value.readDays, unreadDays: value.unreadDays,
     cacheDays: value.cacheDays, folderDays: { ...value.folderDays }, feedDays: { ...value.feedDays } }
 }

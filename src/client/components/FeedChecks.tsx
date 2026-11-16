@@ -67,7 +67,7 @@ export function FeedChecks({ children }: { children: ReactNode }) {
   return <FeedChecksContext.Provider value={{ view, busy, check, interval }}>
     <details className="feed-check-controls">
       <summary>Feed checks and intervals</summary>
-      {!view ? <p>Loading check settings...</p> : view.backend === 'freshrss' ? <p>FreshRSS manages feed checks and intervals. Refresh imports articles from FreshRSS.</p> : <>
+      {!view ? <p>Loading check settings...</p> : view.backend !== 'standalone' ? <p>{view.backend === 'miniflux' ? 'Miniflux' : 'FreshRSS'} manages feed checks and intervals. Refresh imports articles from {view.backend === 'miniflux' ? 'Miniflux' : 'FreshRSS'}.</p> : <>
         <p>Reload articles shows what Paper already has. Check now asks the publisher for updates. Feeds are polled, so new articles may take time to appear.</p>
         {!view.enabled && <p>Feed collection is disabled by the server.</p>}
         <IntervalInput key={`global-${view.revision}`} value={view.intervalMinutes} disabled={busy} onSave={minutes => interval(minutes)} />

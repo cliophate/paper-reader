@@ -1,4 +1,5 @@
 import type { NavigationPayload } from '../server/types.js'
+import type { BackendKind } from './backend.js'
 
 export interface OrganizationCapabilities {
   stableFolderIds: boolean
@@ -41,7 +42,7 @@ export interface OrganizationSnapshot {
 
 // FreshRSS has no compare-and-set revision. Null must never imply revision zero.
 export interface OrganizationView {
-  backend: 'freshrss' | 'standalone'
+  backend: BackendKind
   capabilities: Readonly<OrganizationCapabilities>
   revision: number | null
   navigation: NavigationPayload

@@ -16,7 +16,7 @@ export interface RetentionRun extends RetentionCounts {
   batches: number
 }
 export interface RetentionView {
-  backend: 'standalone' | 'freshrss'
+  backend: 'standalone' | 'freshrss' | 'miniflux'
   policy: RetentionPolicy
   revision: number
   folders: Array<{ id: string; title: string }>

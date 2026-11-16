@@ -162,7 +162,7 @@ export default function App() {
   const [articleNavigation] = useState(createArticleNavigation)
   const [articleNavigationBusy, setArticleNavigationBusy] = useState(false)
   const [automaticFullFeeds, setAutomaticFullFeeds] = useState(() => automaticFullTextFeeds(localStorage))
-  const [status, setStatus] = useState({ backend: 'freshrss' as 'freshrss' | 'standalone', discussionConfigured: false, readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false })
+  const [status, setStatus] = useState({ backend: 'freshrss' as 'freshrss' | 'standalone' | 'miniflux', discussionConfigured: false, readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false })
   const listRef = useRef<HTMLDivElement>(null)
   const selectedIdRef = useRef(selectedId)
   selectedIdRef.current = selectedId
@@ -1501,7 +1501,7 @@ export default function App() {
         <div className="story-toolbar">
           <button className="mobile-back icon-button" onClick={() => changeMobilePane('sources')} aria-label="Back to sources"><Icon name="back" /></button>
           <div className="stream-title"><h1>{query ? 'Search' : libraryMode === 'recent' ? 'Continue reading' : libraryMode === 'offline' ? 'Offline articles' : stream.title}</h1><span>{visibleStreamTotal === null ? entries.length : `${visibleStreamTotal} unread`}</span></div>
-          <button className={`icon-button ${refreshing ? 'spinning' : ''}`} onClick={() => void refresh()} aria-label={status.backend === 'standalone' ? 'Reload articles' : 'Refresh'} title={status.backend === 'standalone' ? 'Reload articles Paper already has. Check feeds in Settings.' : 'Import articles from FreshRSS'}><Icon name="refresh" /></button>
+          <button className={`icon-button ${refreshing ? 'spinning' : ''}`} onClick={() => void refresh()} aria-label={status.backend === 'standalone' ? 'Reload articles' : 'Refresh'} title={status.backend === 'standalone' ? 'Reload articles Paper already has. Check feeds in Settings.' : `Import articles from ${status.backend === 'miniflux' ? 'Miniflux' : 'FreshRSS'}`}><Icon name="refresh" /></button>
           <button className="icon-button" disabled={!online || libraryMode !== 'stream'} onClick={() => void markAllRead()} aria-label={query ? "Mark search results read" : "Mark stream read"}><Icon name="check" /></button>
         </div>
         <div className="reader-status" role="status">{!online ? 'Offline. Saved articles are available below.' : (navigationError || statusError || syncError) ? `Sync needs attention: ${navigationError || statusError || syncError}` : lastSync ? `Last synced ${relativeDate(lastSync)}` : status.backend === 'standalone' ? 'Ready to fetch feeds' : 'Waiting for synchronization'}{(navigationError || statusError || syncError) && online && <button onClick={() => void refresh()}>Retry</button>}</div>
@@ -2232,7 +2232,7 @@ function ShortcutHelp({ onClose }: { onClose: () => void }) {
 }
 
 function Settings({ backend, section, setSection, initialFeedId, initialFeedView, navigation, onChanged, onFiltersChanged, onFiltersMatching, notify, onConnectionsChanged, autoRead, setAutoRead, onOpenEntry, onClose }: {
-  backend: 'standalone' | 'freshrss'
+  backend: 'standalone' | 'freshrss' | 'miniflux'
   section: SettingsSection
   setSection: (value: SettingsSection) => void
   initialFeedId: string
@@ -2249,7 +2249,7 @@ function Settings({ backend, section, setSection, initialFeedId, initialFeedView
   onClose: () => void
 }) {
   const content = section === 'access' ? <AccessSettings /> : section === 'backend' ? <BackendSettings backend={backend} /> : section === 'feeds'
-    ? <FeedSettings initialView={initialFeedView} onChanged={onChanged}><FeedManager initialFeedId={initialFeedId} navigation={navigation} onChanged={onChanged} notify={notify} /></FeedSettings>
+    ? <FeedSettings initialView={initialFeedView} onChanged={onChanged}><FeedManager backend={backend} initialFeedId={initialFeedId} navigation={navigation} onChanged={onChanged} notify={notify} /></FeedSettings>
     : section === 'filters'
       ? <FiltersSettings feeds={uniqueFeeds(navigation)} onChanged={onFiltersChanged} notify={notify} onMatchingChange={onFiltersMatching} />
       : section === 'reports'
@@ -2325,7 +2325,8 @@ function ReadingChoice({ label, values, active, onChange }: { label: string; val
 }
 
 
-function FeedManager({ initialFeedId, navigation, onChanged, notify }: {
+function FeedManager({ backend, initialFeedId, navigation, onChanged, notify }: {
+  backend: 'standalone' | 'freshrss' | 'miniflux'
   initialFeedId: string
   navigation: NavigationPayload | null
   onChanged: () => Promise<unknown>
@@ -2503,7 +2504,7 @@ function FeedManager({ initialFeedId, navigation, onChanged, notify }: {
         {([['all', 'All'], ['attention', `Needs attention${feeds.some(feed => feed.broken) ? ` (${feeds.filter(feed => feed.broken).length})` : ''}`], ['3m', '3 to 6 months'], ['6m', '6 to 12 months'], ['1y', '1+ year']] as Array<[FeedFilter, string]>).map(([value, label]) => <button key={value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>)}
       </div>
     </div>
-    {selectedIds.size > 0 && <div className="feed-bulk-bar"><span>{selectedIds.size} selected</span><label>Move to<input list="paper-feed-folders" value={bulkFolder} placeholder="Uncategorized" onChange={event => setBulkFolder(event.target.value)} /></label><button disabled={busy} onClick={() => void bulkMove()}>Move selected</button><button onClick={() => { setSelectedIds(new Set()); setConfirmBulkRemove(false) }}>Clear</button><button className={confirmBulkRemove ? 'danger confirming' : 'danger'} onClick={() => void bulkRemove()} disabled={busy}>{confirmBulkRemove ? `Confirm unsubscribe ${selectedIds.size}` : `Unsubscribe ${selectedIds.size}`}</button></div>}
+    {selectedIds.size > 0 && <div className="feed-bulk-bar"><span>{selectedIds.size} selected</span><label>Move to{backend === 'miniflux' ? <select value={bulkFolder} onChange={event => setBulkFolder(event.target.value)}><option value="">Choose a category</option>{folders.map(name => <option key={name} value={name}>{name}</option>)}</select> : <input list="paper-feed-folders" value={bulkFolder} placeholder="Uncategorized" onChange={event => setBulkFolder(event.target.value)} />}</label><button disabled={busy || backend === 'miniflux' && !bulkFolder} onClick={() => void bulkMove()}>Move selected</button><button onClick={() => { setSelectedIds(new Set()); setConfirmBulkRemove(false) }}>Clear</button><button className={confirmBulkRemove ? 'danger confirming' : 'danger'} onClick={() => void bulkRemove()} disabled={busy}>{confirmBulkRemove ? `Confirm unsubscribe ${selectedIds.size}` : `Unsubscribe ${selectedIds.size}`}</button></div>}
     <div className="feed-manager-grid">
       <section className="feed-manager-list">
         <div className="feed-group-scroll">
@@ -2516,12 +2517,12 @@ function FeedManager({ initialFeedId, navigation, onChanged, notify }: {
         {selected ? <>
           <button className="feed-editor-back" onClick={() => setMobileDetailOpen(false)}><Icon name="back" /> Back to feeds</button>
           <div className="feed-editor-heading"><FeedMark title={selected.title} url={selected.siteUrl || selected.url} iconUrl={selected.iconUrl} /><div><strong>{selected.title}</strong><span>{selected.url}</span></div></div>
-          {selected.broken && <div className="feed-health-alert"><strong>The feed could not be updated</strong><span>{selected.lastErrorAt ? `Last failed ${relativeDate(selected.lastErrorAt)}.` : 'The latest fetch failed.'}{selected.lastCheckedAt ? ` Last successful check ${relativeDate(selected.lastCheckedAt)}.` : ''}</span></div>}
-          {!selected.broken && <p className="feed-last-post">{selected.lastPublishedAt ? `Last post ${formatFeedDate(selected.lastPublishedAt)}` : 'No posts have arrived yet'}</p>}
+          {selected.broken && <div className="feed-health-alert"><strong>The feed could not be updated</strong><span>{selected.lastErrorAt ? `Last failed ${relativeDate(selected.lastErrorAt)}.` : 'The latest fetch failed.'}{selected.lastCheckedAt ? ` Last checked ${relativeDate(selected.lastCheckedAt)}.` : ''}</span></div>}
+          {!selected.broken && <p className="feed-last-post">{selected.lastPublishedAt ? `Last post ${formatFeedDate(selected.lastPublishedAt)}` : backend === 'miniflux' ? 'Last publication unavailable' : 'No posts have arrived yet'}</p>}
           <label><span>Title</span><input value={title} onChange={event => setTitle(event.target.value)} /></label>
-          <label><span>Folder</span><input list="paper-feed-folders" placeholder="Uncategorized" value={folder} onChange={event => setFolder(event.target.value)} /></label>
-          <p className="feed-editor-note">Clear the folder to move this feed to Uncategorized. Enter a new name to create a folder.</p>
-          <FeedRepair key={selected.id} feed={selected} onChanged={onChanged} />
+          <label><span>Folder</span>{backend === 'miniflux' ? <select value={folder} onChange={event => setFolder(event.target.value)}>{folders.map(name => <option key={name} value={name}>{name}</option>)}</select> : <input list="paper-feed-folders" placeholder="Uncategorized" value={folder} onChange={event => setFolder(event.target.value)} />}</label>
+          <p className="feed-editor-note">{backend === 'miniflux' ? 'Choose an existing Miniflux category. Manage category names and feed URL repair in Miniflux.' : 'Clear the folder to move this feed to Uncategorized. Enter a new name to create a folder.'}</p>
+          {backend !== 'miniflux' && <FeedRepair key={selected.id} feed={selected} onChanged={onChanged} />}
           <button className="copy-feed-url" onClick={() => void navigator.clipboard.writeText(selected.url).then(() => notify('Feed URL copied'))}>Copy feed URL</button>
           <div className="feed-editor-actions"><button className="primary" onClick={() => void save()} disabled={busy || !title.trim()}>Save changes</button><button className={confirmRemove ? 'danger confirming' : 'danger'} onClick={() => void remove()} disabled={busy}>{confirmRemove ? 'Confirm unsubscribe' : 'Unsubscribe'}</button></div>
         </> : <div className="feed-editor-empty">No feeds match this search.</div>}

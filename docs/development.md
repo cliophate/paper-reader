@@ -1,5 +1,8 @@
 # Development
 
+[Miniflux](miniflux.md) documents the native backend, setup, synchronization,
+schema v17 and current capability limits. The [implementation notes](miniflux-plan.md)
+record its identity and API design.
 [Article identity and state ownership](article-identity.md) documents schema v7,
 the automatic pre-upgrade backup, account binding and recovery.
 [Feed ingestion](feed-ingestion.md) documents supported formats, identity matching
@@ -30,8 +33,10 @@ npm ci
 npm run init
 ```
 
-New configuration selects standalone. To test FreshRSS, select
-`PAPER_BACKEND=freshrss` and use a disposable account. Reuse an existing private
+New configuration selects standalone. To test a remote backend, select
+`PAPER_BACKEND=freshrss` or `PAPER_BACKEND=miniflux` and use a disposable account.
+Miniflux requires its own base URL and API key, with server version 2.3.2 or newer.
+Reuse an existing private
 configuration rather than running init again. Never use real reading data in a
 development or test instance.
 
@@ -155,6 +160,8 @@ This test requires Docker Compose and Python 3. Build both images, then run:
 docker build --target runtime -t paper-public:test .
 docker build --target ai -t paper-public:ai-test .
 python3 scripts/test-installation.py
+MINIFLUX_TEST_VERSION=2.3.2 python3 scripts/test-miniflux-installation.py
+MINIFLUX_TEST_VERSION=2.3.3 python3 scripts/test-miniflux-installation.py
 ```
 
 The test creates disposable FreshRSS and Caddy containers with synthetic
@@ -168,6 +175,10 @@ The shared helper adds `keep-id` for explicit container users and SELinux labels
 for disposable bind mounts. The AI worker checks require Docker Compose and are
 skipped with Podman; run `scripts/test-ai-worker.py` separately with Docker Compose.
 The default Docker path continues to run both sets of checks.
+
+The Miniflux checks create their own PostgreSQL, Miniflux and feed containers.
+They share the container command helper with the FreshRSS/proxy checks.
+No test starts against a private account.
 
 The local HTTP provider fixture in `tests/fixtures/openai-provider.mjs` exercises
 structured JSON, JSON-mode fallback, SSE, cancellation, limits, credential

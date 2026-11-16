@@ -10,6 +10,20 @@ function configured() {
   })) vi.stubEnv(key, value)
 }
 describe('backend configuration', () => {
+  it('selects Miniflux with only its own backend credentials and validates its endpoint', () => {
+    configured()
+    vi.stubEnv('PAPER_BACKEND', 'miniflux')
+    vi.stubEnv('MINIFLUX_BASE_URL', 'https://miniflux.example.test/reader/')
+    vi.stubEnv('MINIFLUX_API_KEY', 'synthetic-miniflux-key')
+    for (const key of ['FRESHRSS_BASE_URL', 'FRESHRSS_USERNAME', 'FRESHRSS_API_PASSWORD']) vi.stubEnv(key, '')
+    expect(loadConfig().miniflux).toEqual({ baseUrl: 'https://miniflux.example.test/reader', apiKey: 'synthetic-miniflux-key' })
+    expect(loadConfig().freshRss.baseUrl).toBe('')
+    vi.stubEnv('MINIFLUX_BASE_URL', 'https://example.test/?secret=private')
+    expect(loadConfig).toThrow(/MINIFLUX_BASE_URL/)
+    vi.stubEnv('MINIFLUX_BASE_URL', 'https://miniflux.example.test')
+    vi.stubEnv('MINIFLUX_API_KEY', '')
+    expect(loadConfig).toThrow('Missing required environment variable MINIFLUX_API_KEY')
+  })
   it('selects standalone explicitly without FreshRSS credentials and refuses disabling local reads', () => {
     configured()
     vi.stubEnv('PAPER_BACKEND', 'standalone')

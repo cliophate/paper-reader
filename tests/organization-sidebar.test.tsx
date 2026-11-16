@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OrganizationSidebar } from '../src/client/components/OrganizationSidebar'
 import { api, ApiError } from '../src/client/api'
-import { FRESHRSS_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES } from '../src/server/organization'
+import { FRESHRSS_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, MINIFLUX_ORGANIZATION_CAPABILITIES } from '../src/server/organization'
 import type { OrganizationView } from '../src/shared/organization'
 import type { Feed } from '../src/client/types'
 
@@ -94,6 +94,19 @@ describe('sidebar organization interactions', () => {
     expect(button('First').querySelector('.source-count')?.textContent).toBe('3')
   })
 
+  it('requires a real Miniflux destination category and sends its stable ID with no revision', async () => {
+    snapshot = { ...snapshot, backend: 'miniflux', revision: null, capabilities: MINIFLUX_ORGANIZATION_CAPABILITIES,
+      navigation: { ...snapshot.navigation, uncategorized: [] } }
+    await render(); await editFeeds()
+    expect(container.textContent).toContain('Miniflux supports feed edits')
+    expect(button('Uncategorized')).toBeUndefined()
+    await click('Expand Essays'); await click('Options for First'); await click('Move feed')
+    const options = [...dialog().querySelectorAll('option')]
+    expect(options.map(option => option.value)).toEqual(['a', 'b', 'c'])
+    expect(options.some(option => option.value === '')).toBe(false)
+    await select('b'); await submit()
+    expect(api.organize).toHaveBeenCalledWith({ expectedRevision: null, commands: [{ type: 'move-feed', feedId: 'First', fromFolderId: 'a', toFolderId: 'b' }] })
+  })
   it('keeps the Feeds heading and add menu visible in edit mode, with contextual selection and focus restoration', async () => {
     snapshot.navigation.folders[0].unread = 3
     snapshot.navigation.folders[0].feeds[0].unread = 3

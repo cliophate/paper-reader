@@ -1,7 +1,7 @@
 import { asyncRoute } from './request-work.js'
 import { Router } from 'express'
 import type { PaperDatabase } from './db.js'
-import type { ReaderBackend } from './backend.js'
+import { BackendValidationError, type ReaderBackend } from './backend.js'
 import type { BackendSynchronizer } from './sync.js'
 import { OrganizationError } from './organization.js'
 import type { OrganizationCapabilities, OrganizationCommand, OrganizationCommandResult, OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization.js'
@@ -62,7 +62,7 @@ export function organizationRouter({ database, backend, synchronizer, navigation
   router.get('/', asyncRoute(async (request, response) => {
     try {
       const refresh = request.query.refresh === '1'
-      if (refresh && backend.identity.kind === 'freshrss') await synchronizer?.refreshNavigation()
+      if (refresh && backend.identity.kind !== 'standalone') await synchronizer?.refreshNavigation()
       response.json(await snapshot(!refresh))
     }
     catch { response.status(503).json({ code: 'unavailable', error: 'Could not load organization. Check the connection and reload.' }) }
@@ -72,7 +72,7 @@ export function organizationRouter({ database, backend, synchronizer, navigation
       const { expectedRevision, commands } = parseOrganizationRequest(request.body)
       const local = backend.identity.kind === 'standalone'
       if (local && expectedRevision === null) throw new OrganizationError('invalid', 'Reload organization before making changes.')
-      if (!local && expectedRevision !== null) throw new OrganizationError('invalid', 'FreshRSS does not support revision-checked writes.')
+      if (!local && expectedRevision !== null) throw new OrganizationError('invalid', 'This backend does not support revision-checked writes.')
       // Do not pass unsupported operations to either persistence implementation.
       const allowed = commands.map((command, index) => ({ command, index })).filter(({ command }) => backend.organizationCapabilities[capability[command.type]])
       const results: OrganizationCommandResult[] = commands.map((command, index) => ({ index, status: 'failed', code: 'unsupported', message: `This backend does not support ${command.type}.` }))
@@ -88,9 +88,11 @@ export function organizationRouter({ database, backend, synchronizer, navigation
             refreshError ||= outcome.refreshError
             results[index] = { index, status: 'applied', changed: true }
           } catch (error) {
-            results[index] = error instanceof OrganizationError
+            results[index] = error instanceof BackendValidationError
+              ? { index, status: 'failed', code: 'invalid', message: error.message }
+              : error instanceof OrganizationError
               ? { index, status: 'failed', code: error.code, message: error.message }
-              : { index, status: 'failed', code: 'remote-failure', message: 'FreshRSS could not confirm this change. It may have applied remotely. Reload before retrying.' }
+              : { index, status: 'failed', code: 'remote-failure', message: `${backend.identity.kind === 'miniflux' ? 'Miniflux' : 'FreshRSS'} could not confirm this change. It may have applied remotely. Reload before retrying.` }
           }
         }
       }
