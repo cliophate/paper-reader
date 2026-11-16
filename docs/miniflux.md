@@ -29,6 +29,10 @@ does not start synchronization. Existing cached reads continue during later
 outages, while remote state changes require acknowledgement. The usual optional
 AI, Readwise and Kirby connections remain optional.
 
+Requests stay on the configured server, use verified TLS and reject redirects.
+Time, response size and retries are bounded. The API key and upstream feed
+credentials never reach browser metadata, OPML or model inputs.
+
 ## Ownership and synchronization
 
 The account binding hashes the canonical base URL and authenticated account ID,
@@ -124,5 +128,4 @@ content updates, backdated imports, category identity, OPML and Paper restore.
 It accepts pinned test versions 2.3.2 and 2.3.3, through `MINIFLUX_TEST_VERSION`.
 Neither test uses a real reading account or a developer's private environment.
 
-See [development checks](development.md) and the
-[contribution plan](miniflux-plan.md) for the original sequence and remaining scope.
+See [development checks](development.md).
