@@ -8,7 +8,7 @@ describe('backend setup guidance', () => {
     expect(markup).toContain('MINIFLUX_BASE_URL')
     expect(markup).toContain('MINIFLUX_API_KEY')
     expect(markup).toContain('2.3.2')
-    expect(markup).toContain('Choose a real category')
+    expect(markup).toContain('Choose a category when moving feeds')
     expect(markup).not.toContain('Move a FreshRSS snapshot')
     expect(markup).not.toContain('migration-cli.js')
   })

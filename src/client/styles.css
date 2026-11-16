@@ -1160,9 +1160,12 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
 .backend-commands { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
 .connection-settings details > summary { cursor: pointer; padding: 10px 0; }
 
-.backend-settings { padding: 24px; min-width: 0; font-size: 14px; line-height: 1.6; }
+.backend-settings { height: 100%; overflow: auto; margin-top: 0; padding: 24px; min-width: 0; font-size: 14px; line-height: 1.6; }
 .backend-settings h3 { margin: 0 0 12px; }
 .backend-settings p { margin: 12px 0; }
+.backend-settings h4 { margin: 0; font-size: 16px; }
+.backend-backups { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); }
+.backend-notes { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .backend-settings a { color: inherit; text-underline-offset: 3px; }
 @media (max-width: 700px) { .backend-settings { padding: 16px; } }
 
@@ -1182,13 +1185,46 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
 .feed-check-message { flex: 0 0 auto; margin: 8px 24px; font-size: 13px; }
 
 .retention-settings { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 16px; }
-.retention-settings fieldset { border: 0; padding: 0; min-width: 0; }
-.retention-settings details { margin: 12px 0; }
+.retention-settings fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.retention-group { margin-top: 24px; }
+.retention-group + .retention-group { border-top: 1px solid var(--line); padding-top: 20px; }
+.retention-group h5 { margin: 0 0 4px; font-size: 14px; }
+.retention-settings h6 { margin: 0; font-size: 13px; font-weight: 600; }
+.retention-row > div { flex: 1; }
+.retention-row label { font-size: 13px; font-weight: 500; }
+.retention-settings .settings-list-row span { font-size: 13px; }
+.retention-days, .retention-day-count, .retention-override-actions { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.retention-settings input, .retention-settings select, .retention-settings button { min-height: 36px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; }
 .retention-settings select { max-width: 100%; }
-.retention-days { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-.retention-days span { flex: 1 1 180px; }
-.retention-days input { width: 90px; }
-.retention-settings button { margin: 8px 8px 0 0; }
+.retention-days input { width: 80px; }
+.retention-settings button { cursor: pointer; }
+.retention-settings button:hover { background: var(--hover); }
+.retention-settings button:disabled { opacity: .5; cursor: default; }
+.retention-overrides { margin-top: 16px; padding-left: 16px; border-left: 2px solid var(--line); }
+.retention-override-list { list-style: none; margin: 12px 0; padding: 0; }
+.retention-override-list strong { white-space: normal; overflow-wrap: anywhere; }
+.retention-override-picker { display: grid; gap: 12px; margin-top: 16px; }
+.retention-override-picker > label { display: grid; grid-template-columns: 60px minmax(0, 1fr); align-items: center; gap: 12px; font-size: 13px; }
+.retention-override-picker .retention-row { padding-top: 0; }
+.retention-effective { font-size: 13px; color: var(--muted); }
+.retention-protections { margin-top: 16px; font-size: 13px; }
+.retention-protections ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 24px; padding-left: 18px; color: var(--muted); margin: 8px 0 12px; }
+.retention-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 20px 0; }
+.retention-actions > span { color: var(--muted); font-size: 13px; }
+.retention-preview { padding: 12px 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--soft); }
+.retention-preview p { margin: 0; }
+.retention-preview .settings-intro { margin-top: 6px; }
+.retention-status { border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 13px; }
+.retention-status p { margin: 4px 0; }
+@media (max-width: 700px) {
+  .retention-row { flex-wrap: wrap; gap: 10px; }
+  .retention-row > div { flex-basis: 100%; }
+  .retention-overrides { padding-left: 12px; }
+  .retention-override-list .settings-list-row { flex-wrap: wrap; gap: 10px; }
+  .retention-override-list .settings-list-row > div { flex: 1 1 140px; }
+  .retention-protections ul { grid-template-columns: 1fr; }
+  .retention-settings input, .retention-settings select, .retention-settings button { min-height: 44px; }
+}
 .login-page { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
 .login-card { width: min(100%, 420px); display: grid; gap: 24px; }
 .login-card h1 { font-size: 1.6rem; }
