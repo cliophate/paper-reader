@@ -4,8 +4,10 @@ import { movementDirection } from '../src/client/keyboard'
 describe('movementDirection', () => {
   it.each([
     ['j', 1],
+    ['J', 1],
     ['ArrowDown', 1],
     ['k', -1],
+    ['K', -1],
     ['ArrowUp', -1],
   ])('maps %s to %i', (key, direction) => {
     expect(movementDirection(key)).toBe(direction)
