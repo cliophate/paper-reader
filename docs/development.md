@@ -1,8 +1,7 @@
 # Development
 
 [Miniflux](miniflux.md) documents the native backend, setup, synchronization,
-schema v17 and current capability limits. The [implementation notes](miniflux-plan.md)
-record its identity and API design.
+schema v17 and current capability limits.
 [Article identity and state ownership](article-identity.md) documents schema v7,
 the automatic pre-upgrade backup, account binding and recovery.
 [Feed ingestion](feed-ingestion.md) documents supported formats, identity matching
