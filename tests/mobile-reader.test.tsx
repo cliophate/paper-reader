@@ -81,6 +81,18 @@ async function edge(target = 'video', cancel = false, release = true) {
 }
 
 describe('mobile reader switching', () => {
+  it('navigates with j and k while Caps Lock is enabled', async () => {
+    await mount()
+    for (const [key, selectedId] of [['J', 'b'], ['K', 'a']]) {
+      const event = new KeyboardEvent('keydown', { key, modifierCapsLock: true, bubbles: true, cancelable: true })
+      expect(event.getModifierState('CapsLock')).toBe(true)
+      expect(event.shiftKey).toBe(false)
+      await act(async () => { document.body.dispatchEvent(event) })
+      expect(event.defaultPrevented).toBe(true)
+      expect(history.state.selectedId).toBe(selectedId)
+    }
+  })
+
   it('leaves browser modifiers untouched while preserving Shift+A, help and command shortcuts', async () => {
     initialPage.items[0] = { ...post('a'), kind: 'article' }
     await mount()
