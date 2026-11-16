@@ -1,3 +1,5 @@
+export type { BriefingDetail, BriefingSummary } from '../shared/briefings'
+
 export type StreamKind = 'all' | 'starred' | 'category' | 'feed'
 
 export interface StreamRef {
@@ -70,25 +72,6 @@ export interface EntryPage {
   order?: 'newest' | 'oldest'
   items: Entry[]
   continuation: string
-}
-
-export interface BriefingSummary {
-  id: string
-  kind: 'morning' | 'evening'
-  subject: string
-  status: 'generated' | 'delivered' | 'acknowledged' | string
-  windowStart: string
-  cutoff: string
-  createdAt: string
-  deliveredAt: string | null
-  acknowledgedAt: string | null
-  feedback: 'useful' | 'too_broad' | 'missed' | null
-  entryCount: number
-}
-
-export interface BriefingDetail extends BriefingSummary {
-  html: string
-  text: string
 }
 
 export interface TopicSource {

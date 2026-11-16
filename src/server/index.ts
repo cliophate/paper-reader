@@ -15,6 +15,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { BriefingService } from './briefing.js'
 import { createAiChatModel, providerConfigured, providerAvailability, runAiBatch, aiEnabled } from './ai-provider.js'
 import { testOpenaiConnection } from './openai.js'
+import { BriefingLibraryService, BriefingReadError } from './briefing-library.js'
 import { DiscussionService, discussionSource } from './discussion.js'
 import { HeadlineService } from './headlines.js'
 import { openRuntimeStorage } from './runtime-storage.js'
@@ -84,6 +85,7 @@ const pulse = new PulseService(database, (prompt, input, schema) => runAiBatch(c
   providerConfigured(config) && config.collections.enabled)
 const topics = new TopicService(database, entriesSource, () => pulse.list().collections)
 const briefings = new BriefingService(config, database, entriesSource, reader, topics)
+const briefingLibrary = new BriefingLibraryService(database, ids => synchronizer.editEntries(ids, 'read', 'briefing'))
 const app = express()
 const discussions = new DiscussionService(database, createAiChatModel(config))
 logMemory('services ready')
@@ -352,7 +354,7 @@ app.patch('/api/reports/:id', (request, response) => {
 })
 
 app.get('/api/briefings', (_request, response) => {
-  response.json(database.listBriefings().map(briefingSummary))
+  response.json(database.listBriefings().map(briefing => briefingLibrary.summary(briefing)))
 })
 
 app.get('/api/topics', asyncRoute(async (request, response) => {
@@ -391,8 +393,16 @@ app.delete('/api/pulse/feedback/:id', (request, response) => {
 app.get('/api/briefings/:id', (request, response) => {
   const briefing = database.getBriefing(String(request.params.id))
   if (!briefing) return response.status(404).json({ error: 'Briefing not found' })
-  response.json({ ...briefingSummary(briefing), html: briefing.html, text: briefing.text })
+  response.json(briefingLibrary.detail(briefing))
 })
+
+app.post('/api/briefings/:id/read', asyncRoute(async (request, response) => {
+  try { response.json(await briefingLibrary.markRead(String(request.params.id))) }
+  catch (error) {
+    if (error instanceof BriefingReadError) return response.status(error.status).json({ error: error.message })
+    throw error
+  }
+}))
 
 app.post('/api/briefings/:id/feedback', (request, response) => {
   const id = String(request.params.id)
@@ -690,21 +700,26 @@ app.get('/briefings/:id/confirm', (request, response) => {
   const briefing = database.getBriefing(String(request.params.id))
   const token = String(request.query.token || '')
   if (!briefing || !token || !briefings.verifyToken(briefing, token)) return response.status(404).send(messagePage('This link is not valid.', 'Paper could not find this briefing.'))
-  const count = database.entryIdsForBriefing(briefing.id).length
-  if (briefing.acknowledgedAt) return response.send(messagePage('Already marked read.', `${count} entries from this briefing are read in Paper.`))
-  response.send(confirmPage(briefing.id, token, count, briefing.kind))
+  const counts = database.briefingReadCounts(briefing.id)
+  const count = counts.entryCount - counts.missingCount
+  if (briefing.acknowledgedAt && !counts.unreadCount) return response.send(messagePage('Already marked read.',
+    counts.missingCount ? `${count} available ${count === 1 ? 'entry from this briefing is' : 'entries from this briefing are'} read in Paper. ${counts.missingCount} source ${counts.missingCount === 1 ? 'story is' : 'stories are'} unavailable.` : `${count} entries from this briefing are read in Paper.`))
+  response.send(confirmPage(briefing.id, token, count, briefing.kind, counts.missingCount))
 })
 
 app.post('/briefings/:id/confirm', asyncRoute(async (request, response) => {
   const briefing = database.getBriefing(String(request.params.id))
   const token = String(request.body?.token || '')
   if (!briefing || !token || !briefings.verifyToken(briefing, token)) return response.status(404).send(messagePage('This link is not valid.', 'Paper did not change article state.'))
-  if (!briefing.acknowledgedAt) {
-    const ids = database.entryIdsForBriefing(briefing.id)
-    await synchronizer.editEntries(ids, 'read', 'briefing')
-    database.markAcknowledged(briefing.id)
+  let result
+  try { result = await briefingLibrary.markRead(briefing.id) }
+  catch (error) {
+    if (error instanceof BriefingReadError) return response.status(error.status).send(messagePage('Could not mark this briefing read.', error.message))
+    throw error
   }
-  response.send(messagePage('You are caught up.', 'Paper marked the entries in this briefing as read.'))
+  response.send(messagePage('You are caught up.', result.briefing.missingCount
+    ? `Paper marked ${result.sourceIds.length} available ${result.sourceIds.length === 1 ? 'entry' : 'entries'} in this briefing as read. ${result.briefing.missingCount} source ${result.briefing.missingCount === 1 ? 'story is' : 'stories are'} unavailable.`
+    : 'Paper marked the entries in this briefing as read.'))
 }))
 
 const clientPath = path.resolve('dist')
@@ -803,22 +818,6 @@ function stringArray(input: unknown): string[] {
   return Array.isArray(input) ? input.map(String).filter(Boolean) : []
 }
 
-function briefingSummary(briefing: import('./db.js').BriefingRecord) {
-  return {
-    id: briefing.id,
-    kind: briefing.kind,
-    subject: briefing.subject,
-    status: briefing.status,
-    windowStart: briefing.windowStart,
-    cutoff: briefing.cutoff,
-    createdAt: briefing.createdAt,
-    deliveredAt: briefing.deliveredAt,
-    acknowledgedAt: briefing.acknowledgedAt,
-    feedback: database.getBriefingFeedback(briefing.id),
-    entryCount: database.entryIdsForBriefing(briefing.id).length,
-  }
-}
-
 function requireInternalSecret(request: Request, response: Response, next: NextFunction) {
   const supplied = String(request.header('x-paper-secret') || '')
   const actual = Buffer.from(supplied)
@@ -828,11 +827,12 @@ function requireInternalSecret(request: Request, response: Response, next: NextF
 }
 
 
-function confirmPage(id: string, token: string, count: number, kind: string): string {
+function confirmPage(id: string, token: string, count: number, kind: string, missingCount = 0): string {
   return pageShell(`
     <p class="eyebrow">Paper ${escapeHtml(kind)} briefing</p>
     <h1>Mark this briefing read?</h1>
     <p>Paper will mark ${count} represented ${count === 1 ? 'entry' : 'entries'} as read. Other unread entries will stay untouched.</p>
+    ${missingCount ? `<p>${missingCount} source ${missingCount === 1 ? 'story is' : 'stories are'} unavailable. The remaining stories and the briefing will be marked read.</p>` : ''}
     <form method="post" action="/briefings/${escapeHtml(id)}/confirm">
       <input type="hidden" name="token" value="${escapeHtml(token)}">
       <button type="submit">Mark ${count} ${count === 1 ? 'entry' : 'entries'} read</button>

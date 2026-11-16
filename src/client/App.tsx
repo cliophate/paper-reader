@@ -20,6 +20,8 @@ import { removeBrokenArticleImage, shouldShowArticleLeadImage } from './articleI
 import { Icon } from './components/Icon'
 import { ActivitySettings, FiltersSettings, ReportsSettings } from './components/SettingsPanels'
 import { TopicsLibrary } from './components/TopicsLibrary'
+import { BriefingLibrary } from './components/BriefingLibrary'
+import { Modal } from './components/Modal'
 import { feedMatchesFilter, type FeedFilter } from './feedFilters'
 import { automaticFullTextFeeds, recordFullTextSuccess } from './fullTextPreferences'
 import { movementDirection } from './keyboard'
@@ -28,7 +30,7 @@ import { articleEdgeState, swipeDirection, type GesturePoint } from './mobileGes
 import { initialReaderChromeScrollState, readerChromeCanAutoHide, updateReaderChromeScroll } from './readerChrome'
 import { authorLine, resistedPullDistance, shouldAutoMarkRead, shouldAutomaticallyFetchFullArticle, shouldFetchFullArticle, shouldReleaseToRefresh } from './reading'
 import { formatInstagramHtml, formatThreadsHtml, formatXPostHtml, formatYoutubeHtml } from './socialHtml'
-import type { ArticleReport, BriefingDetail, BriefingSummary, Entry, Feed, Folder, NavigationPayload, StreamRef, XThreadPost } from './types'
+import type { ArticleReport, Entry, Feed, Folder, NavigationPayload, StreamRef, XThreadPost } from './types'
 
 type ReaderFont = 'literata' | 'source'
 type ReaderSize = 'small' | 'medium' | 'large'
@@ -1603,7 +1605,12 @@ export default function App() {
           onSelectionContext={setSelectionContext}
         /> : <ReaderEmpty onCommand={() => setOverlays({ ...closedOverlays, command: true })} />}
       </main></> : view === 'briefings'
-        ? <BriefingLibrary onBack={openSources} />
+        ? <BriefingLibrary onBack={openSources} refreshKey={topicsRefreshKey} onOpenEntry={id => void openTopicEntry(id)} onMarkedRead={ids => {
+          const changed = new Set(ids)
+          setEntries(current => current.map(entry => changed.has(entry.id) ? { ...entry, read: true } : entry))
+          setTopicsRefreshKey(current => current + 1)
+          void loadNavigation().catch(() => notify('The source stories are read. Counts will refresh shortly.'))
+        }} />
         : <TopicsLibrary initialCollection={linkedCollection} onCollectionChange={collection => {
           if (collection) routeCollections.current = [...routeCollections.current.filter(item => item.id !== collection.id), collection]
           readerLinks.current.collections = routeCollections.current
@@ -1730,80 +1737,6 @@ function SelectionContextMenu({ state, onClose, onCreate, onDiscuss, kirbyConfig
     {kirbyConfigured && <button role="menuitem" onClick={onCreate}><Icon name="plus" /> Create note in Kirby</button>}
   </div>
 }
-
-function BriefingLibrary({ onBack }: { onBack: () => void }) {
-  const [briefings, setBriefings] = useState<BriefingSummary[]>([])
-  const [selectedId, setSelectedId] = useState('')
-  const [detail, setDetail] = useState<BriefingDetail | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [feedbackPending, setFeedbackPending] = useState(false)
-  const [error, setError] = useState('')
-  const [retry, setRetry] = useState(0)
-  const [detailLoading, setDetailLoading] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true); setError('')
-    api.briefings().then(items => {
-      if (cancelled) return
-      setBriefings(items)
-      if (!window.matchMedia('(max-width: 1040px)').matches) setSelectedId(items[0]?.id || '')
-    }).catch(reason => { if (!cancelled) setError(reason.message) }).finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [retry])
-
-  useEffect(() => {
-    if (!selectedId) return setDetail(null)
-    let cancelled = false
-    setDetail(null); setDetailLoading(true); setError('')
-    api.briefing(selectedId).then(item => { if (!cancelled) setDetail(item) }).catch(reason => { if (!cancelled) setError(reason.message) }).finally(() => { if (!cancelled) setDetailLoading(false) })
-    return () => { cancelled = true }
-  }, [selectedId, retry])
-
-  const sendFeedback = async (feedback: 'useful' | 'too_broad' | 'missed') => {
-    if (!detail || feedbackPending) return
-    setFeedbackPending(true)
-    try {
-      await api.briefingFeedback(detail.id, feedback)
-      setDetail(current => current ? { ...current, feedback } : current)
-      setBriefings(current => current.map(item => item.id === detail.id ? { ...item, feedback } : item))
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not save feedback') } finally {
-      setFeedbackPending(false)
-    }
-  }
-
-  return <section className={`briefing-library panel ${selectedId ? 'has-selection' : ''}`}>
-    <div className="briefing-list">
-      <header><button className="briefing-library-back mobile-back icon-button" onClick={onBack} aria-label="Back to sources"><Icon name="back" /></button><h1>Briefings</h1><span>{briefings.length}</span></header>
-      {error && <p className="form-error" role="alert">{error} <button onClick={() => setRetry(value => value + 1)}>Retry</button></p>}
-      {loading && <p className="briefing-empty">Loading briefings</p>}
-      {!error && !loading && !briefings.length && <div className="briefing-empty"><h2>No briefings yet</h2><p>The morning and evening editions will appear here after they are generated.</p></div>}
-      {briefings.map(item => <button key={item.id} className={selectedId === item.id ? 'active' : ''} onClick={() => setSelectedId(item.id)}>
-        <span className="briefing-kind">{item.kind}</span>
-        <strong>{briefingTitle(item.subject)}</strong>
-        <span className={`briefing-status status-${item.status}`}>{briefingStatus(item)}</span>
-        <time>{formatDate(item.createdAt)}</time>
-      </button>)}
-    </div>
-    <div className="briefing-preview">
-      {detailLoading ? <p role="status">Loading briefing...</p> : detail ? <>
-        <div className="briefing-preview-bar"><button className="briefing-back icon-button" onClick={() => setSelectedId('')} aria-label="Back to briefings"><Icon name="back" /></button><div className="briefing-preview-title"><strong>{briefingTitle(detail.subject)}</strong><span>{detail.entryCount} represented {detail.entryCount === 1 ? 'entry' : 'entries'} · {briefingStatus(detail)}</span></div><div className="briefing-feedback" aria-label="Briefing feedback"><span>Was this useful?</span><button className={detail.feedback === 'useful' ? 'active' : ''} disabled={feedbackPending} onClick={() => sendFeedback('useful')}>Yes</button><button className={detail.feedback === 'too_broad' ? 'active' : ''} disabled={feedbackPending} onClick={() => sendFeedback('too_broad')}>Too much</button><button className={detail.feedback === 'missed' ? 'active' : ''} disabled={feedbackPending} onClick={() => sendFeedback('missed')}>Missed</button></div></div>
-        <iframe title={detail.subject} srcDoc={detail.html} sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox" />
-      </> : <div className="briefing-empty"><h2>Select a briefing</h2><p>Its email layout will appear here.</p></div>}
-    </div>
-  </section>
-}
-
-function briefingTitle(subject: string): string {
-  return subject.replace(/^(?:Paper (?:morning|evening)(?: briefing)?|(?:Morning|Evening) Paper Briefing) \| /i, '')
-}
-
-function briefingStatus(item: BriefingSummary): string {
-  if (item.acknowledgedAt || item.status === 'acknowledged') return 'Read and acknowledged'
-  if (item.deliveredAt || item.status === 'delivered') return 'Delivered'
-  return 'Generated, not delivered'
-}
-
 
 const StoryRow = forwardRef<HTMLElement, { entry: Entry; active: boolean; onOpen: () => void; onContext: (left: number, top: number) => void }>(function StoryRow({ entry, active, onOpen, onContext }, ref) {
   const [thumbnailReady, setThumbnailReady] = useState(false)
@@ -2202,17 +2135,6 @@ function EmptyList({ onAddFeed, unreadOnly, onShowAll, query = '', libraryMode =
 
 function StorySkeleton() {
   return <>{Array.from({ length: 7 }, (_, index) => <div className="story-row skeleton" key={index}><span className="skeleton-image"/><div><span/><span/><span/></div></div>)}</>
-}
-
-function Modal({ title, onClose, children, className = '' }: { title: string; onClose: () => void; children: React.ReactNode; className?: string }) {
-  const dialog = useRef<HTMLElement>(null)
-  useDialogFocus(dialog)
-  useEffect(() => {
-    const close = (event: KeyboardEvent) => event.key === 'Escape' && onClose()
-    window.addEventListener('keydown', close)
-    return () => window.removeEventListener('keydown', close)
-  }, [onClose])
-  return <div className={`modal-backdrop ${className ? `${className}-backdrop` : ''}`} onMouseDown={event => event.target === event.currentTarget && onClose()}><section ref={dialog} tabIndex={-1} className={`modal ${className}`} role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><button className="icon-button" onClick={onClose} aria-label="Close"><Icon name="close" /></button></header>{children}</section></div>
 }
 
 function ReportProblemModal({ entry, onClose, onSaved }: {

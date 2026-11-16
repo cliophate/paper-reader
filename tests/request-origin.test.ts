@@ -15,6 +15,7 @@ describe('browser request origins', () => {
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/edit`
     try {
       expect((await fetch(url, { method: 'POST', headers: { origin: 'https://untrusted.example' } })).status).toBe(403)
+      expect((await fetch(url, { method: 'POST', headers: { origin: 'null' } })).status).toBe(403)
       expect((await fetch(url, { method: 'POST', headers: { 'sec-fetch-site': 'cross-site' } })).status).toBe(403)
       expect(edits).toBe(0)
       expect((await fetch(url, { method: 'POST', headers: { origin: 'https://paper.example.test' } })).status).toBe(200)

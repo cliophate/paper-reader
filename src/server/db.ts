@@ -2109,8 +2109,17 @@ export class PaperDatabase {
   }
 
   entryIdsForBriefing(id: string): string[] {
-    const rows = this.db.prepare('SELECT entry_id FROM briefing_entries WHERE briefing_id = ?').all(id) as Array<{ entry_id: string }>
+    const rows = this.db.prepare('SELECT DISTINCT entry_id FROM briefing_entries WHERE briefing_id = ?').all(id) as Array<{ entry_id: string }>
     return rows.map(row => row.entry_id)
+  }
+
+  briefingReadCounts(id: string): { entryCount: number; unreadCount: number; missingCount: number } {
+    const row = this.db.prepare(`SELECT COUNT(DISTINCT briefing_entries.entry_id) AS total,
+      COUNT(DISTINCT CASE WHEN entries.read = 0 THEN briefing_entries.entry_id END) AS unread,
+      COUNT(DISTINCT CASE WHEN entries.id IS NULL THEN briefing_entries.entry_id END) AS missing
+      FROM briefing_entries LEFT JOIN entries ON entries.id = briefing_entries.entry_id
+      WHERE briefing_id = ?`).get(id)!
+    return { entryCount: Number(row.total), unreadCount: Number(row.unread), missingCount: Number(row.missing) }
   }
 
   markDelivered(id: string) {
