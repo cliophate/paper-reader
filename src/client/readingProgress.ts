@@ -3,7 +3,7 @@ import { api } from './api'
 import type { Entry } from './types'
 interface Position { position: number; at: string }
 function stored(): Record<string, Position> { try { return JSON.parse(localStorage.getItem('paper-reading-positions') || '{}') } catch { return {} } }
-export function useReadingProgress(entry: Entry | null, ref: RefObject<HTMLElement | null>, enabled: boolean) {
+export function useReadingProgress(entry: Entry | null, ref: RefObject<HTMLElement | null>, enabled: boolean, onRestore: () => void) {
   useLayoutEffect(() => {
     if (!entry || !enabled) return
     const scroll = ref.current?.querySelector<HTMLElement>('.article-scroll')
@@ -15,6 +15,9 @@ export function useReadingProgress(entry: Entry | null, ref: RefObject<HTMLEleme
     const restore = () => {
       scroll.scrollTop = inset + Math.max(0, scroll.scrollHeight - scroll.clientHeight - inset * 2) * position
       restored = scroll.scrollTop
+      // A restored position, including after fonts or images resize, is not a
+      // reading gesture. Reset control visibility before its scroll event fires.
+      onRestore()
     }
     restore()
     const frame = requestAnimationFrame(restore)
@@ -37,7 +40,7 @@ export function useReadingProgress(entry: Entry | null, ref: RefObject<HTMLEleme
     scroll.addEventListener('scroll', moved)
     for (const type of inputs) scroll.addEventListener(type, release, { capture: true, passive: true })
     return release
-  }, [entry?.id, enabled, ref])
+  }, [entry?.id, enabled, ref, onRestore])
   useEffect(() => {
     if (!entry || !enabled) return
     const scroll = ref.current?.querySelector<HTMLElement>('.article-scroll')
