@@ -6,10 +6,10 @@ or connect it to FreshRSS or Miniflux to share subscriptions, read state, and st
 
 Entirely AI-coded. If this steals kittens, don't blame me.
 
-Paper 0.2.0-alpha.2 is an alpha release for single-user use. Built-in login
+Paper 0.2.0-alpha.3 is an alpha release for single-user use. Built-in login
 is optional and starts off. Keep it local until you enable login or an
 [authenticated HTTPS proxy](docs/access.md) for remote access.
-See the [changelog](CHANGELOG.md) for 0.2.0-alpha.2 changes and upgrade notes.
+See the [changelog](CHANGELOG.md) for 0.2.0-alpha.3 changes and upgrade notes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/desktop-dark.png">
@@ -28,12 +28,12 @@ See the [changelog](CHANGELOG.md) for 0.2.0-alpha.2 changes and upgrade notes.
 Start new installations in standalone mode. For an existing installation, follow
 the [upgrade guide](docs/recovery.md#upgrade-from-020-alpha1-to-020-alpha2).
 
-You need Docker Compose 2.24.4 or newer. The 0.2.0-alpha.2 images support Linux amd64.
+You need Docker Compose 2.24.4 or newer. The 0.2.0-alpha.3 images support Linux amd64.
 Standalone mode needs one Paper container and a persistent data directory. No
 FreshRSS or optional integration credentials are needed.
 
 ```sh
-git clone --branch v0.2.0-alpha.2 --depth 1 https://github.com/cliophate/paper-reader.git
+git clone --branch v0.2.0-alpha.3 --depth 1 https://github.com/cliophate/paper-reader.git
 cd paper-reader
 sh scripts/setup.sh
 sh scripts/pull-image.sh

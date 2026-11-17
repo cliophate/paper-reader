@@ -1,18 +1,42 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-alpha.3
 
-- Add a native Miniflux backend for Miniflux 2.3.2 or newer. Paper syncs
-  through the REST API with a dedicated API key and refreshes changed article
-  content in the background. See [docs/miniflux.md](docs/miniflux.md).
-- Schema v17 allows Miniflux as a reader backend. Upgrades create
-  `.before-miniflux-v17`.
-- The web briefing view shows the saved selection in Paper instead of the
-  email in a frame. Marking a briefing read asks for confirmation in place and
-  updates each source's status.
-- Pulse keeps valid collection memberships when the model returns an unusable
-  excerpt. Only that excerpt is dropped.
-- Installation tests run with Podman as well as Docker.
+An alpha release with changes since [0.2.0-alpha.2](https://github.com/cliophate/paper-reader/releases/tag/v0.2.0-alpha.2).
+
+### Changes since 0.2.0-alpha.2
+
+- Add native Miniflux support for Miniflux 2.3.2 or newer, contributed by
+  [@daegalus](https://github.com/daegalus). Paper syncs articles, subscriptions,
+  read state and stars through the native API. See the [Miniflux guide](docs/miniflux.md).
+- Briefings show the saved selection in Paper. Marking a briefing read asks for
+  confirmation in place and retains each source's status.
+- Settings > Backend & data and Article cleanup explain backend ownership,
+  storage and cleanup controls more clearly.
+
+### Upgrade from 0.2.0-alpha.2
+
+Startup migrates schema v16 to v17 and creates
+`<database-path>.before-miniflux-v17`. This applies to all backends and preserves
+existing identities and saved state. Stop all Paper writers and back up the full
+data directory and private configuration first. Back up FreshRSS or Miniflux
+separately when used. Keep the migration backup private.
+
+Keep your existing backend and account. Switching to Miniflux requires a fresh
+data directory and Miniflux 2.3.2 or newer. Rolling back the image alone does not
+undo the migration. See the
+[upgrade guide](docs/recovery.md#upgrade-from-020-alpha2-to-020-alpha3).
+
+### Smaller fixes
+
+- Pulse keeps valid collection memberships when a review excerpt is unusable.
+  Only the invalid excerpt is dropped.
+- `j` and `k` navigation works with Caps Lock on.
+- Mobile tabs stay visible when an article restores its reading position.
+- The Miniflux guide includes setup, synchronization and recovery details.
+- Installation tests support Podman. The mute preview test runs faster.
+- Reader API mark-all-as-read remains deferred. Clients can mark explicit IDs.
+  Capy Reader needs no trailing slash on the Paper URL.
 
 ## 0.2.0-alpha.2
 

@@ -105,9 +105,9 @@ migrations. Use the matching pre-upgrade data backup if a migration is not
 backward compatible. Retain both the original database and backup until you have
 verified the restored application.
 
-Paper 0.2.0-alpha.2 uses database schema v16.
-The [alpha.2 upgrade steps](#upgrade-from-020-alpha1-to-020-alpha2) describe
-the migration backups from schema v13.
+Paper 0.2.0-alpha.3 uses database schema v17.
+The [alpha.3 upgrade steps](#upgrade-from-020-alpha2-to-020-alpha3) describe
+the migration backup from schema v16.
 
 ### Retention migration and recovery
 
@@ -141,9 +141,9 @@ the first-deletion backup and [reset its retention policy](retention.md#jobs-cac
 before starting Paper, or cleanup will resume. Changes made after the restored backup
 will be absent.
 
-### Miniflux-capable source builds
+### Miniflux migration and recovery
 
-Builds containing Miniflux support use schema 17 and retain a consistent private
+Paper 0.2.0-alpha.3 uses schema v17 and retains a consistent private
 `paper.sqlite.before-miniflux-v17` backup when upgrading an existing database.
 Keep the original backend configuration during an application upgrade. Adding
 Miniflux support does not authorize changing the database's owning account.
@@ -184,6 +184,49 @@ Include your usual proxy overrides in those Compose commands. Verify startup,
 articles, reading positions, saved state and AI availability when enabled.
 The pull helper's archive contains only the runtime image. Source installations
 can build the selected tag as described in the [README](../README.md#build-from-source).
+
+### Upgrade from 0.2.0-alpha.2 to 0.2.0-alpha.3
+
+Startup migrates schema v16 to v17 for all backends. It creates a consistent,
+private `<database-path>.before-miniflux-v17` backup, including committed WAL
+data, before changing the backend constraint. Existing IDs, checkpoints and
+references remain intact. Keep this backup and a full installation backup.
+
+Keep your backend, account, private configuration and Compose or proxy overrides.
+Do not rerun setup. To start using Miniflux, use a fresh data directory and follow
+[Miniflux setup](miniflux.md#setup). Miniflux 2.3.2 or newer is required.
+
+To return to alpha.2, stop every Paper writer and preserve the current data.
+Restore the verified schema v16 backup without stale WAL or SHM sidecars, then
+use the alpha.2 image and original backend configuration. Changes after the
+backup remain only in the preserved data. An image rollback alone is insufficient.
+
+Stop every briefing command and back up the full data directory and private
+configuration before updating. Without the Codex worker:
+
+```sh
+docker compose stop paper
+# Back up data and private configuration before continuing.
+git fetch origin tag v0.2.0-alpha.3
+git switch --detach v0.2.0-alpha.3
+sh scripts/pull-image.sh
+docker compose up -d --no-build --force-recreate paper
+```
+
+With the Codex worker, stop and recreate both services:
+
+```sh
+docker compose -f compose.yaml -f compose.ai.yaml stop paper paper-ai
+# Back up data, private configuration and ai-auth before continuing.
+git fetch origin tag v0.2.0-alpha.3
+git switch --detach v0.2.0-alpha.3
+docker compose -f compose.yaml -f compose.ai.yaml pull paper paper-ai
+docker compose -f compose.yaml -f compose.ai.yaml up -d --no-build --force-recreate paper paper-ai
+```
+
+Include your usual proxy overrides. Back up FreshRSS or Miniflux separately when used.
+Verify startup, articles, reading positions, saved state and AI availability
+when enabled. In standalone mode, check the feed schedule and Check now action.
 
 ### Upgrade from 0.2.0-alpha.1 to 0.2.0-alpha.2
 
@@ -357,5 +400,4 @@ backup can revive revoked app credentials. Run `npm run paper-auth -- revoke-all
 after restoring. Recovery `disable` also disables the Reader API. A fresh
 database requires new client accounts.
 
-External PR #74 may also need a schema number. Coordinate its migration version
-before merging either change.
+Schema v17 follows the Reader API migration and adds Miniflux backend support.
