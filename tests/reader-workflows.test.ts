@@ -15,6 +15,30 @@ const article = (n: number, extra: Partial<Entry> = {}): Entry => ({
   publishedAt: new Date(n * 1000).toISOString(), timestamp: n * 1000, crawledAt: n * 1000, read: false, starred: false,
   readingMinutes: 1, thumbnailUrl: '', kind: 'article', ...extra,
 })
+
+// Large preview fixtures exercise stored rows, indexes and triggers. Seed them
+// directly to avoid repeating ingestion's HTML parsing and cache lookups.
+function seedPreviewArticles(entries: Entry[]) {
+  const sql = new DatabaseSync(path.join(directory, 'test.sqlite'))
+  try {
+    sql.exec('PRAGMA foreign_keys = ON; BEGIN')
+    const insert = sql.prepare(`INSERT INTO entries (
+      id, feed_id, feed_title, feed_url, title, author, url, canonical_url,
+      source_domain, content_html, content_text, excerpt, published_at, timestamp,
+      crawled_at, read, starred, reading_minutes, thumbnail_url, kind, synced_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'example.test', ?, 'A short teaser.', ?, ?, ?, ?, ?, ?, ?, ?, ?, '')`)
+    for (const entry of entries) {
+      insert.run(entry.id, entry.feedId, entry.feedTitle, entry.feedUrl, entry.title, entry.author,
+        entry.url, entry.url, entry.contentHtml, entry.excerpt, entry.publishedAt, entry.timestamp,
+        entry.crawledAt || entry.timestamp, entry.read ? 1 : 0, entry.starred ? 1 : 0,
+        entry.readingMinutes, entry.thumbnailUrl, entry.kind)
+    }
+    sql.exec('COMMIT')
+  } finally {
+    sql.close()
+  }
+}
+
 beforeEach(() => { directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-workflows-')); db = new PaperDatabase(path.join(directory, 'test.sqlite')) })
 afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
 
@@ -99,7 +123,7 @@ describe('reading across changing lists', () => {
   })
 
   it('previews newest matches before the budget and applies feed scope before scanning', async () => {
-    db.upsertEntries(Array.from({ length: 11_000 }, (_, n) => article(n, {
+    seedPreviewArticles(Array.from({ length: 11_000 }, (_, n) => article(n, {
       title: n >= 10_990 ? 'KELVIN science' : 'Older article', feedId: n >= 10_990 ? 'feed/recent' : 'feed/1',
     })))
     const preview = await db.previewMuteFilter('kelvin', 'title')
@@ -180,7 +204,7 @@ describe('reading across changing lists', () => {
   })
 
   it('reports a lower bound when a preview reaches the scan limit', async () => {
-    db.upsertEntries(Array.from({ length: 10_240 }, (_, n) => article(n, { title: 'ÉCOLE' })))
+    seedPreviewArticles(Array.from({ length: 10_240 }, (_, n) => article(n, { title: 'ÉCOLE' })))
     expect(await db.previewMuteFilter('école', 'title')).toMatchObject({ count: 10_240, truncated: false })
     db.upsertEntries(Array.from({ length: 60 }, (_, n) => article(10_240 + n, { title: 'ÉCOLE' })))
     const preview = await db.previewMuteFilter('école', 'title')
