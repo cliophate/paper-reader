@@ -11,7 +11,7 @@ export function FeedSettings({ children, onChanged, initialView = 'manage' }: { 
       <button type="button" aria-pressed={transfer} onClick={() => setTransfer(true)}>Discover and transfer</button>
     </div>
     <div className={transfer ? 'feed-settings-transfer' : 'feed-settings-manage'}>
-      {transfer ? <><div className="subscription-tools"><SubscribeBookmarklet /></div><SubscriptionTools onChanged={onChanged} /></> : <FeedChecks>{children}</FeedChecks>}
+      {transfer ? <SubscriptionTools onChanged={onChanged} intro={<SubscribeBookmarklet />} /> : <FeedChecks>{children}</FeedChecks>}
     </div>
   </div>
 }

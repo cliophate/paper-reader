@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { subscriptionToolsApi as api } from '../subscriptionToolsApi'
 import type { DiscoveryResult, ImportChoice, ImportPreview, ImportResult, ImportRow } from '../../shared/subscription-tools'
 import './SubscriptionTools.css'
 import { parseSubscribeQuery } from '../subscribe'
 
 const MAX_BYTES = 1024 * 1024
-export function SubscriptionTools({ onChanged, initialUrl = '', initialError = '', subscribeOnly = false, online = true }: {
-  onChanged: () => Promise<unknown>; initialUrl?: string; initialError?: string; subscribeOnly?: boolean; online?: boolean
+export function SubscriptionTools({ onChanged, initialUrl = '', initialError = '', subscribeOnly = false, online = true, intro }: {
+  onChanged: () => Promise<unknown>; initialUrl?: string; initialError?: string; subscribeOnly?: boolean; online?: boolean; intro?: ReactNode
 }) {
   const [url, setUrl] = useState(initialUrl)
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null)
@@ -86,6 +86,7 @@ export function SubscriptionTools({ onChanged, initialUrl = '', initialError = '
   return <section className="subscription-tools" aria-labelledby="subscription-tools-title">
     <h3 id="subscription-tools-title">{subscribeOnly ? 'Find a feed' : 'Discover and transfer feeds'}</h3>
     {!subscribeOnly && <p>Find feeds on a website, or transfer subscriptions using OPML. Existing subscriptions keep their IDs, titles and URLs when reused.</p>}
+    {intro}
     <fieldset disabled={busy || !online} className="subscription-tools-controls">
       <form aria-label="Discover feeds" onSubmit={event => submit(event, () => discover(url))}>
         <label>Website or feed URL<input type="url" value={url} required maxLength={4096} placeholder="https://example.com/" onChange={event => { setUrl(event.target.value); setDiscovery(null); setCandidate(''); setPreview(null); setResult(null); setError('') }} /></label>
