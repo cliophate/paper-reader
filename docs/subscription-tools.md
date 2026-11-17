@@ -1,8 +1,38 @@
 # Feed discovery and OPML
 
 Settings > Feeds > Discover and transfer includes website discovery and OPML
-import/export in standalone and FreshRSS modes. New installations select
+import/export in standalone, FreshRSS and Miniflux modes. New installations select
 standalone explicitly; omitted backend selection retains FreshRSS behavior.
+
+## Subscribe from another app
+
+In **Settings > Feeds > Discover and transfer**, drag **Subscribe in Paper** to
+your browser's bookmarks bar. Use that bookmark on a website or feed to open
+Paper with its URL filled in. The bookmark uses `PUBLIC_URL` when configured,
+otherwise the origin where you opened Settings. Set `PUBLIC_URL` to the address
+you use to reach Paper, then save the bookmark again if that address changes.
+
+You can also open `/subscribe?url=<encoded website or feed URL>` directly.
+Paper runs discovery, lets you choose a feed, then shows a review with a folder
+choice. Click **Confirm subscription** to add it. An existing subscription
+shows **Already subscribed** and cannot be added again through this route.
+The route uses the same backend operations as Settings and adds no backend
+capabilities. Miniflux uses its default category when no folder is chosen.
+
+On Android, install Paper from a browser that supports PWA share targets. Share
+a page or feed link and choose Paper. The manifest uses a GET request to
+`/subscribe`. Paper reads `url`, or the first HTTP or HTTPS link in `text`, then
+`title` if `url` is empty. Missing or invalid URLs can be corrected on the page.
+If the service worker handles a share while offline, it keeps the query in the
+address bar and shows a connection message with **Try again**. Discovery and
+subscription require a connection.
+
+With owner login enabled, sign in first. Paper returns to the same subscribe
+URL. Opening a crafted link can run discovery but cannot subscribe, choose a
+folder or confirm. Writes use the existing authenticated subscription API and
+its origin checks. Discovery still uses the bounded transport and the existing
+private-address policy, including the server's exact-origin allowlist. Link
+parameters cannot change that policy.
 
 ## Discovery
 
@@ -106,6 +136,12 @@ Arbitrary secrets encoded in a publisher's URL path cannot be recognized; an
 export still contains subscription URLs and should be shared deliberately.
 
 ## Verification
+
+Subscribe-link unit tests cover query decoding, URL extraction, safe login
+returns, bookmarklet destinations and confirmation on all three backends.
+The route suite uses a disposable publisher to check discovery, folder choice,
+confirmation, duplicates, invalid URLs, private-address rejection, owner login,
+Android share parameters and offline retry at desktop and phone widths.
 
 Synthetic tests cover XML limits/entities, nested and colliding groups, repeated
 imports, identity conflicts, duplicate URLs, preserved IDs and memberships,

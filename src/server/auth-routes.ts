@@ -43,7 +43,7 @@ export function authGate(store: AuthStore, connections = new AuthConnections(sto
     if (routeAccess(request.method, request.path) !== 'session') return next()
     if (store.enabled() && !store.session(token, true)) {
       if (/^\/api(?:\/|$)/i.test(request.path) || !['GET', 'HEAD'].includes(request.method)) return response.status(401).json({ error: 'Sign in to Paper.', code: 'login-required' })
-      return response.redirect(303, '/login')
+      return response.redirect(303, request.path === '/subscribe' ? `/login?returnTo=${encodeURIComponent(request.originalUrl)}` : '/login')
     }
     // Register every protected response, including files and handlers that wait
     // before sending headers. Streaming handlers also register at their source.

@@ -171,6 +171,7 @@ app.delete('/api/discussion', (request, response) => {
 })
 
 app.get('/api/status', (_request, response) => response.json({
+  publicUrl: process.env.PUBLIC_URL ? new URL(config.publicUrl).origin : '',
   backend: backend.identity.kind,
   backendInstance: backend.identity.id,
   discussionConfigured: discussionEnabled(),

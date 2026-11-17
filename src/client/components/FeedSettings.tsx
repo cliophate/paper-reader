@@ -1,6 +1,7 @@
 import { FeedChecks } from './FeedChecks'
 import { useState, type ReactNode } from 'react'
 import { SubscriptionTools } from './SubscriptionTools'
+import { SubscribeBookmarklet } from './SubscribeBookmarklet'
 
 export function FeedSettings({ children, onChanged, initialView = 'manage' }: { initialView?: 'manage' | 'discover'; children: ReactNode; onChanged: () => Promise<unknown> }) {
   const [transfer, setTransfer] = useState(initialView === 'discover')
@@ -10,7 +11,7 @@ export function FeedSettings({ children, onChanged, initialView = 'manage' }: { 
       <button type="button" aria-pressed={transfer} onClick={() => setTransfer(true)}>Discover and transfer</button>
     </div>
     <div className={transfer ? 'feed-settings-transfer' : 'feed-settings-manage'}>
-      {transfer ? <SubscriptionTools onChanged={onChanged} /> : <FeedChecks>{children}</FeedChecks>}
+      {transfer ? <SubscriptionTools onChanged={onChanged} intro={<SubscribeBookmarklet />} /> : <FeedChecks>{children}</FeedChecks>}
     </div>
   </div>
 }

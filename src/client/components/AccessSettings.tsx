@@ -3,6 +3,7 @@ import { startRegistration, startAuthentication } from '@simplewebauthn/browser'
 import type { PublicKeyCredentialCreationOptionsJSON, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/browser'
 import { authRequest, requireLogin, type AuthStatus } from '../auth'
 import { clearOffline, setOfflineLocked } from '../offline'
+import { subscribeLoginReturn } from '../subscribe'
 
 interface ReaderStatus { enabled: boolean; username: string; activeApps: number; addresses: { netNewsWire: string; readYou: string; capyReader: string } }
 interface Access {
@@ -70,6 +71,8 @@ export function AuthBoundary({ children }: { children: React.ReactNode }) {
       if (version !== requestVersion.current) return
       if (value.authenticated || !value.enabled) localStorage.removeItem('paper-login-required')
       localStorage.setItem('paper-login-enabled', String(value.enabled))
+      const destination = location.pathname === '/login' ? subscribeLoginReturn(location.search) : ''
+      if (destination && (value.authenticated || !value.enabled)) { location.replace(destination); return }
       setStatus(value); setError('')
     } catch {
       if (version !== requestVersion.current) return

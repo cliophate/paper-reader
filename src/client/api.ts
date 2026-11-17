@@ -67,6 +67,7 @@ export const api = {
   setReportStatus: (id: string, status: ArticleReport['status']) =>
     request<{ ok: boolean }>(`/api/reports/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   status: (signal?: AbortSignal) => request<{
+    publicUrl?: string
     backend: 'standalone' | 'freshrss' | 'miniflux'
     backendInstance: string
     discussionConfigured: boolean

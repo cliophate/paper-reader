@@ -4,11 +4,25 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import crypto from 'node:crypto'
+import http from 'node:http'
 import { PaperDatabase } from '../dist-server/db.js'
 import { renderBriefing } from '../dist-server/email.js'
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'paper-reader-routes-'))
 const state = path.join(temporary, 'data')
+// Only this disposable publisher is allowlisted. Other loopback/private URLs
+// still go through the production transport's address checks.
+const publisher = http.createServer((request, response) => {
+  const url = new URL(request.url, 'http://127.0.0.1:4319')
+  if (url.pathname.startsWith('/feed/')) {
+    response.setHeader('Content-Type', 'application/rss+xml')
+    response.end('<rss version="2.0"><channel><title>Synthetic shared feed</title><link>https://example.test</link><description>Disposable share fixture</description></channel></rss>')
+  } else {
+    response.setHeader('Content-Type', 'text/html')
+    response.end(url.pathname === '/empty' ? '<html><title>No feeds</title></html>' : `<html><head><title>Synthetic publisher</title><link rel="alternate" type="application/rss+xml" title="Synthetic shared news" href="/feed${url.pathname}"><link rel="alternate" type="application/atom+xml" title="Synthetic replies" href="/feed/replies${url.pathname}"></head></html>`)
+  }
+})
+publisher.listen(4319, '127.0.0.1'); await once(publisher, 'listening')
 const db = new PaperDatabase(path.join(state, 'paper.sqlite'))
 const backend = db.bindStandalone()
 const feedId = db.saveLocalSubscription(backend.id, { title: 'Synthetic feed', url: 'https://example.test/feed' })
@@ -45,10 +59,26 @@ db.createBriefing({ id: 'missing-source-briefing', kind: 'morning', windowStart:
   selection: { news: [{ headline: 'Synthetic unavailable source', summary: 'A source has disappeared.', entryIds: [members[0].id, 'missing-source'] }], worthNoticing: [], social: [] },
   deliveredAt: now, acknowledgedAt: null }, [{ id: members[0].id, section: 'news' }, { id: 'missing-source', section: 'news' }])
 db.close()
+const ownerState = path.join(temporary, 'owner-data')
+const ownerDb = new PaperDatabase(path.join(ownerState, 'paper.sqlite'))
+ownerDb.bindStandalone()
+await ownerDb.auth.setup(ownerDb.auth.setupCode(), 'owner', 'synthetic route password')
+ownerDb.close()
+const owner = spawn(process.execPath, [path.resolve('dist-server/index.js')], { stdio: 'inherit', env: {
+  PATH: process.env.PATH, NODE_NO_WARNINGS: '1', STATE_DIR: ownerState, PAPER_BACKEND: 'standalone', PAPER_SYNC_ENABLED: 'false',
+  HOST: '127.0.0.1', PORT: '4320', PUBLIC_URL: 'http://127.0.0.1:4320', CODEX_ENABLED: 'false',
+  PAPER_TRUSTED_FEED_ORIGINS: 'http://127.0.0.1:4319',
+} })
+const ownerExit = once(owner, 'exit')
 const child = spawn(process.execPath, [path.resolve('dist-server/index.js')], { stdio: 'inherit', env: {
   PATH: process.env.PATH, NODE_NO_WARNINGS: '1', STATE_DIR: state, PAPER_BACKEND: 'standalone', PAPER_SYNC_ENABLED: 'false',
   HOST: '127.0.0.1', PORT: '4318', PUBLIC_URL: 'http://127.0.0.1:4318', CODEX_ENABLED: 'false',
+  PAPER_TRUSTED_FEED_ORIGINS: 'http://127.0.0.1:4319',
 } })
-for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill('SIGTERM'))
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { child.kill('SIGTERM'); owner.kill('SIGTERM') })
 try { await once(child, 'exit') }
-finally { await fs.rm(temporary, { recursive: true, force: true }) }
+finally {
+  owner.kill('SIGTERM'); await ownerExit
+  publisher.closeAllConnections(); await new Promise(resolve => publisher.close(resolve))
+  await fs.rm(temporary, { recursive: true, force: true })
+}

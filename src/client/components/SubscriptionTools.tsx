@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { subscriptionToolsApi as api } from '../subscriptionToolsApi'
 import type { DiscoveryResult, ImportChoice, ImportPreview, ImportResult, ImportRow } from '../../shared/subscription-tools'
 import './SubscriptionTools.css'
+import { parseSubscribeQuery } from '../subscribe'
 
 const MAX_BYTES = 1024 * 1024
-export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unknown> }) {
-  const [url, setUrl] = useState('')
+export function SubscriptionTools({ onChanged, initialUrl = '', initialError = '', subscribeOnly = false, online = true, intro }: {
+  onChanged: () => Promise<unknown>; initialUrl?: string; initialError?: string; subscribeOnly?: boolean; online?: boolean; intro?: ReactNode
+}) {
+  const [url, setUrl] = useState(initialUrl)
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null)
   const [candidate, setCandidate] = useState('')
   const [xml, setXml] = useState('')
@@ -14,11 +17,18 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
   const [folderDrafts, setFolderDrafts] = useState<Record<string, string>>({})
   const [result, setResult] = useState<{ result: ImportResult; rows: ImportRow[] } | null>(null)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState(initialError)
   const [exported, setExported] = useState<{ xml: string; omitted: number } | null>(null)
   const [refreshFailed, setRefreshFailed] = useState(false)
   const previewHeading = useRef<HTMLHeadingElement>(null)
   const resultHeading = useRef<HTMLHeadingElement>(null)
+  const started = useRef(false)
+  useEffect(() => {
+    if (!started.current && initialUrl && !initialError && online) {
+      started.current = true
+      void run(() => discover(initialUrl))
+    }
+  }, [initialUrl, initialError, online])
   useEffect(() => { if (preview) previewHeading.current?.focus() }, [preview])
   useEffect(() => { if (result) resultHeading.current?.focus() }, [result])
 
@@ -28,11 +38,18 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
     catch (reason) { setError(reason instanceof Error ? reason.message : 'The subscription request failed.') }
     finally { setBusy(false) }
   }
+  async function discover(value: string) {
+    setDiscovery(null); setCandidate(''); setPreview(null); setResult(null)
+    const parsed = parseSubscribeQuery(new URLSearchParams({ url: value }).toString())
+    if (parsed.error) throw new Error(parsed.error)
+    const found = await api.discover(parsed.url); setDiscovery(found)
+    if (found.candidates.length === 1) setCandidate(found.candidates[0].url)
+  }
   function showPreview(value: ImportPreview) {
     setPreview(value); setResult(null); setFolderDrafts({})
     setChoices(value.rows.map(row => ({
       key: row.key,
-      action: row.problem ? 'skip' : row.suggestedId ? 'reuse' : row.matches.length || row.repeatedUrl || row.folderConflict || row.folders.length > 1 ? 'skip' : 'create',
+      action: row.problem || (subscribeOnly && row.matches.length) ? 'skip' : row.suggestedId ? 'reuse' : row.matches.length || row.repeatedUrl || row.folderConflict || row.folders.length > 1 ? 'skip' : 'create',
       ...(row.suggestedId ? { existingId: row.suggestedId } : {}),
       folders: row.suggestedId ? null : row.folderConflict || row.folders.length > 1 ? [] : row.folders.filter(Boolean),
     })))
@@ -47,7 +64,7 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
     setFolderDrafts(previous => ({ ...previous, [key]: folderDraft }))
   }
   async function apply() {
-    if (!preview) return
+    if (!preview || busy || !online || !choices.some(choice => choice.action !== 'skip')) return
     const current = preview
     // Clear before sending. A lost response must never invite replay of writes.
     setPreview(null); setExported(null)
@@ -67,15 +84,12 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
   }
 
   return <section className="subscription-tools" aria-labelledby="subscription-tools-title">
-    <h3 id="subscription-tools-title">Discover and transfer feeds</h3>
-    <p>Find feeds on a website, or transfer subscriptions using OPML. Existing subscriptions keep their IDs, titles and URLs when reused.</p>
-    <fieldset disabled={busy} className="subscription-tools-controls">
-      <form aria-label="Discover feeds" onSubmit={event => submit(event, async () => {
-        setDiscovery(null); setCandidate(''); setPreview(null)
-        const found = await api.discover(url); setDiscovery(found)
-        if (found.candidates.length === 1) setCandidate(found.candidates[0].url)
-      })}>
-        <label>Website or feed URL<input type="url" value={url} required maxLength={4096} placeholder="https://example.com/" onChange={event => { setUrl(event.target.value); setDiscovery(null); setCandidate('') }} /></label>
+    <h3 id="subscription-tools-title">{subscribeOnly ? 'Find a feed' : 'Discover and transfer feeds'}</h3>
+    {!subscribeOnly && <p>Find feeds on a website, or transfer subscriptions using OPML. Existing subscriptions keep their IDs, titles and URLs when reused.</p>}
+    {intro}
+    <fieldset disabled={busy || !online} className="subscription-tools-controls">
+      <form aria-label="Discover feeds" onSubmit={event => submit(event, () => discover(url))}>
+        <label>Website or feed URL<input type="url" value={url} required maxLength={4096} placeholder="https://example.com/" onChange={event => { setUrl(event.target.value); setDiscovery(null); setCandidate(''); setPreview(null); setResult(null); setError('') }} /></label>
         <button type="submit">Find feeds</button>
       </form>
       {discovery && <div className="discovery-results">
@@ -87,7 +101,7 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
           <button type="button" disabled={!candidate} onClick={() => void run(async () => { const feed = discovery.candidates.find(feed => feed.url === candidate)!; showPreview(await api.previewFeed(feed.url, feed.title)) })}>Preview selected feed</button>
         </> : <p role="status">No RSS or Atom links were advertised on this page. Try the publisher's feed URL.</p>}
       </div>}
-      <form aria-label="Import OPML" onSubmit={event => submit(event, async () => {
+      {!subscribeOnly && <><form aria-label="Import OPML" onSubmit={event => submit(event, async () => {
         setPreview(null)
         if (new TextEncoder().encode(xml).length > MAX_BYTES) throw new Error('OPML exceeds the 1 MiB limit.')
         showPreview(await api.preview(xml))
@@ -106,9 +120,30 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
       <div className="opml-export">
         <button type="button" onClick={() => void run(async () => { setExported(null); setExported(await api.export()) })}>Prepare OPML export</button>
         {exported && <><p role="status">Export ready. {exported.omitted > 0 ? `${exported.omitted} outlines were omitted because their URLs were invalid or contained credentials or token parameters.` : 'No subscription URLs were omitted.'} The file contains subscription titles, URLs and folder memberships.</p><button type="button" onClick={download}>Download OPML</button></>}
-      </div>
+      </div></>}
     </fieldset>
-    {preview && <form className="opml-preview" aria-label="Confirm subscription import" onSubmit={event => submit(event, apply)}>
+    {preview && subscribeOnly && <form className="opml-preview" aria-label="Confirm subscription" onSubmit={event => submit(event, apply)}>
+      <h4 ref={previewHeading} tabIndex={-1}>Review subscription</h4>
+      <fieldset disabled={busy || !online}>
+        {preview.rows.map(row => {
+          const choice = choices.find(choice => choice.key === row.key)!
+          return <fieldset className="opml-row" key={row.key}><legend>{row.title}</legend>
+            <p className="subscription-url">{row.url}</p>
+            {row.problem ? <p role="alert">{row.problem}</p> : row.matches.length ? <div role="status"><p>Already subscribed. No duplicate will be added.</p><ul>{row.matches.map(match => <li key={match.id}>{match.title} · {match.folders.join(', ') || 'Uncategorized'}</li>)}</ul></div> : <>
+              <label>Destination folder<select value={folderDrafts[row.key] ? 'new' : choice.folders?.[0] ? `folder:${choice.folders[0]}` : ''} onChange={event => update(row.key, { folders: event.target.value.startsWith('folder:') ? [event.target.value.slice(7)] : [] })}>
+                <option value="">{preview.backend === 'miniflux' ? 'Miniflux default category' : 'Uncategorized'}</option>
+                {preview.folders.map(folder => <option key={folder} value={`folder:${folder}`}>{folder}</option>)}
+                {folderDrafts[row.key] && <option value="new">New folder</option>}
+              </select></label>
+              <label>Or create a folder<input maxLength={120} value={folderDrafts[row.key] || ''} onChange={event => update(row.key, { folders: event.target.value ? [event.target.value] : [] }, event.target.value)} /></label>
+            </>}
+          </fieldset>
+        })}
+        <button type="submit" disabled={!choices.some(choice => choice.action === 'create')}>Confirm subscription</button>
+        <button type="button" onClick={() => setPreview(null)}>Cancel preview</button>
+      </fieldset>
+    </form>}
+    {preview && !subscribeOnly && <form className="opml-preview" aria-label="Confirm subscription import" onSubmit={event => submit(event, apply)}>
       <h4 ref={previewHeading} tabIndex={-1}>Review {preview.rows.length} subscription{preview.rows.length === 1 ? '' : 's'}</h4>
       <p>Duplicate policy: reuse a named subscription or skip it. Reuse keeps its title and URL. Distinct subscriptions are never merged by URL.{!preview.multipleMemberships && ` ${preview.backend === 'miniflux' ? 'Miniflux' : 'FreshRSS'} cannot create a second subscription with an already subscribed URL.`}</p>
       {preview.warnings.map(warning => <p key={warning}>{warning}</p>)}
@@ -143,7 +178,7 @@ export function SubscriptionTools({ onChanged }: { onChanged: () => Promise<unkn
         <button type="button" onClick={() => setPreview(null)}>Cancel preview</button>
       </fieldset>
     </form>}
-    {result && <div className="opml-results" role="status"><h4 ref={resultHeading} tabIndex={-1}>Import results</h4><ul>{result.result.results.map(item => <li key={item.key}><strong>{result.rows.find(row => row.key === item.key)?.title}</strong>: {item.status}. {item.message}</li>)}</ul><p>Make a new preview before retrying any failed items.</p></div>}
+    {result && <div className="opml-results" role="status"><h4 ref={resultHeading} tabIndex={-1}>{subscribeOnly ? 'Subscription results' : 'Import results'}</h4><ul>{result.result.results.map(item => <li key={item.key}><strong>{result.rows.find(row => row.key === item.key)?.title}</strong>: {item.status}. {item.message}</li>)}</ul><p>Make a new preview before retrying any failed items.</p></div>}
     {busy && <p role="status">Working on subscriptions...</p>}
     {error && <p role="alert">{error}</p>}
     {refreshFailed && <p role="alert">Subscription requests finished, but navigation could not refresh. Their results still apply. <button disabled={busy} onClick={() => void run(refresh)}>Refresh navigation</button></p>}

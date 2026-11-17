@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FeedSettings } from '../src/client/components/FeedSettings'
 import { SubscriptionTools } from '../src/client/components/SubscriptionTools'
 import { subscriptionToolsApi as api } from '../src/client/subscriptionToolsApi'
 import type { ImportPreview } from '../src/shared/subscription-tools'
+import { SubscribeBookmarklet } from '../src/client/components/SubscribeBookmarklet'
+import { api as readerApi } from '../src/client/api'
+vi.mock('../src/client/api', () => ({ api: { status: vi.fn() } }))
 vi.mock('../src/client/subscriptionToolsApi', () => ({ subscriptionToolsApi: { discover: vi.fn(), preview: vi.fn(), previewFeed: vi.fn(), apply: vi.fn(), export: vi.fn() } }))
 let root: Root, container: HTMLDivElement, preview: ImportPreview
 const changed = vi.fn(async () => {})
@@ -20,6 +23,47 @@ beforeEach(() => {
   vi.mocked(api.previewFeed).mockResolvedValue(preview)
   vi.mocked(api.apply).mockResolvedValue({ results: [{ key: '1', status: 'created', message: 'Subscription added.' }] })
   changed.mockResolvedValue(undefined)
+  vi.mocked(readerApi.status).mockResolvedValue({ publicUrl: 'https://paper.example.test' } as Awaited<ReturnType<typeof readerApi.status>>)
+})
+
+describe('subscribe link flow', () => {
+  async function open(backend: 'standalone' | 'freshrss' | 'miniflux') {
+    preview.backend = backend; preview.multipleMemberships = backend === 'standalone'
+    preview.rows[0].folders = []
+    vi.mocked(api.discover).mockResolvedValue({ responseUrl: 'https://example.test/', candidates: [{ url: 'https://example.test/rss', title: 'Example', format: 'rss' }] })
+    await act(async () => root.render(<StrictMode><SubscriptionTools subscribeOnly initialUrl="https://example.test/" onChanged={changed} /></StrictMode>))
+    expect(api.discover).toHaveBeenCalledExactlyOnceWith('https://example.test/')
+    expect(api.apply).not.toHaveBeenCalled()
+    await act(async () => button('Preview selected feed').click())
+    expect(api.apply).not.toHaveBeenCalled()
+    expect(form('Import OPML')).toBeNull()
+  }
+  it.each(['standalone', 'freshrss', 'miniflux'] as const)('uses the existing reviewed API for %s', async backend => {
+    await open(backend)
+    await select(form('Confirm subscription').querySelector('select')!, 'folder:Reading')
+    await submit('Confirm subscription')
+    expect(api.apply).toHaveBeenCalledExactlyOnceWith('synthetic-preview', [{ key: '1', action: 'create', folders: ['Reading'] }])
+    expect(container.textContent).toContain('Subscription added.')
+  })
+  it.each(['standalone', 'freshrss', 'miniflux'] as const)('shows existing subscriptions without allowing duplicate creation for %s', async backend => {
+    preview.rows[0].matches = [{ id: 'existing', title: 'Already here', url: preview.rows[0].url, folders: ['Reading'] }]
+    preview.rows[0].suggestedId = 'existing'
+    await open(backend)
+    expect(container.textContent).toContain('Already subscribed. No duplicate will be added.')
+    expect(button('Confirm subscription').disabled).toBe(true)
+    // Even a form submission dispatched without pressing the disabled button
+    // must not reuse or create this subscription.
+    await submit('Confirm subscription')
+    expect(api.apply).not.toHaveBeenCalled()
+  })
+  it('creates a draggable bookmarklet using the configured public URL', async () => {
+    await act(async () => root.render(<SubscribeBookmarklet />))
+    const link = container.querySelector('a')!
+    expect(link.draggable).toBe(true)
+    expect(link.getAttribute('href')).toContain('https://paper.example.test/subscribe?url=')
+    expect(link.getAttribute('href')).toContain('encodeURIComponent(location.href)')
+    expect(link.getAttribute('href')).not.toContain('throw new Error')
+  })
 })
 afterEach(async () => { await act(async () => root.unmount()); document.body.innerHTML = ''; vi.resetAllMocks() })
 async function render(width = 1280) { Object.defineProperty(window, 'innerWidth', { configurable: true, value: width }); await act(async () => root.render(<SubscriptionTools onChanged={changed} />)) }
