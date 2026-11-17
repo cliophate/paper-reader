@@ -245,7 +245,6 @@ export default function App() {
     }
   }, [notify])
 
-  useReadingProgress(selected, articleRef, view === 'reader' && mobilePane === 'article')
   useEffect(() => {
     const update = () => setOnline(navigator.onLine)
     window.addEventListener('online', update); window.addEventListener('offline', update)
@@ -520,6 +519,8 @@ export default function App() {
     readerChromeScroll.current = initialReaderChromeScrollState(Math.max(0, top - ARTICLE_BOUNDARY_ZONE_SIZE))
     setReaderChromeHidden(false)
   }, [])
+
+  useReadingProgress(selected, articleRef, view === 'reader' && mobilePane === 'article', revealReaderChrome)
 
   const handleArticleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
     if (!window.matchMedia('(max-width: 1040px)').matches || view !== 'reader' || mobilePane !== 'article') return

@@ -132,6 +132,53 @@ test('mobile panes survive back, forward and refresh', async ({ page }) => {
   await expect(page.locator('.app')).toHaveAttribute('data-mobile-pane', 'article')
 })
 
+test.describe('mobile reading restoration', () => {
+  test.use({ serviceWorkers: 'block' })
+
+  test('Sources stays tappable when late content restores saved progress after refresh', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    const { article } = await fixture(page)
+    await page.addInitScript(id => localStorage.setItem('paper-reading-positions', JSON.stringify({
+      [id]: { position: 0.5, at: new Date().toISOString() },
+    })), article.id)
+    const path = `/a/${article.linkNumber}?unread=0`
+    await page.goto(path)
+    await expect(page.locator('.article-header h1')).toHaveText(article.title)
+    const imagePath = '/synthetic-reading-image.svg'
+    await page.route(/\/api\/entries(?:\/number\/\d+|\?.*)?$/, async route => {
+      const response = await route.fetch()
+      const data = await response.json()
+      for (const item of data.items || [data.entry]) {
+        if (item?.id === article.id) item.contentHtml = `<img src="${imagePath}" alt="Synthetic reading fixture">${item.contentHtml}`
+      }
+      await route.fulfill({ response, json: data })
+    })
+    let release!: () => void
+    const image = new Promise<void>(resolve => { release = resolve })
+    await page.route(imagePath, async route => {
+      await image
+      await route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="1200"><rect width="300" height="1200" fill="gray"/></svg>' })
+    })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await ready(page, path)
+    await expect(page.locator('.article-header h1')).toHaveText(article.title)
+    const scroll = page.locator('.article-scroll')
+    const progress = () => scroll.evaluate(el => (el.scrollTop - 96) / (el.scrollHeight - el.clientHeight - 192))
+    await expect.poll(progress).toBeCloseTo(0.5, 2)
+    await page.evaluate(() => document.fonts.ready.then(() => undefined))
+    const before = await scroll.evaluate(el => el.scrollHeight)
+    release()
+    // An image gives a predictable height change across system fonts. Both image
+    // loads and font swaps trigger the saved-position ResizeObserver.
+    await expect.poll(() => scroll.evaluate(el => el.scrollHeight)).toBeGreaterThan(before + 500)
+    await expect.poll(progress).toBeCloseTo(0.5, 2)
+    await expect(page.locator('.mobile-tabs')).toHaveCSS('opacity', '1')
+    await page.getByRole('button', { name: 'Sources', exact: true }).click()
+    await ready(page, '/?unread=0')
+    await expect(page.locator('.app')).toHaveAttribute('data-mobile-pane', 'sources')
+  })
+})
+
 test('a service worker serves a nested offline article after refresh', async ({ page, context }) => {
   const { article } = await fixture(page)
   await page.goto(`/a/${article.linkNumber}?unread=0`)
