@@ -1,4 +1,4 @@
-const SHELL = 'paper-shell-v4'
+const SHELL = 'paper-shell-v5'
 const MEDIA = 'paper-offline-media-v1'
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
@@ -25,7 +25,12 @@ self.addEventListener('fetch', event => {
   if (url.origin !== self.location.origin) return
   if (request.mode === 'navigate') {
     if (/^\/assets(?:\/|$)/.test(url.pathname)) return
-    event.respondWith(fetch(request).catch(async () => (await (await caches.open(SHELL)).match('/')) || Response.error()))
+    event.respondWith(fetch(request).catch(async () => {
+      if (url.pathname === '/subscribe') return new Response('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Paper · Offline</title><main><h1>You are offline</h1><p>Connect to Paper to discover feeds and subscribe. Your link is still in the address bar.</p><p><a href="">Try again</a></p><a href="/">Open Paper</a></main></html>', {
+        status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'" },
+      })
+      return (await (await caches.open(SHELL)).match('/')) || Response.error()
+    }))
   } else if (url.pathname.startsWith('/assets/')) {
     event.respondWith(caches.open(SHELL).then(async cache => (await cache.match(request)) || fetch(request)))
   }

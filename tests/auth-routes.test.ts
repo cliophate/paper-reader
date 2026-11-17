@@ -75,6 +75,15 @@ it('rejects cross-site setup, login and all access writes before processing cred
   const hostStatus = await new Promise<number | undefined>(resolve => { http.get(base + '/api/private', { headers: { host: 'evil.test' } }, response => { response.resume(); resolve(response.statusCode) }) })
   expect(hostStatus).toBe(421)
 })
+it('preserves the subscribe query at the owner login gate without granting API access', async () => {
+  await setup(); cookies.clear()
+  const target = '/subscribe?url=https%3A%2F%2Fexample.test%2Ffeed%3Fa%3D1%26b%3D2&confirm=true'
+  const response = await call(target)
+  expect(response.status).toBe(303)
+  expect(response.headers.get('location')).toBe(`/login?returnTo=${encodeURIComponent(target)}`)
+  expect((await call('/api/subscription-tools/discover', { url: 'https://example.test' })).status).toBe(401)
+  expect((await call('/api/subscription-tools/apply', { token: 'crafted', choices: [] })).status).toBe(401)
+})
 it('returns 429 and Retry-After and ignores forged forwarding headers by default', async () => {
   expect(await (await call('/api/ip', undefined, 'GET', { 'x-forwarded-for': '203.0.113.3' })).json()).toBe('127.0.0.1')
   await setup(); cookies.clear()

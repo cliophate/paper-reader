@@ -26,6 +26,10 @@
 .opml-row legend { max-width: 100%; overflow-wrap: anywhere; }
 .subscription-url { font-size: .85rem; }
 .opml-results li { margin: .5rem 0; overflow-wrap: anywhere; }
+.subscribe-page { height: 100%; overflow: auto; max-width: 760px; margin: 0 auto; }
+.subscribe-page > header, .subscribe-page > p { margin: 24px; }
+.subscribe-page h1 { font-size: 26px; }
+.subscribe-bookmarklet a { display: inline-block; color: var(--ink); padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }
 @media (max-width: 640px) {
   .subscription-tools { padding: 16px; }
   .subscription-tools button { width: 100%; margin-right: 0; }

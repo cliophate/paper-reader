@@ -19,6 +19,7 @@ its links. A number copied from another installation can identify a different it
 | Offline articles | `/offline` |
 | Briefings | `/briefings` |
 | Pulse | `/pulse` |
+| Subscribe to a website or feed | `/subscribe?url=<encoded URL>` |
 
 Feed and folder slugs use the current title, lowercase ASCII and hyphens, capped
 at 60 characters. Empty slugs are omitted. Resolution uses the number, ignoring

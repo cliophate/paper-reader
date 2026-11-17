@@ -85,6 +85,7 @@ try {
   assert.match(await rootPage.text(), /<div id="root">/)
   await until(async () => (await request('/api/status')).data.localReadsActive === true)
   const status = (await request('/api/status')).data
+  assert.equal(status.publicUrl, base)
   assert.equal(status.readwiseConfigured, false); assert.equal(status.kirbyConfigured, false)
   assert.equal(status.briefingConfigured, false); assert.equal(status.discussionConfigured, false)
   assert.equal((await request('/api/sync/parity')).data.ready, true)
@@ -179,7 +180,7 @@ try {
   assert.equal((await request('/api/status')).data.discussionConfigured, false)
   const manifest = await fetch(`${base}/offline-assets.json`).then(response => response.json())
   for (const asset of manifest) assert.equal((await fetch(`${base}${asset}`)).status, 200)
-  assert((await fetch(`${base}/sw.js`).then(response => response.text())).includes('paper-shell-v4-'))
+  assert((await fetch(`${base}/sw.js`).then(response => response.text())).includes('paper-shell-v5-'))
   await stop()
   await fs.cp(path.join(temporary, 'data'), path.join(temporary, 'restored'), { recursive: true })
   await start(path.join(temporary, 'restored'))
