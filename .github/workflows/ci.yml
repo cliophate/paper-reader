@@ -47,7 +47,7 @@ jobs:
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=moderate
       - run: python3 -m unittest discover -s scripts -p 'test_container_engine.py'
-      - run: npm audit --audit-level=moderate
+      - run: node scripts/audit-dev.mjs
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
