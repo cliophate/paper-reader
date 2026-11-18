@@ -6,7 +6,7 @@ export function BackendSettings({ backend }: { backend: 'standalone' | 'freshrss
     <h3>Backend &amp; data</h3>
     <p>Current backend: <strong>{name}</strong></p>
     <p className="settings-intro">{backend === 'standalone'
-      ? 'Paper fetches feeds and saves articles, reading state and folders in its data directory.'
+      ? 'Paper fetches feeds and saves articles, feed icons, reading state and folders in its data directory.'
       : `${name} manages subscriptions and reading state. Paper keeps local history, discussions, briefings and collections.`}</p>
     {backend === 'miniflux' && <div className="backend-notes">
       <p>Set PAPER_BACKEND=miniflux, MINIFLUX_BASE_URL and MINIFLUX_API_KEY in your private configuration. Create a dedicated key in Miniflux Settings &gt; API Keys. Paper uses the native API and requires Miniflux 2.3.2 or newer.</p>

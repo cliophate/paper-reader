@@ -13,9 +13,18 @@ await fs.mkdir(working)
 await fs.cp(path.resolve('dist'), path.join(working, 'dist'), { recursive: true })
 await fs.writeFile(path.join(working, 'dist/.private-fixture'), 'Synthetic hidden file')
 const executable = path.resolve('dist-server/index.js')
+const iconBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNQSHAAAAFkAMH+ZHNfAAAAAElFTkSuQmCC', 'base64')
 let slowStarted = false, slowClosed = false, feedRequests = 0
+let slowIcons = false, slowIconStarted = false, slowIconClosed = false
 const fixture = http.createServer((request, response) => {
   if (request.url === '/slow.xml') { slowStarted = true; response.on('close', () => { slowClosed = true }); return }
+  if (request.url === '/') {
+    return response.writeHead(200, { 'Content-Type': 'text/html' }).end('<head><link rel="icon" href="/icon.png"></head>')
+  }
+  if (request.url === '/icon.png') {
+    if (slowIcons) { slowIconStarted = true; response.on('close', () => { slowIconClosed = true }); return }
+    return response.writeHead(200, { 'Content-Type': 'image/png' }).end(iconBytes)
+  }
   feedRequests++
   response.setHeader('Content-Type', 'application/rss+xml')
   response.end(`<rss version="2.0"><channel><title>Synthetic standalone feed</title><link>https://example.test</link><description>Disposable</description>
@@ -65,6 +74,12 @@ try {
   assert.equal(applied.results[0].status, 'created')
   const feedId = applied.results[0].id
   const page = await until(async () => { const value = (await request('/api/entries?kind=all&id=all&unread=0')).data; return value?.items.length === 2 && value })
+  const icon = await until(async () => {
+    const navigation = (await request('/api/navigation')).data
+    return navigation?.folders[0]?.feeds[0]?.iconUrl
+  })
+  assert.match(icon, /\/feed-icons\/[a-f0-9]{64}\.png$/); assert.equal(new URL(icon).origin, base)
+  assert.deepEqual(Buffer.from(await (await fetch(icon)).arrayBuffer()), iconBytes)
   const filter = await request('/api/filters', { phrase: 'standalone', scope: 'title', feedId })
   assert.equal(filter.status, 201)
   assert.equal(filter.data.matching, true)
@@ -111,14 +126,17 @@ try {
   assert.equal((await request('/api/feed-checks')).data.intervalMinutes, 30)
   const saved = (await request('/api/entries/item', { id: entry.id })).data.entry
   assert(saved.starred && !saved.read); assert.equal(saved.readingPosition, 0.42)
+  assert.deepEqual(Buffer.from(await (await fetch(icon)).arrayBuffer()), iconBytes)
   const current = (await request('/api/organization')).data
   assert.equal((await request('/api/organization/commands', { expectedRevision: current.revision, commands: [{ type: 'unsubscribe', feedId }] })).data.results[0].status, 'applied')
   assert.equal((await request('/api/entries/item', { id: entry.id })).data.entry.id, entry.id)
   assert.equal((await request('/api/entries?kind=all&id=all&unread=0')).data.items.length, 2)
+  slowIcons = true
   assert.equal((await request('/api/feeds', { url: feedOrigin + '/slow.xml', title: 'Slow synthetic feed' })).status, 201)
-  await until(() => slowStarted)
-  await stop(); await until(() => slowClosed)
-  console.log('Standalone built-server smoke passed: hidden-parent root HTML and dotfile protection, no-credential setup, discovery/import/fetch/read, CAS/undo, optional integrations off, organization, reload without collection, manual cooldown/origin/revision checks, restart intervals/identity/progress/stars, retained unsubscribe history, scheduler abort/drain.')
+  await until(() => slowStarted && slowIconStarted)
+  assert.equal((await fetch(base + '/health')).status, 200)
+  await stop(); await until(() => slowClosed && slowIconClosed)
+  console.log('Standalone built-server smoke passed: hidden-parent root HTML and dotfile protection, no-credential setup, discovery/import/fetch/read, cached feed icons, CAS/undo, optional integrations off, organization, reload without collection, manual cooldown/origin/revision checks, restart intervals/identity/progress/stars, retained unsubscribe history, feed and icon scheduler abort/drain.')
 } catch (error) { console.error(logs.slice(-4000)); throw error }
 finally {
   await stop(); fixture.closeAllConnections(); await new Promise(resolve => fixture.close(resolve))

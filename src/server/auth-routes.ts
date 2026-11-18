@@ -1,5 +1,6 @@
 import { greaderPath, type GreaderAuth } from './greader-auth.js'
 import { randomBytes } from 'node:crypto'
+import { feedIconPath } from './feed-icon-format.js'
 import { AuthConnections } from './auth-connections.js'
 import express, { type Request, type Response, type NextFunction } from 'express'
 import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server'
@@ -22,13 +23,14 @@ export const PUBLIC_AUTH_ROUTES = [
   'GET /api/auth/status', 'POST /api/auth/setup', 'POST /api/auth/login',
   'POST /api/auth/passkeys/options', 'POST /api/auth/passkeys/verify',
 ]
-export function routeAccess(method: string, pathname: string): 'public' | 'token' | 'session' | 'app' {
+export function routeAccess(method: string, pathname: string, feedIconsEnabled = false): 'public' | 'token' | 'session' | 'app' {
   if (greaderPath(pathname)) {
     try { if (!/(?:^|[\/\\])\.\.?(?:[\/\\]|$)/.test(decodeURIComponent(pathname))) return 'app' } catch { /* Malformed paths retain the session gate. */ }
   }
+  const read = method === 'GET' || method === 'HEAD'
+  if (read && feedIconsEnabled && feedIconPath(pathname)) return 'public'
   // Express defaults to case-insensitive routes with an optional final slash.
   pathname = pathname.toLowerCase().replace(/\/$/, '') || '/'
-  const read = method === 'GET' || method === 'HEAD'
   if (PUBLIC_AUTH_ROUTES.includes(`${method === 'HEAD' ? 'GET' : method} ${pathname}`)) return 'public'
   if (read && (pathname === '/health' || pathname === '/login' || /^\/assets\/[a-zA-Z0-9_.-]+$/.test(pathname)
     || ['/sw.js', '/offline-assets.json', '/manifest.webmanifest', '/favicon.svg', '/brand/paper-logo.svg', '/brand/paper-logo-light.svg', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-192.png', '/icons/icon-maskable-512.png', '/icons/icon-monochrome.svg', '/apple-touch-icon.png', '/favicon.ico', '/favicon-16x16.png', '/favicon-32x32.png'].includes(pathname))) return 'public'
@@ -36,11 +38,11 @@ export function routeAccess(method: string, pathname: string): 'public' | 'token
   if (['GET', 'HEAD', 'POST'].includes(method) && /^\/briefings\/[^/]+\/confirm$/.test(pathname)) return 'token'
   return 'session'
 }
-export function authGate(store: AuthStore, connections = new AuthConnections(store)) {
+export function authGate(store: AuthStore, connections = new AuthConnections(store), feedIconsEnabled = false) {
   return (request: Request, response: Response, next: NextFunction) => {
     if (store.enabled()) response.set('Cache-Control', 'no-store')
     const token = cookie(request)
-    if (routeAccess(request.method, request.path) !== 'session') return next()
+    if (routeAccess(request.method, request.path, feedIconsEnabled) !== 'session') return next()
     if (store.enabled() && !store.session(token, true)) {
       if (/^\/api(?:\/|$)/i.test(request.path) || !['GET', 'HEAD'].includes(request.method)) return response.status(401).json({ error: 'Sign in to Paper.', code: 'login-required' })
       return response.redirect(303, request.path === '/subscribe' ? `/login?returnTo=${encodeURIComponent(request.originalUrl)}` : '/login')

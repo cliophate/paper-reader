@@ -18,6 +18,7 @@ import { migrateStandaloneSetup } from './migration-schema.js'
 import { migrateSearchRows } from './search-schema.js'
 import { migrateLinkNumbers } from './link-numbers.js'
 import { migrateBackendKinds } from './backend-schema.js'
+import { FeedIconStore, migrateFeedIcons } from './feed-icon-store.js'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES, MINIFLUX_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
@@ -185,6 +186,7 @@ export class PaperDatabase {
   readonly identities: IdentityStore
   readonly organization: LocalOrganizationService
   readonly feedFetch: FeedFetchStore
+  readonly feedIcons: FeedIconStore
   private activeBackendId = ''
   private closed = false
   private checkpointHandler?: () => void
@@ -214,6 +216,10 @@ export class PaperDatabase {
         // open. Coordinated bootstrap performs upgrades under exclusive access.
         if (version < DATABASE_VERSION || this.getSyncValue('fulltext_search_v1') !== 'true') this.migrate(version > 0)
         if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 17) migrateBackendKinds(this.db)
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 18) {
+          if (version > 0) this.backupBeforeMigration(18, 'feed-icons')
+          migrateFeedIcons(this.db)
+        }
       }
       this.retention = new RetentionStore(this.db, ids => { this.commitLocalEntryState(this.activeBackendId, ids, 'read', { origin: 'retention' }) })
       this.auth = new AuthStore(this.db)
@@ -221,6 +227,7 @@ export class PaperDatabase {
       this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
       this.feedFetch = new FeedFetchStore(this.db, id => this.assertLocalBackend(id))
       this.organization = new LocalOrganizationService(this.db, id => this.assertLocalBackend(id), () => this.localNavigation())
+      this.feedIcons = new FeedIconStore(this.db, id => this.organization.subscriptionChanged(id), id => this.assertLocalBackend(id))
     } catch (error) {
       this.db.close()
       throw error
@@ -327,6 +334,9 @@ export class PaperDatabase {
         this.organization.subscriptionChanged(backendId)
       }
       this.feedFetch.saveEndpoint(backendId, id, feed.url)
+      if (previous && (previous.url !== feed.url || previous.site_url !== (feed.siteUrl || '') || previous.icon_url !== (feed.iconUrl || ''))) {
+        this.feedIcons.reschedule(id)
+      }
       return id
     })
   }

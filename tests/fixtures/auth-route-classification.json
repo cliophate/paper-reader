@@ -33,6 +33,7 @@
   "GET /api/topics": "session",
   "GET /api/x/media": "session",
   "GET /briefings/:id/confirm": "token",
+  "GET /feed-icons/:icon": "public",
   "GET /health": "public",
   "PATCH /api/feeds": "session",
   "PATCH /api/reports/:id": "session",

@@ -56,6 +56,12 @@ folder or change the default interval. Each feed can override that interval,
 from 5 minutes to one day. Manual checks respect publisher delays and a
 one-minute cooldown. Search and reading state work immediately.
 
+Paper saves feed icons in the background. If you migrated from FreshRSS, keep
+it running until Paper has copied the icons you want to preserve. For a private
+FreshRSS address, include its exact origin in `PAPER_TRUSTED_FEED_ORIGINS` while
+Paper copies the icons. Set `PUBLIC_URL` to the address you use to open Paper so
+Reader apps can load the saved icons too.
+
 Use the sidebar **+** menu to add a feed or create a standalone folder. Select
 the **Edit feeds** pencil to show drag grips, selection checkboxes and row options.
 Changes save immediately; **Done** leaves edit mode. Row options support rename,

@@ -21,7 +21,7 @@ export interface BoundedFetchOptions {
   accept?: string
   userAgent?: string
   acceptLanguage?: string
-  // Return response metadata with empty text without consuming these bodies.
+  // Return response metadata with an empty body without reading these statuses.
   skipBodyStatuses?: readonly number[]
   fatalDecoding?: boolean
   validators?: FeedValidators
@@ -39,6 +39,8 @@ export interface BoundedFetchResult {
   retryAfter?: string
   conditional: boolean
 }
+type BoundedBytesResult = Omit<BoundedFetchResult, 'text'> & { bytes: Buffer }
+const prefixRead = new Error('Response prefix read')
 const MiB = 1024 * 1024
 export const FEED_HTTP_DEFAULTS = { timeoutMs: 30_000, maxResponseBytes: 5 * MiB, maxDecompressedBytes: 5 * MiB, maxDecodedBytes: 5 * MiB, maxRedirects: 5 } as const
 
@@ -91,7 +93,14 @@ function decode(bytes: Buffer, contentType: string, max: number, fatal: boolean)
 
 // No cookies, authorization, proxy environment or arbitrary caller headers.
 // DNS validation and connection lookup share the same resolved address.
-export async function boundedFetch(input: string, options: BoundedFetchOptions = {}): Promise<BoundedFetchResult> {
+type TextFetchOptions = BoundedFetchOptions & { responseBody?: 'text-prefix' }
+type BytesFetchOptions = BoundedFetchOptions & { responseBody: 'bytes' }
+
+export function boundedFetch(input: string, options: BytesFetchOptions): Promise<BoundedBytesResult>
+export function boundedFetch(input: string, options?: TextFetchOptions): Promise<BoundedFetchResult>
+export async function boundedFetch(input: string, options: TextFetchOptions | BytesFetchOptions = {}): Promise<BoundedFetchResult | BoundedBytesResult> {
+  // A text prefix closes the response at maxDecompressedBytes.
+  const textPrefix = options.responseBody === 'text-prefix'
   const limits = { ...FEED_HTTP_DEFAULTS, ...Object.fromEntries(Object.entries(options).filter(([key, value]) => key in FEED_HTTP_DEFAULTS && value !== undefined)) } as typeof FEED_HTTP_DEFAULTS
   for (const [key, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value < (key === 'maxRedirects' ? 0 : 1) || value > 2_147_483_647) throw new FeedHttpError('limit', 'Invalid HTTP limit.')
@@ -138,23 +147,39 @@ export async function boundedFetch(input: string, options: BoundedFetchOptions =
           try { url = new URL(location, url) } catch { throw new FeedHttpError('redirect', 'The response has an invalid redirect URL.') }
           continue
         }
-        const result: BoundedFetchResult = { status, url: url.href, text: '', contentType: header(response, 'content-type'),
+        const result = { status, url: url.href, contentType: header(response, 'content-type'),
           etag: validEtag(header(response, 'etag')), lastModified: validLastModified(header(response, 'last-modified')),
           retryAfter: header(response, 'retry-after').slice(0, 128) || undefined, conditional: Boolean(etag || lastModified) }
-        if (status === 304 || status === 204 || options.skipBodyStatuses?.includes(status)) { response.destroy(); return result }
-        if (Number(header(response, 'content-length')) > limits.maxResponseBytes) {
+        if (status === 304 || status === 204 || options.skipBodyStatuses?.includes(status)) {
+          response.destroy()
+          return options.responseBody === 'bytes' ? { ...result, bytes: Buffer.alloc(0) } : { ...result, text: '' }
+        }
+        if (!textPrefix && Number(header(response, 'content-length')) > limits.maxResponseBytes) {
           response.destroy(); throw new FeedHttpError('limit', 'The response exceeds its byte limit.')
         }
         const encoding = header(response, 'content-encoding').trim().toLowerCase()
         const decompressor = encoding === 'gzip' ? createGunzip() : encoding === 'deflate' ? createInflate() : encoding === 'br' ? createBrotliDecompress() : !encoding || encoding === 'identity' ? new PassThrough() : null
         if (!decompressor) { response.destroy(); throw new FeedHttpError('encoding', 'Unsupported response compression.') }
         const chunks: Buffer[] = []
-        const sink = new Writable({ write(chunk: Buffer, _encoding, callback) { chunks.push(chunk); callback() } })
-        await pipeline(response, counter(limits.maxResponseBytes), decompressor, counter(limits.maxDecompressedBytes), sink, { signal })
+        let remaining = limits.maxDecompressedBytes
+        const sink = new Writable({ write(chunk: Buffer, _encoding, callback) {
+          if (chunk.length > remaining && !textPrefix) {
+            callback(new FeedHttpError('limit', 'The response exceeds its byte limit.'))
+            return
+          }
+          const part = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk
+          chunks.push(part)
+          remaining -= part.length
+          callback(textPrefix && !remaining ? prefixRead : null)
+        } })
+        try { await pipeline(response, counter(limits.maxResponseBytes), decompressor, sink, { signal }) }
+        catch (error) { if (error !== prefixRead) throw error }
         signal.throwIfAborted()
-        result.text = decode(Buffer.concat(chunks), result.contentType, limits.maxDecodedBytes, options.fatalDecoding ?? true)
+        const bytes = Buffer.concat(chunks)
+        if (options.responseBody === 'bytes') return { ...result, bytes }
+        const text = decode(bytes, result.contentType, limits.maxDecodedBytes, options.fatalDecoding ?? true)
         signal.throwIfAborted()
-        return result
+        return { ...result, text }
       } finally { release() }
     }
   } catch (error) {

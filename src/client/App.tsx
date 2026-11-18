@@ -594,13 +594,16 @@ export default function App() {
       void loadNavigation().catch(() => {})
       setTopicsRefreshKey(value => value + 1)
     }
+    const navigationUpdated = () => { void loadNavigation().catch(() => {}) }
     const pulseUpdated = () => setTopicsRefreshKey(current => current + 1)
     events.addEventListener('pulse', pulseUpdated)
+    events.addEventListener('navigation', navigationUpdated)
     events.addEventListener('sync', synced)
     events.addEventListener('connections', synced)
     events.addEventListener('state', stateChanged as EventListener)
     return () => {
       events.removeEventListener('pulse', pulseUpdated)
+      events.removeEventListener('navigation', navigationUpdated)
       events.removeEventListener('sync', synced)
       events.removeEventListener('connections', synced)
       events.removeEventListener('state', stateChanged as EventListener)

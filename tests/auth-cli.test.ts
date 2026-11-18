@@ -63,7 +63,7 @@ it.each([13, 14])('upgrades schema %i through retention v14 to login v15 and pre
   backup.close()
   expect(fs.statSync(loginBackup).mode & 0o777).toBe(0o600)
   expect(fs.readdirSync(directory).filter(name => name.includes('.before-')).sort()).toEqual([
-    'paper.sqlite.before-greader-v16', 'paper.sqlite.before-miniflux-v17', 'paper.sqlite.before-owner-login-v15', ...(version === 13 ? ['paper.sqlite.before-retention-v14'] : []),
+    'paper.sqlite.before-feed-icons-v18', 'paper.sqlite.before-greader-v16', 'paper.sqlite.before-miniflux-v17', 'paper.sqlite.before-owner-login-v15', ...(version === 13 ? ['paper.sqlite.before-retention-v14'] : []),
   ])
   if (version === 13) {
     const retentionBackup = new DatabaseSync(file + '.before-retention-v14', { readOnly: true })
