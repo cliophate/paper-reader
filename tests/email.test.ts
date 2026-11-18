@@ -44,6 +44,21 @@ describe('briefing email', () => {
     expect(result.subject).toBe('Morning Paper Briefing | A useful, source title')
   })
 
+  it('drops a note feed timestamp from the subject but keeps the title in the body', () => {
+    const note = { ...article, title: '2026-11-17 15:52: Thinking about a smaller social web' }
+    const render = (title: string) => renderBriefing({
+      kind: 'evening',
+      cutoff: new Date('2026-11-17T17:30:00.000Z'),
+      entries: new Map([[note.id, { ...note, title }]]),
+      confirmUrl: 'https://paper.example.test/briefings/test/confirm?token=secret',
+      selection: { news: [], worthNoticing: [{ entryId: note.id, reason: 'Short note.', summary: '' }], social: [] },
+    })
+    const result = render(note.title)
+    expect(result.subject).toBe('Evening Paper Briefing | Thinking about a smaller social web')
+    expect(result.text).toContain(note.title)
+    expect(render('2026-11-17 marks a release').subject).toBe('Evening Paper Briefing | 2026-11-17 marks a release')
+  })
+
   it('renders an editorial intro and visual social card', () => {
     const instagram: Entry = {
       ...article,

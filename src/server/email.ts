@@ -14,7 +14,8 @@ export function renderBriefing(input: RenderInput): { subject: string; html: str
   const lead = input.selection.news[0]?.headline
     || input.entries.get(input.selection.worthNoticing[0]?.entryId || '')?.title
     || ''
-  const subjectLead = emailText(lead || `${input.kind === 'morning' ? 'Morning' : 'Evening'} reading`)
+  // Some note feeds title posts "2026-11-17 15:52: Text"; the date adds nothing to a subject line.
+  const subjectLead = emailText(lead.replace(/^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?:\s+/, '') || `${input.kind === 'morning' ? 'Morning' : 'Evening'} reading`)
   const subject = `${input.kind === 'morning' ? 'Morning' : 'Evening'} Paper Briefing | ${subjectLead}`
   const date = new Intl.DateTimeFormat('en-GB', {
     timeZone: input.timeZone || 'UTC',

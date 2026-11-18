@@ -90,6 +90,21 @@ describe('briefing source checks', () => {
     expect(result.social).toEqual(candidate.social)
   })
 
+  it('logs why stories were omitted without article text', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const second = { ...selection.news[0], headline: 'Second story', entryIds: ['1'] }
+      const model = vi.fn()
+        .mockResolvedValueOnce(decisions).mockResolvedValueOnce({ supported: true })
+        .mockResolvedValueOnce({ decisions: [{ id: '1', relevant: true }] }).mockResolvedValueOnce({ supported: false })
+      await checkBriefingSources({ ...selection, news: [selection.news[0], second] }, entries, model)
+      expect(warn).toHaveBeenCalledTimes(1)
+      const line = String(warn.mock.calls[0][0])
+      expect(line).toBe('Briefing source check kept 1 of 2 news stories (omitted: 1 unsupported claims); removed sources from 1')
+      for (const title of titles) expect(line).not.toContain(title)
+    } finally { warn.mockRestore() }
+  })
+
   it('keeps the opening and image when all sources pass', async () => {
     const model = vi.fn().mockResolvedValueOnce({ decisions: [...entries.keys()].map(id => ({ id, relevant: true })) }).mockResolvedValueOnce({ supported: true })
     expect(await checkBriefingSources(selection, entries, model)).toEqual(selection)
