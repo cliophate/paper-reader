@@ -18,7 +18,7 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - run: npm audit --audit-level=moderate
+      - run: node scripts/audit-dev.mjs
       - run: npm run typecheck && npm test && npm run build && npm run test:smoke
       - run: npm run licenses && git diff --exit-code -- THIRD_PARTY_NOTICES.md licenses
       - name: Match tag to package version

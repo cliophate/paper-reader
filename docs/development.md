@@ -56,7 +56,7 @@ npm test
 npm run build
 npm run test:smoke
 npm audit --omit=dev --audit-level=moderate
-npm audit --audit-level=moderate
+node scripts/audit-dev.mjs
 ```
 
 The smoke test uses a local protocol fixture and temporary SQLite storage. It
