@@ -83,6 +83,7 @@ try {
   const rootPage = await fetch(base + '/')
   assert.equal(rootPage.status, 200); assert.match(rootPage.headers.get('content-type'), /text\/html/)
   assert.match(await rootPage.text(), /<div id="root">/)
+  assert.equal(rootPage.headers.get('keep-alive'), 'timeout=130')
   await until(async () => (await request('/api/status')).data.localReadsActive === true)
   const status = (await request('/api/status')).data
   assert.equal(status.publicUrl, base)

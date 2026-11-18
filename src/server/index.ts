@@ -11,6 +11,8 @@ import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import { organizationRouter } from './organization-routes.js'
 import crypto from 'node:crypto'
 import path from 'node:path'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Socket } from 'node:net'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import { BriefingService } from './briefing.js'
 import { createAiChatModel, providerConfigured, providerAvailability, runAiBatch, aiEnabled } from './ai-provider.js'
@@ -749,6 +751,27 @@ const server = app.listen(config.port, config.host, () => {
   logMemory('listening')
   void database.backfillMuteFilters().catch(error => console.error('Mute filter backfill failed; it will resume after restart.', error))
 })
+// Reverse proxies reuse idle upstream connections for up to two minutes (Caddy's
+// default). Node closes them after five seconds, so a request sent as the socket
+// closes gets reset and the proxy answers 502. Outlast the proxy instead.
+server.keepAliveTimeout = 130_000
+server.headersTimeout = 131_000
+// close() would wait out the keep-alive on sockets between requests, so
+// shutdown ends each socket once it has no response in progress.
+const openResponses = new Map<Socket, number>()
+server.on('connection', (socket: Socket) => {
+  openResponses.set(socket, 0)
+  socket.once('close', () => openResponses.delete(socket))
+})
+server.on('request', ({ socket }: IncomingMessage, response: ServerResponse) => {
+  openResponses.set(socket, (openResponses.get(socket) ?? 0) + 1)
+  response.once('close', () => {
+    if (!openResponses.has(socket)) return
+    const open = openResponses.get(socket)! - 1
+    openResponses.set(socket, open)
+    if (shuttingDown && !open) socket.end()
+  })
+})
 
 function parseRevisions(value: unknown): Record<string, number> | undefined {
   if (value === undefined) return undefined
@@ -778,6 +801,7 @@ async function shutdown() {
   // cleanup. SQLite crash recovery applies on the next open.
   const deadline = setTimeout(() => process.kill(process.pid, 'SIGKILL'), 30_000)
   const stopped = new Promise<void>(resolve => server.close(() => resolve()))
+  for (const [socket, open] of openResponses) if (!open) socket.end()
   const searchStopped = search.close()
   for (const response of eventResponses) response.end()
   headlines.setEnabled(false)
