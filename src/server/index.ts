@@ -32,6 +32,9 @@ import { requireAllowedHost, requireSameOrigin } from './request-origin.js'
 import { preventFraming } from './response-headers.js'
 import { previewFeed } from './feed-repair.js'
 import { FeedHttpError } from './feed-http.js'
+import { FeedIconService } from './feed-icons.js'
+import { feedIconPath, FEED_ICON_TYPES } from './feed-icon-format.js'
+import { FEED_ICON_CACHE_SECONDS } from './feed-icon-store.js'
 import { subscriptionToolsRoutes } from './subscription-tools-routes.js'
 import { freshRssImportStore } from './subscription-import-freshrss.js'
 import { minifluxImportStore } from './subscription-import-miniflux.js'
@@ -65,11 +68,14 @@ const eventResponses = new Set<Response>()
 const authConnections = new AuthConnections(database.auth)
 const connectionSettings = new ConnectionSettings(config)
 const connectionListeners = new Set<() => void>()
+const navigationListeners = new Set<() => void>()
 const discussionEnabled = () => providerConfigured(config) && config.ai.discussionEnabled
 logMemory('database ready')
 const repository = new PaperRepository(database)
 const search = new SearchService(database)
 const standalone = backend instanceof StandaloneBackend ? backend : null
+const feedIcons = standalone && config.sync.enabled ? new FeedIconService(database.feedIcons, backend.identity.id,
+  config.publicUrl, config.trustedFeedOrigins, () => { for (const listener of navigationListeners) listener() }) : null
 const synchronizer = standalone ? new StandaloneRuntime(database, standalone, config.sync.enabled, config.trustedFeedOrigins)
   : new BackendSynchronizer(database, backend, config.sync.enabled, config.sync.minutes)
 const readwise = new ReadwiseClient(config.readwise)
@@ -118,7 +124,7 @@ app.use((_request, response, next) => {
   next()
 })
 app.use(requireSameOrigin(config.publicUrl))
-app.use(authGate(database.auth, authConnections))
+app.use(authGate(database.auth, authConnections, !!standalone))
 const readerAuth = new GreaderAuth(database.greaderDatabase, database.auth, !!standalone, config.publicUrl)
 const greader = greaderRoutes(database, readerAuth, backend.identity.id, standalone?.state, authConnections, discoveryTransport(config.trustedFeedOrigins))
 app.use(greader.handler)
@@ -134,6 +140,18 @@ app.use('/api/settings/connections', (error: unknown, _request: Request, respons
 })
 
 app.get('/health', (_request, response) => response.json({ status: 'ok' }))
+
+if (standalone) app.get('/feed-icons/:icon', (request, response) => {
+  const icon = feedIconPath(request.path)
+  const bytes = icon && database.feedIcons.get(icon.hash, icon.extension)
+  if (!icon || !bytes) return response.status(404).set('Cache-Control', 'no-store').end()
+  return response.set({
+    'Content-Type': FEED_ICON_TYPES[icon.extension],
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'; sandbox",
+    'Cache-Control': `public, max-age=${FEED_ICON_CACHE_SECONDS}, immutable`,
+  }).send(bytes)
+})
 
 // Article discussion has no subscription, read-state or publishing capabilities.
 app.get('/api/discussion', (request, response) => response.json({ discussion: discussions.get(String(request.query.entryId || '')), enabled: discussionEnabled(), provider: connectionSettings.discussionProvider() }))
@@ -242,6 +260,8 @@ app.get('/api/events', (request, response) => {
   const unsubscribePulse = pulse.onUpdated(() => { response.write('event: pulse\ndata: {}\n\n') })
   const connectionsChanged = () => response.write('event: connections\ndata: {}\n\n')
   connectionListeners.add(connectionsChanged)
+  const navigationChanged = () => response.write('event: navigation\ndata: {}\n\n')
+  if (feedIcons) navigationListeners.add(navigationChanged)
   const keepAlive = setInterval(() => response.write(': keep-alive\n\n'), 25_000)
   keepAlive.unref()
   request.on('close', () => {
@@ -249,6 +269,7 @@ app.get('/api/events', (request, response) => {
     unsubscribe()
     unsubscribePulse()
     connectionListeners.delete(connectionsChanged)
+    navigationListeners.delete(navigationChanged)
     unsubscribeState()
   })
 })
@@ -749,6 +770,7 @@ const server = app.listen(config.port, config.host, () => {
   console.log(`Paper is listening on port ${(server.address() as { port: number }).port}`)
   if (!database.auth.enabled()) console.log(`Paper owner setup code, valid for 15 minutes: ${database.auth.setupCode()}`)
   logMemory('listening')
+  feedIcons?.start()
   void database.backfillMuteFilters().catch(error => console.error('Mute filter backfill failed; it will resume after restart.', error))
 })
 // Reverse proxies reuse idle upstream connections for up to two minutes (Caddy's
@@ -794,6 +816,7 @@ async function markReadWithUndo(ids: string[], expectedRevisions?: Record<string
 async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
+  const iconsStopped = feedIcons?.stop()
   await greader.close()
   clearInterval(memoryTimer)
   // Native SQLite can delay both worker termination and process.exit(). At the
@@ -813,6 +836,7 @@ async function shutdown() {
   await drainRequests()
   await Promise.all([headlines.drain(), pulse.drain(), topics.drain(), discussions.drain()])
   await searchStopped
+  await iconsStopped
   storage.close()
   clearTimeout(deadline)
 }

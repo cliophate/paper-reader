@@ -105,9 +105,16 @@ migrations. Use the matching pre-upgrade data backup if a migration is not
 backward compatible. Retain both the original database and backup until you have
 verified the restored application.
 
-Paper 0.2.0-alpha.3 uses database schema v17.
+The 0.2.0-alpha.3 release uses database schema v17.
 The [alpha.3 upgrade steps](#upgrade-from-020-alpha2-to-020-alpha3) describe
 the migration backup from schema v16.
+
+### Feed icon migration and recovery
+
+Schema v18 stores standalone feed icons in SQLite. Upgrading an existing
+database creates `paper.sqlite.before-feed-icons-v18`. To return to schema v17,
+stop Paper and briefing commands and restore that backup without stale WAL or
+SHM sidecars. It contains the feed icon URLs that were present before the upgrade.
 
 ### Retention migration and recovery
 

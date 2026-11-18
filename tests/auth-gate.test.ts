@@ -1,4 +1,5 @@
 import { GREADER_ENDPOINTS } from '../src/server/greader-routes'
+import { request as httpRequest } from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -7,6 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import ts from 'typescript'
 import { DatabaseSync } from 'node:sqlite'
 import { ingestFeed } from '../src/server/feed-ingestion'
+import { GreaderAuth } from '../src/server/greader-auth'
 import { defaultPolicy } from '../src/server/retention-store'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { ABSOLUTE_MS, IDLE_MS } from '../src/server/auth-store'
@@ -69,7 +71,8 @@ function inventory(extra = '') {
   routes.push('POST /api/greader.php/accounts/ClientLogin', 'GET /api/greader.php/reader/api/0/stream/contents/:stream')
   return routes.sort()
 }
-let directory: string, child: ChildProcess, base: string
+const iconBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNQSHAAAAFkAMH+ZHNfAAAAAElFTkSuQmCC', 'base64')
+let directory: string, child: ChildProcess, base: string, iconUrl: string
 beforeAll(async () => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-auth-gate-'))
   const db = new PaperDatabase(path.join(directory, 'paper.sqlite'))
@@ -80,6 +83,10 @@ beforeAll(async () => {
     xml: '<rss version="2.0"><channel><title>Fixture</title><item><guid>old</guid><title>Old article</title><pubDate>2000-01-01T00:00:00Z</pubDate></item></channel></rss>' })
   const sql = new DatabaseSync(path.join(directory, 'paper.sqlite'))
   sql.exec('UPDATE entries SET first_seen_at = 1'); sql.close()
+  const now = Date.now()
+  const [attempt] = db.feedIcons.due(backend.id, now, 1)
+  db.feedIcons.complete(backend.id, attempt, { bytes: iconBytes, extension: 'png' }, 'http://localhost', now)
+  iconUrl = db.localNavigation().uncategorized[0].iconUrl
   await db.auth.setup(db.auth.setupCode(), 'owner', 'synthetic gate password')
   db.close()
   child = spawn(process.execPath, ['--import', 'tsx', 'src/server/index.ts'], { env: {
@@ -106,7 +113,8 @@ it('classifies every route and router mount in index.ts and every mounted router
   for (const [route, classification] of Object.entries(classifications)) {
     const [method, template] = route.split(' ')
     if (['USE', 'STATIC'].includes(method) || template === '*splat') continue
-    expect(routeAccess(method, template.replace(/:[^/]+/g, 'fixture')), route).toBe(classification)
+    const pathname = template.replace(':icon', 'a'.repeat(64) + '.png').replace(/:[^/]+/g, 'fixture')
+    expect(routeAccess(method, pathname, true), route).toBe(classification)
   }
 })
 it('denies every session-protected API and page on the running server, including mounted routers', async () => {
@@ -129,6 +137,60 @@ it('leaves only health, login assets and exact self-authenticating routes outsid
   expect((await fetch(base + '/api/new-unclassified-endpoint')).status).toBe(401)
   expect((await fetch(base + '/_offline/articles/private', { redirect: 'manual' })).status).toBe(303)
 })
+it('serves only canonical standalone icon URLs without an owner session', async () => {
+  const pathname = new URL(iconUrl).pathname
+  for (const method of ['GET', 'HEAD']) {
+    const response = await fetch(base + pathname, { method, headers: { 'Sec-Fetch-Site': 'cross-site' } })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('image/png')
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(response.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox, frame-ancestors 'none'")
+    expect(response.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(method === 'GET' ? iconBytes : Buffer.alloc(0))
+  }
+  expect(routeAccess('GET', pathname)).toBe('session')
+  const status = await new Promise(resolve => {
+    const request = httpRequest(base + pathname, { headers: { Host: 'other.example.test' } }, response => {
+      response.resume()
+      resolve(response.statusCode)
+    })
+    request.end()
+  })
+  expect(status).toBe(421)
+  for (const missing of [pathname.replace(/png$/, 'gif'), '/feed-icons/' + 'b'.repeat(64) + '.png']) {
+    const response = await fetch(base + missing, { redirect: 'manual' })
+    expect(response.status).toBe(404)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(await response.text()).toBe('')
+  }
+  for (const unrelated of [pathname + '/', pathname.toUpperCase(), pathname.replace('.png', '.svg'),
+    pathname.replace('/feed-icons/', '/feed-icons/%61'), '/feed-icons', '/feed-icons/private']) {
+    expect((await fetch(base + unrelated, { redirect: 'manual' })).status, unrelated).toBe(303)
+  }
+  expect((await fetch(base + pathname, { method: 'POST' })).status).toBe(401)
+  expect((await fetch(base + pathname, { method: 'POST', headers: { Origin: 'https://other.example.test' } })).status).toBe(403)
+})
+
+it('returns the same absolute icon URL to Reader API clients', async () => {
+  const db = new PaperDatabase(path.join(directory, 'paper.sqlite'))
+  const owner = db.auth.newSession('', 'Reader fixture')
+  try {
+    const reader = new GreaderAuth(db.greaderDatabase, db.auth, true, 'http://localhost')
+    const app = await db.auth.createApp('Fixture', owner)
+    reader.configure(true, 'owner')
+    const root = base + '/api/greader.php'
+    const login = await fetch(root + '/accounts/ClientLogin', { method: 'POST',
+      body: new URLSearchParams({ Email: 'owner', Passwd: app.password }) })
+    expect(login.status).toBe(200)
+    const token = /^Auth=(.+)$/m.exec(await login.text())![1]
+    const subscriptions = await fetch(root + '/reader/api/0/subscription/list', { headers: { Authorization: `GoogleLogin auth=${token}` } })
+    expect(subscriptions.status).toBe(200)
+    expect((await subscriptions.json()).subscriptions[0].iconUrl).toBe(iconUrl)
+    db.auth.revokeApp(app.id)
+    reader.configure(false, 'owner')
+  } finally { db.auth.logout(owner); db.close() }
+})
+
 it('delivers retention invalidations through an authenticated stream and closes it after CLI revocation', async () => {
   const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'owner', password: 'synthetic gate password' }) })
   const cookie = login.headers.getSetCookie()[0].split(';')[0]
