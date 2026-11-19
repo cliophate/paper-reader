@@ -144,10 +144,50 @@ describe('Pulse collection size and catch-up', () => {
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
     await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
     expect(container.textContent).not.toContain('Collection small')
-    expect(container.textContent).toContain('1 unread of 3 articles')
+    expect(container.querySelector('.pulse-footer')?.textContent).toContain('Based on 3 articles')
+    expect(button(container, 'Unread 1')).toBeDefined()
     await act(async () => button(container.querySelector('.pulse-toolbar') as HTMLElement, 'Small 1').click())
     expect(container.textContent).toContain('Collection small')
     expect(container.textContent).not.toContain('Collection full')
+    expect(container.querySelector('.pulse-footer a')?.textContent).toBe('1 article')
+  })
+
+  it('updates the footer clock even while the background request is pending', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-09-16T10:20:00Z'))
+      const item = collection('clock', [source('1', 1), source('2', 2), source('3', 3)])
+      vi.spyOn(api, 'pulse').mockResolvedValueOnce(payload([item])).mockImplementation(() => new Promise(() => {}))
+      const container = document.createElement('div'); root = createRoot(container)
+      await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
+      const footer = container.querySelector('.pulse-footer')!
+      expect(footer.textContent).toBe('Updated 20 minutes ago · Based on 3 articles')
+      await act(async () => vi.advanceTimersByTime(60_000))
+      expect(footer.textContent).toBe('Updated 21 minutes ago · Based on 3 articles')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('promotes one collection by new count, update time and ID, and tries the next thumbnail on error', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    const sources = [source('1', 1), source('2', 2), source('3', 3)]
+    const lead = collection('a', sources.map((item, index) => ({ ...item, thumbnailUrl: index ? `/${index}.jpg` : 'data:text/plain,invalid' })))
+    vi.spyOn(api, 'pulse').mockResolvedValue(payload([
+      { ...collection('fewer', sources.map(item => ({ ...item, isNew: false }))), updatedAt: '2026-09-18T10:00:00Z' },
+      { ...collection('older', sources), updatedAt: '2026-09-15T10:00:00Z' }, collection('b', sources), lead,
+    ]))
+    const container = document.createElement('div'); root = createRoot(container)
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
+    expect([...container.querySelectorAll('.pulse-title')].map(item => item.textContent)).toEqual(['Collection a', 'Collection fewer', 'Collection older', 'Collection b'])
+    expect(container.querySelectorAll('.pulse-lead')).toHaveLength(1)
+    const image = () => container.querySelector<HTMLImageElement>('.pulse-lead-image')
+    expect(image()?.src).toBe('https://example.test/1.jpg')
+    await act(async () => { image()!.dispatchEvent(new Event('error')) })
+    expect(image()?.src).toBe('https://example.test/2.jpg')
+    Object.defineProperties(image()!, { naturalWidth: { value: 1 }, naturalHeight: { value: 1 } })
+    await act(async () => { image()!.dispatchEvent(new Event('load')) })
+    expect(image()).toBeNull()
+    expect(container.querySelector('.pulse-lead h2')?.textContent).toBe('Collection a')
   })
 
   it('opens a digest link to its collection and shows supported excerpts and clear filtered counts', async () => {

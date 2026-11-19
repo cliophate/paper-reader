@@ -225,3 +225,45 @@ test('collection expansion and article navigation follow browser history', async
   await page.goForward()
   await ready(page, `/collection/${collection.linkNumber}/a/${article.linkNumber}?unread=0`)
 })
+
+test('Pulse sections move above mobile navigation and keep their keyboard controls', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 844 })
+  const { collection } = await fixture(page)
+  await page.route('**/api/pulse', async route => {
+    const data: PulsePayload = await (await route.fetch()).json()
+    const source = collection.sources[0]
+    data.collections.push({ ...collection, id: 'small', linkNumber: 99, headline: 'Small collection', articleCount: 1,
+      unreadCount: Number(!source.read), newCount: Number(source.isNew), publicationCount: 1, sources: [source] })
+    await route.fulfill({ json: data })
+  })
+  await page.goto('/pulse')
+  const sections = page.getByRole('group', { name: 'Collections' })
+  const card = page.locator('.pulse-card').last()
+  const active = sections.getByRole('button', { name: /^Active/ })
+  await expect(active).toHaveAttribute('aria-pressed', 'true')
+  expect((await sections.boundingBox())!.y).toBeLessThan((await card.boundingBox())!.y)
+  await page.setViewportSize({ width: 320, height: 844 })
+  const bar = (await sections.boundingBox())!
+  const small = (await sections.getByRole('button', { name: 'Small 1' }).boundingBox())!
+  expect(bar.x).toBeGreaterThanOrEqual(0)
+  expect(small.x + small.width).toBeLessThanOrEqual(320)
+  const nav = (await page.getByRole('navigation', { name: 'Mobile navigation' }).boundingBox())!
+  expect(nav.y - (bar.y + bar.height)).toBeGreaterThanOrEqual(0)
+  expect(nav.y - (bar.y + bar.height)).toBeLessThan(24)
+  await active.focus()
+  await page.keyboard.press('Tab')
+  const quiet = sections.getByRole('button', { name: /^Quiet/ })
+  await expect(quiet).toBeFocused()
+  await page.keyboard.press('Space')
+  await expect(quiet).toHaveAttribute('aria-pressed', 'true')
+  await active.click()
+  await page.locator('.topics-scroll').evaluate(node => { node.scrollTop = node.scrollHeight })
+  expect((await card.boundingBox())!.y + (await card.boundingBox())!.height).toBeLessThan(bar.y)
+  const count = card.getByRole('link', { name: '3 articles' })
+  const href = await count.getAttribute('href')
+  await count.click()
+  await expect(page).toHaveURL(new RegExp(href! + '$'))
+  await expect(card.getByRole('button', { name: 'All 3' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(card.locator('.topic-sources')).toBeFocused()
+  await expect(card.locator('.pulse-filter-count')).toContainText('1 publication')
+})

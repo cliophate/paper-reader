@@ -16,6 +16,7 @@
   --accent: #191918;
   --accent-ink: #ffffff;
   --danger: #a43b31;
+  --signal: #9c4037;
   --shadow: 0 18px 60px rgb(35 33 27 / 12%);
   --reader-size: 19px;
   --reader-line: 1.72;
@@ -38,6 +39,7 @@
   --accent: #000000;
   --accent-ink: #ffffff;
   --danger: #000000;
+  --signal: var(--ink);
   --shadow: none;
   color-scheme: light;
 }
@@ -88,6 +90,7 @@
   --line: #353530;
   --accent: #f1f0eb;
   --accent-ink: #171716;
+  --signal: #e69a90;
   --shadow: 0 20px 70px rgb(0 0 0 / 42%);
   color-scheme: dark;
 }
@@ -106,6 +109,7 @@
     --line: #353530;
     --accent: #f1f0eb;
     --accent-ink: #171716;
+    --signal: #e69a90;
     --shadow: 0 20px 70px rgb(0 0 0 / 42%);
     color-scheme: dark;
   }
@@ -989,24 +993,29 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 /* Continuing Pulse collections */
 .pulse-toolbar, .pulse-card-top, .pulse-card-actions, .pulse-updates { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .pulse-card-top { flex-wrap: wrap; }
-.pulse-card-top-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-left: auto; }
 .pulse-toolbar { margin-bottom: 20px; }
 .pulse-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
 .pulse-tabs button, .pulse-card-actions button, .pulse-mark-read, .pulse-updates button, .pulse-notice button { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--muted); padding: 8px 12px; font-family: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
 .pulse-tabs button[aria-pressed='true'], .pulse-card-actions .primary, .pulse-updates button { color: var(--ink); background: var(--soft); border-color: var(--faint); }
 .pulse-tabs button span { margin-left: 5px; color: var(--faint); font-size: 11px; }
 .pulse-tabs button:hover, .pulse-card-actions button:hover, .pulse-mark-read:hover { color: var(--ink); border-color: var(--faint); }
-.pulse-status, .pulse-card-top time, .pulse-seen { color: var(--muted); font-size: 11px; }
+.pulse-status, .pulse-seen { color: var(--muted); font-size: 11px; }
 .pulse-updates { position: sticky; top: 8px; z-index: 2; margin: 0 0 18px; padding: 12px 14px; background: var(--panel-strong); border: 1px solid var(--faint); border-radius: 10px; box-shadow: 0 3px 16px #0000000d; font-size: 12px; }
 .pulse-updates button { flex-shrink: 0; }
 .pulse-notice, .pulse-quiet-note, .pulse-empty { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .pulse-notice { padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
-.pulse-card { gap: 16px; }
+.pulse-card { --card-padding: 25px; grid-template-columns: minmax(0, 1fr); gap: 16px; padding: var(--card-padding); }
+.pulse-lead h2 { max-width: 25em; font-size: clamp(26px, 3vw, 38px); }
+.pulse-card-header:has(.pulse-lead-image) { position: relative; padding-top: clamp(110px, 15vw, 180px); }
+.pulse-lead-image { position: absolute; top: calc(-1 * var(--card-padding)); left: calc(-1 * var(--card-padding)); width: calc(100% + 2 * var(--card-padding)); height: calc(100% + var(--card-padding) - 12px); border-radius: 13px 13px 0 0; object-fit: cover; background: var(--soft); }
+.pulse-lead-image + .topic-card-copy { position: relative; padding: 18px 20px 0; border-radius: 9px 9px 0 0; background: var(--panel-strong); }
+:root[data-theme='e-ink'] .pulse-card-header { padding-top: 0; }
+:root[data-theme='e-ink'] .pulse-lead-image { position: static; display: block; height: clamp(150px, 20vw, 240px); margin: calc(-1 * var(--card-padding)) calc(-1 * var(--card-padding)) 0; }
+:root[data-theme='e-ink'] .pulse-lead-image + .topic-card-copy { padding: 16px 0 0; }
+.pulse-footer { padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
+.pulse-footer a { color: inherit; text-underline-offset: 2px; }
 .pulse-title { padding: 0; border: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-align: left; cursor: pointer; }
-.pulse-new { padding: 4px 8px; border: 1px solid color-mix(in srgb, var(--ink) 20%, transparent); border-radius: 6px; background: var(--soft); color: var(--ink); font-family: inherit; font-size: 11px; font-weight: 700; text-align: left; cursor: pointer; }
-.pulse-counts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; color: var(--muted); font-size: 11px; }
-.pulse-counts span + span::before { content: '·'; margin-right: 8px; }
-.pulse-counts span:first-child { color: var(--ink); font-weight: 700; }
+.pulse-new { padding: 4px 8px; border: 1px solid currentColor; border-radius: 6px; background: var(--panel-strong); color: var(--signal); font-family: inherit; font-size: 11px; font-weight: 700; text-align: left; cursor: pointer; }
 .pulse-article-tabs { position: sticky; top: 0; z-index: 1; margin-bottom: 10px; padding: 8px 0; background: var(--panel-strong); }
 .pulse-card-actions { grid-column: 1 / -1; flex-wrap: wrap; }
 .pulse-card-actions > div { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -1015,13 +1024,21 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .pulse-source.is-unread .topic-source-copy > span:last-child { color: var(--ink); font-weight: 600; }
 .pulse-source .topic-source-copy > span:first-child { flex-wrap: wrap; }
 .pulse-read-label { color: var(--faint); font-size: 9px; }
-.pulse-source-new { color: var(--ink); font-size: 9px; font-weight: 750; }
-.pulse-title:focus-visible, .pulse-card button:focus-visible, .pulse-tabs button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.pulse-source-new { color: var(--signal); font-size: 9px; font-weight: 750; }
+.pulse-footer a:focus-visible, .pulse-card button:focus-visible, .pulse-tabs button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 @media (max-width: 700px) {
-  .pulse-card { padding: 18px 15px; }
-  .pulse-card-top { align-items: flex-start; }
-  .pulse-card-top time { flex-shrink: 0; font-size: 10px; padding-top: 5px; }
-  .pulse-toolbar { align-items: flex-start; }
+  .pulse-card { --card-padding: 15px; }
+  .pulse-lead-image + .topic-card-copy { padding: 12px 10px 0; }
+  .pulse-section-tabs { position: fixed; z-index: 3; bottom: calc(var(--mobile-tabs-height) + 8px); inset-inline: max(8px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-right)); width: fit-content; max-width: calc(100% - 16px); margin-inline: auto; padding: 4px; flex-wrap: nowrap; gap: 0; border: 1px solid var(--line); border-radius: 13px; background: var(--panel-strong); box-shadow: var(--shadow); }
+  .pulse-section-tabs button { min-width: 0; padding: 6px clamp(4px, 1.8vw, 12px); border-color: transparent; background: transparent; }
+  .pulse-section-tabs button span { margin-left: 1px; color: inherit; }
+  .pulse-section-tabs button[aria-pressed='true'] { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+  .pulse-section-tabs button:focus-visible { outline-offset: -3px; outline-color: currentColor; }
+  .topics-scroll { scroll-padding-bottom: 72px; }
+  .topics-column { padding-bottom: 80px; }
+  .pulse-card-top { gap: 6px; }
+  .pulse-mark-read { padding-inline: 8px; }
+  .pulse-toolbar { margin-bottom: 0; }
   .pulse-status { max-width: 110px; text-align: right; }
   .pulse-updates { align-items: flex-start; }
   .pulse-card-actions button, .pulse-mark-read, .pulse-tabs button { min-height: 40px; }
@@ -1102,8 +1119,10 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
   .collection-return { flex-basis: 100%; }
 }
 
-.pulse-filter-count { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
+.pulse-filter-count { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
 .pulse-filter-count button { border: 0; padding: 6px 0; background: none; color: var(--ink); font: inherit; text-decoration: underline; cursor: pointer; }
+.summary-square, .briefing-document > .briefing-story > p, .briefing-section .briefing-source-stories + p { position: relative; padding-inline-start: 1em; }
+.summary-square::before, .briefing-document > .briefing-story > p::before, .briefing-section .briefing-source-stories + p::before { content: ''; position: absolute; inset-inline-start: 0; top: .65em; width: 5px; height: 5px; background: var(--signal); }
 .pulse-catchup { padding: 16px 0; border-top: 1px solid var(--line); }
 .pulse-catchup h3 { font-size: 14px; margin: 0 0 12px; }
 .pulse-catchup ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
