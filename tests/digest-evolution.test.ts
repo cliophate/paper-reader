@@ -43,7 +43,8 @@ describe('digest candidate eligibility', () => {
 
 describe('continuing digest stories', () => {
   const entries = new Map([entry('new'), entry('old')].map(item => [item.id, item]))
-  const raw: BriefingSelection = { news: [{ clusterId: 'collection-one', headline: 'Orion adds a feature', summary: 'The new feature builds on the previous release.', entryIds: ['new', 'old'], backgroundEntryIds: ['old'], role: 'brief' } as BriefingSelection['news'][number]], worthNoticing: [{ entryId: 'old', reason: '', summary: '' }], social: [] }
+  const bullets = ['Orion added an export option.', 'The new feature builds on the previous release.']
+  const raw: BriefingSelection = { news: [{ clusterId: 'collection-one', headline: 'Orion adds a feature', summary: '', bullets, entryIds: ['new', 'old'], backgroundEntryIds: ['old'], role: 'brief' } as BriefingSelection['news'][number]], worthNoticing: [{ entryId: 'old', reason: '', summary: '' }], social: [] }
   const clusters = [{ id: 'collection-one', collectionId: 'collection-one', kind: 'coverage' as const, leadTitle: 'Orion', entryIds: ['new'], backgroundEntryIds: ['old'], domains: ['example.test'] }]
 
   it('keeps context out of mark-read membership and links the surviving story to Pulse', async () => {
@@ -53,11 +54,12 @@ describe('continuing digest stories', () => {
     const model = vi.fn().mockResolvedValueOnce({ decisions: [{ id: 'new', relevant: true }, { id: 'old', relevant: true }] }).mockResolvedValueOnce({ supported: true })
     const previous = [{ headline: 'Earlier release', summary: 'The previous feature set.', deliveredAt: new Date(now - DAY).toISOString() }]
     const checked = await checkBriefingSources(selection, entries, model, new Map([['collection-one', previous]]))
-    expect(model.mock.calls[1][1]).toMatchObject({ previousCoverage: previous, newSourceIds: ['new'], backgroundSourceIds: ['old'] })
+    expect(model.mock.calls[0][1]).toMatchObject({ bullets })
+    expect(model.mock.calls[1][1]).toMatchObject({ bullets, previousCoverage: previous, newSourceIds: ['new'], backgroundSourceIds: ['old'] })
     expect(selectionEntries(checked).map(item => item.id)).toEqual(['new'])
     const email = renderBriefing({ kind: 'morning', cutoff: new Date(now), selection: checked, entries, confirmUrl: 'https://paper.example/briefings/edition/confirm?token=fixture' })
-    expect(email.html).toContain('view=pulse&amp;collection=collection-one')
-    expect(email.html).toContain('Background, kept separate')
+    expect(email.html).toContain('/pulse?collection=collection-one&amp;filter=new')
+    expect(email.html).toContain('1 background source')
     expect(email.text).toContain('Background: Orion feature old')
   })
 

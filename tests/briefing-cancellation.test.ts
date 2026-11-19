@@ -6,7 +6,7 @@ import { BriefingService } from '../src/server/briefing.js'
 import { PaperDatabase } from '../src/server/db.js'
 import type { EntrySource } from '../src/server/backend.js'
 import type { Config } from '../src/server/config.js'
-import type { NavigationPayload } from '../src/server/types.js'
+import type { Entry, NavigationPayload } from '../src/server/types.js'
 
 vi.mock('../src/server/codex.js', () => ({ runCodex: vi.fn() }))
 
@@ -142,6 +142,33 @@ describe('briefing cancellation before model work', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(result).toHaveBeenCalledTimes(1)
     expect(signal.aborted).toBe(true)
+  })
+
+  it('saves lead prose and short brief lines when the shortlist fails', async () => {
+    vi.spyOn(fs, 'readFile').mockResolvedValue('Synthetic editorial profile.')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const articles = [
+      ['Library opens a new reading room', 'The library opened 20 new study desks.'],
+      ['Library opens its new reading room', 'Visitors can book a desk for two hours.'],
+      ['City extends the riverside bicycle path', 'The path now reaches the ferry dock.'],
+      ['City extends its riverside bicycle path', 'The extension adds two kilometres.'],
+    ].map(([title, excerpt], index) => ({
+      id: String(index), title, excerpt, kind: 'article', url: `https://source${index}.example/story`, contentHtml: `<p>${excerpt}</p>`, timestamp: Date.now(),
+      feedTitle: `Synthetic publisher ${index + 1}`, thumbnailUrl: '',
+    }) as Entry)
+    vi.mocked(source.entries).mockResolvedValue(articles)
+    vi.mocked(runCodex).mockRejectedValueOnce(new Error('Synthetic shortlist failure'))
+      .mockRejectedValueOnce(new Error('Synthetic shortlist failure'))
+      .mockResolvedValueOnce({ decisions: ['0', '1'].map(id => ({ id, relevant: true })) })
+      .mockResolvedValueOnce({ supported: true })
+      .mockResolvedValueOnce({ decisions: ['2', '3'].map(id => ({ id, relevant: true })) })
+      .mockResolvedValueOnce({ supported: true })
+    const { selection } = await service.generate('morning', true)
+    expect(selection.news).toMatchObject([
+      { role: 'lead', summary: 'The library opened 20 new study desks.' },
+      { role: 'brief', summary: '', bullets: ['The path now reaches the ferry dock.', 'The extension adds two kilometres.'] },
+    ])
   })
 
 })

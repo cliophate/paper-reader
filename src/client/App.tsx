@@ -103,7 +103,8 @@ export default function App() {
   const [before, setBefore] = useState(initialLocation.before || '')
   const dates = useMemo(() => ({ after, before: before && Number.isFinite(Date.parse(before)) ? new Date(Date.parse(before) + 86400000).toISOString() : '' }), [after, before])
   const [libraryMode, setLibraryMode] = useState<'stream' | 'recent' | 'offline'>(initialLocation.library || 'stream')
-  const [linkedCollection, setLinkedCollection] = useState(initialLocation.view === 'pulse' ? initialLocation.collection : undefined)
+  const [linkedCollection, setLinkedCollection] = useState(initialLocation.view === 'pulse' && !initialLocation.collectionFilter ? initialLocation.collection : undefined)
+  const [collectionFilter, setCollectionFilter] = useState<ReaderLocation['collectionFilter']>()
   const [pulseContext, setPulseContext] = useState<PulseContext | null>(() => savedPulseContext(initialLocation.collection))
   const [listError, setListError] = useState('')
   const [actionError, setActionError] = useState<{ id: string; message: string; operation: 'read' | 'unread' | 'star' | 'unstar' } | null>(null)
@@ -650,7 +651,8 @@ export default function App() {
     let cancelled = false
     const resolve = async () => {
       const offline = pendingLocation.library === 'offline' || !online ? await offlineArticles() : []
-      const collections = pendingLocation.collection || pendingLocation.collectionNumber ? (await api.pulse()).collections : routeCollections.current
+      const pulse = pendingLocation.collection || pendingLocation.collectionNumber ? await api.pulse() : undefined
+      const collections = pulse?.collections || routeCollections.current
       let removalNotice = ''
       const missing = async (load: () => Promise<{ entry: Entry | null }>) => {
         try { return (await load()).entry }
@@ -660,7 +662,7 @@ export default function App() {
           throw error
         }
       }
-      const result = await resolveReaderLocation(pendingLocation, { navigation, entries: [...routeEntries.current.values(), ...offline], collections },
+      const result = await resolveReaderLocation(pendingLocation, { navigation, entries: [...routeEntries.current.values(), ...offline], collections, collectionAliases: pulse?.collectionAliases },
         value => online ? missing(() => api.entryByNumber(value)) : Promise.resolve(null),
         id => online ? missing(() => api.entry(id)) : Promise.resolve(null))
       if (cancelled || generation !== readerGeneration.current) return
@@ -669,6 +671,7 @@ export default function App() {
       if (entry) { routeEntries.current.set(entry.id, entry); setEntries(current => [entry, ...current.filter(item => item.id !== entry.id)]) }
       setView(location.view)
       setLinkedCollection(location.view === 'pulse' ? location.collection : undefined)
+      setCollectionFilter(location.collectionFilter)
       setLibraryMode(location.library || 'stream')
       setPulseContext(location.view === 'reader' && collection ? { id: collection.id, title: collection.headline, ids: collection.sources.map(item => item.id) } : null)
       setStream(location.stream)
@@ -687,9 +690,9 @@ export default function App() {
 
   useEffect(() => {
     if (pendingLocation || resolvingLocation.current || selectedId && !routeEntries.current.get(selectedId)?.linkNumber) return
-    const location: ReaderLocation = { view, stream, selectedId, unreadOnly, query, mobilePane, searchStream, searchUnread, after, before, library: libraryMode, collection: view === 'pulse' ? linkedCollection : pulseContext?.id }
+    const location: ReaderLocation = { view, stream, selectedId, unreadOnly, query, mobilePane, searchStream, searchUnread, after, before, library: libraryMode, collection: view === 'pulse' ? linkedCollection : pulseContext?.id, collectionFilter }
     history.replaceState(location, '', readerLocationUrl(location, readerLinks.current))
-  }, [mobilePane, query, selectedId, stream, unreadOnly, view, searchStream, searchUnread, after, before, libraryMode, pulseContext, linkedCollection, pendingLocation, navigation, entries])
+  }, [mobilePane, query, selectedId, stream, unreadOnly, view, searchStream, searchUnread, after, before, libraryMode, pulseContext, linkedCollection, collectionFilter, pendingLocation, navigation, entries])
 
   useEffect(() => {
     const onPopState = () => {
@@ -868,6 +871,7 @@ export default function App() {
   const openTopics = useCallback(() => {
     pushLocation({ view: 'pulse', selectedId: '', query: '', mobilePane: 'stories', collection: pulseContext?.id })
     setLinkedCollection(pulseContext?.id)
+    setCollectionFilter(undefined)
     setView('pulse')
     setSelectedId('')
     setQuery('')
@@ -1615,12 +1619,13 @@ export default function App() {
           setTopicsRefreshKey(current => current + 1)
           void loadNavigation().catch(() => notify('The source stories are read. Counts will refresh shortly.'))
         }} />
-        : <TopicsLibrary initialCollection={linkedCollection} onCollectionChange={collection => {
+        : <TopicsLibrary initialCollection={linkedCollection} initialFilter={collectionFilter} onCollectionChange={collection => {
           if (collection) routeCollections.current = [...routeCollections.current.filter(item => item.id !== collection.id), collection]
           readerLinks.current.collections = routeCollections.current
           if (collection?.id === linkedCollection) return
-          pushLocation({ view: 'pulse', selectedId: '', collection: collection?.id })
+          pushLocation({ view: 'pulse', selectedId: '', collection: collection?.id, collectionFilter: undefined })
           setLinkedCollection(collection?.id)
+          setCollectionFilter(undefined)
         }} refreshKey={topicsRefreshKey} onBack={openSources} onOpenEntry={(id, context) => void openTopicEntry(id, context)} onMarkRead={markTopicRead} notify={notify} />}
 
       <MobileTabs boundaryStore={articleBoundaryStore}>

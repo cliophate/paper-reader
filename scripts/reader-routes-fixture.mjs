@@ -44,7 +44,7 @@ const members = articles.filter(article => article.feedId === feedId)
 db.savePulseBatch([{ id: 'collection-fixture', headline: 'Synthetic collection', scope: 'Synthetic route testing', entryIds: members.map(article => article.id) }], members.map(article => article.id), now)
 db.commitLocalEntryState(backend.id, [members[0].id], 'star')
 db.saveReadingProgress(members[0].id, .25)
-const briefingSelection = { news: [{ headline: 'Synthetic briefing story', summary: 'Two source stories cover a synthetic development.',
+const briefingSelection = { news: [{ headline: 'Synthetic briefing story', summary: 'Two source stories cover a synthetic development.', collectionId: 'collection-fixture',
   entryIds: members.slice(0, 2).map(article => article.id), backgroundEntryIds: [members[2].id] }], worthNoticing: [], social: [] }
 const briefingToken = 'synthetic-route-briefing-token'
 const rendered = renderBriefing({ kind: 'morning', cutoff: new Date(now), selection: briefingSelection,

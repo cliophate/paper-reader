@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import type { BriefingDetail } from '../../src/shared/briefings'
+import type { PulsePayload } from '../../src/shared/pulse'
 
 const endpoint = '/api/briefings/route-briefing'
 async function detail(request: APIRequestContext): Promise<BriefingDetail> {
@@ -93,4 +94,36 @@ test('acknowledges available stories while retaining missing-source and delivery
   expect(saved.acknowledgedAt).toBeTruthy()
   const confirmation = await request.get('/briefings/missing-source-briefing/confirm?token=synthetic-missing-source-token')
   expect(await confirmation.text()).toContain('1 available entry from this briefing is read in Paper. 1 source story is unavailable.')
+})
+
+test('opens the briefing collection expanded on new articles', async ({ page, request }) => {
+  const pulse: PulsePayload = await (await request.get('/api/pulse')).json()
+  const collection = pulse.collections.find(item => item.id === 'collection-fixture')!
+  const first = collection.sources.reduce((a, b) => a.sequence < b.sequence ? a : b)
+  expect((await request.post('/api/pulse/visit', { data: { collectionId: collection.id, sequence: first.sequence } })).ok()).toBe(true)
+  await openBriefing(page)
+  await page.getByRole('link', { name: 'Follow this story in Pulse' }).click()
+  await expect(page).toHaveURL(new RegExp(`/collection/${collection.linkNumber}\\?filter=new$`))
+  const card = page.locator('.pulse-card').filter({ has: page.getByRole('button', { name: collection.headline, exact: true }) })
+  await expect(card.getByRole('button', { name: collection.headline, exact: true })).toHaveAttribute('aria-expanded', 'true')
+  await expect(card.getByRole('button', { name: /^New \d/ })).toHaveAttribute('aria-pressed', 'true')
+  await expect(card.locator('.pulse-thread > li')).toHaveCount(collection.articleCount - 1)
+  await expect(card.locator('.pulse-thread')).not.toContainText(first.title)
+})
+
+test('an emailed collection link lands on Pulse when the collection has been removed', async ({ page, request }) => {
+  const briefing = await detail(request)
+  const href = briefing.html.match(/href="([^"]+)"[^>]*>Follow this story in Pulse<\/a>/)?.[1].replaceAll('&amp;', '&')
+  expect(href).toBeTruthy()
+  const response = await request.post('/api/pulse/feedback', { data: { action: 'not_useful', clusterId: 'collection-fixture' } })
+  expect(response.ok()).toBe(true)
+  const { id } = await response.json()
+  try {
+    expect((await page.goto(href!))?.ok()).toBe(true)
+    await expect(page).toHaveURL(/\/pulse$/)
+    await expect(page.getByText('This collection is no longer available.', { exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Pulse', exact: true })).toBeVisible()
+  } finally {
+    expect((await request.delete(`/api/pulse/feedback/${id}`)).ok()).toBe(true)
+  }
 })

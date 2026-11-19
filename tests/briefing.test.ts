@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { briefingNeedsFullText, clusterNews, newsImageFitsHeadline, proposedNewsClusters, shouldLimitBriefingToUnread, splitBriefingCandidates } from '../src/server/briefing.js'
-import type { Entry } from '../src/server/types.js'
+import { JSDOM } from 'jsdom'
+import { briefingNeedsFullText, clusterNews, newsImageFitsHeadline, proposedNewsClusters, shouldLimitBriefingToUnread, splitBriefingCandidates, validateSelection } from '../src/server/briefing.js'
+import { renderBriefing } from '../src/server/email.js'
+import type { BriefingSelection, Entry } from '../src/server/types.js'
 
 function entry(id: string, title: string, url: string): Entry {
   return {
@@ -22,6 +24,87 @@ function entry(id: string, title: string, url: string): Entry {
     kind: 'article',
   }
 }
+
+describe('briefing news layout', () => {
+  const imageUrl = 'https://news.example/park.png'
+  const source = { ...entry('park', 'City opens the riverside park', 'https://news.example/park'), thumbnailUrl: imageUrl }
+  const background = entry('plans', 'City releases plans for the park', 'https://news.example/plans')
+  const entries = new Map([[source.id, source], [background.id, background]])
+  const story = { headline: 'City opens the riverside park', summary: 'The park opened to visitors on Saturday.', entryIds: [source.id] }
+  const selection = (news: BriefingSelection['news']): BriefingSelection => ({ news, worthNoticing: [], social: [] })
+  const render = (news: BriefingSelection['news']) => renderBriefing({ kind: 'morning', cutoff: new Date('2026-08-12T08:00:00Z'), selection: selection(news),
+    entries, confirmUrl: 'https://paper.example/briefings/example/confirm?token=synthetic' })
+
+  it('cleans, deduplicates and caps brief lines, and keeps prose for the lead', () => {
+    const bullets = ['  ', 42, '▪ The path is open. ', 'The path is open.', 'A ferry\nstop opens Monday.', 'A '.repeat(200), 'An extra line.']
+    const brief = { ...story, role: 'brief' as const, bullets: bullets as string[], imageEntryId: source.id }
+    const lead = { ...story, role: 'lead' as const, bullets: ['Discard this.'] }
+    const result = validateSelection(selection([brief, lead]), entries, [], 'morning')
+    expect(result.news[0]).toMatchObject({ summary: '', imageEntryId: '', bullets: ['The path is open.', 'A ferry stop opens Monday.', expect.stringMatching(/\.\.\.$/)] })
+    expect(result.news[0].bullets?.[2].length).toBeLessThanOrEqual(240)
+    expect(result.news[1].summary).toBe(story.summary)
+    expect(result.news[1].bullets).toBeUndefined()
+  })
+
+  it.each([{ bullets: undefined }, { bullets: 'One line' }, { bullets: ['The path is open.', '• The path is open.', '■'] }])('keeps a brief with fewer than two usable lines as prose', ({ bullets }) => {
+    const brief = { ...story, role: 'brief' as const, bullets: bullets as string[] }
+    const [item] = validateSelection(selection([brief]), entries, [], 'morning').news
+    expect(item).toMatchObject({ role: 'brief', summary: story.summary })
+    expect(item.bullets).toBeUndefined()
+  })
+
+  it('uses a single line as the summary, demotes a lead without prose, and drops empty stories', () => {
+    const single = { ...story, summary: '', role: 'brief' as const, bullets: ['The path is open.'] }
+    const bareLead = { ...story, summary: '', role: 'lead' as const, bullets: ['The path is open.', 'A ferry stop opens Monday.'] }
+    const empty = { ...story, summary: '', role: 'brief' as const, bullets: [] }
+    const result = validateSelection(selection([single, bareLead, empty]), entries, [], 'morning')
+    expect(result.news).toHaveLength(2)
+    expect(result.news[0]).toMatchObject({ role: 'brief', summary: 'The path is open.' })
+    expect(result.news[1]).toMatchObject({ role: 'brief', summary: '', bullets: ['The path is open.', 'A ferry stop opens Monday.'], imageEntryId: '' })
+  })
+
+  it('renders square markers, plain text lines and separate source counts', () => {
+    const bullets = ['The path is open.', 'Bring water & sunscreen.']
+    const email = render([{ ...story, role: 'brief', bullets, entryIds: [source.id, source.id], backgroundEntryIds: [source.id, background.id], collectionId: 'collection-park' }])
+    const document = new JSDOM(email.html).window.document
+    const section = document.querySelector('section')!
+    expect(section.querySelectorAll('td[aria-hidden="true"]')).toHaveLength(2)
+    expect(section.querySelector('td[aria-hidden="true"]')?.outerHTML).toContain('color:#a43b31')
+    expect(section.textContent).toContain('Bring water & sunscreen.')
+    expect(section.textContent).not.toContain(story.summary)
+    for (const [label, url] of [['Based on 1 source', source.url], ['1 background source', background.url]]) {
+      const count = [...section.querySelectorAll('a')].find(link => link.textContent === label)!
+      expect(document.querySelector(count.getAttribute('href')!)?.querySelector('a')?.href).toBe(url)
+      expect(email.text).toContain(label)
+    }
+    expect(email.text).toContain(`\n${story.headline}\n${bullets.join('\n')}\nBased on 1 source\n`)
+    const pulseLink = 'https://paper.example/pulse?collection=collection-park&filter=new'
+    expect([...section.querySelectorAll('a')].find(link => link.textContent === 'Follow this story in Pulse')?.href).toBe(pulseLink)
+    expect(email.text).toContain(pulseLink)
+  })
+
+  it('puts a full-width lead image above the headline and summary', () => {
+    const email = render([{ ...story, role: 'lead', imageEntryId: source.id }])
+    const document = new JSDOM(email.html).window.document
+    const image = document.querySelector('section img')!
+    expect(image.src).toBe(imageUrl)
+    expect(image.style.width).toBe('100%')
+    expect(image.nextElementSibling?.textContent).toBe(story.headline)
+    expect(image.nextElementSibling?.nextElementSibling?.textContent).toBe(story.summary)
+  })
+
+  it('renders old summaries and a text-only lead when its image is unavailable', () => {
+    const olderBrief = { ...story, headline: 'Park plans', summary: 'The plans were approved last year.', role: 'brief' as const }
+    const email = render([{ ...story, imageEntryId: 'missing' }, olderBrief])
+    expect(email.html).toContain('paper-lead-title')
+    expect(email.html).not.toContain('<img')
+    expect(email.html).not.toContain('Follow this story in Pulse')
+    for (const summary of [story.summary, olderBrief.summary]) {
+      expect(email.html).toContain(summary)
+      expect(email.text).toContain(summary)
+    }
+  })
+})
 
 describe('news clustering', () => {
   it('groups similar coverage from distinct domains', () => {

@@ -41,8 +41,13 @@ Paper replaces that history entry with the new URL. The old `title`,
 `searchKind`, `searchId`, `searchTitle` and `searchUnread` parameters are not
 written in new links.
 
-Unknown feed, folder or collection numbers show a short notice and return to
-All articles. An unknown article leaves its stream open with a notice. If an
+Briefing links use `/pulse?collection=<id>&filter=new`. Paper opens the
+collection on New and replaces the URL with `/collection/<number>?filter=new`.
+Links follow collection merges. If a briefing's collection is unavailable,
+Paper shows a notice in Pulse.
+
+Other unknown feed, folder or collection numbers show a short notice and return
+to All articles. An unknown article leaves its stream open with a notice. If an
 article's current feed differs from the feed in its link, Paper opens the article
 and corrects the path to its current feed, or All articles if that feed is absent
 from navigation.

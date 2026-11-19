@@ -23,6 +23,7 @@ function rememberPulseReturn(value: PulseReturn | null) {
 
 interface TopicsLibraryProps {
   initialCollection?: string
+  initialFilter?: 'new'
   onCollectionChange: (collection: PulseCollection | null) => void
   refreshKey: number
   onBack: () => void
@@ -31,15 +32,15 @@ interface TopicsLibraryProps {
   notify: (message: string, action?: { label: string; run: () => void }) => void
 }
 
-export function TopicsLibrary({ initialCollection, onCollectionChange, refreshKey, onBack, onOpenEntry, onMarkRead, notify }: TopicsLibraryProps) {
-  const directLink = initialCollection && initialCollection !== returnToPulse?.id ? initialCollection : undefined
+export function TopicsLibrary({ initialCollection, initialFilter, onCollectionChange, refreshKey, onBack, onOpenEntry, onMarkRead, notify }: TopicsLibraryProps) {
+  const directLink = initialCollection && (initialFilter || initialCollection !== returnToPulse?.id) ? { id: initialCollection, filter: initialFilter } : undefined
   const [payload, setPayload] = useState<PulsePayload | null>(null)
   const [now, setNow] = useState(Date.now)
   const [refreshing, setRefreshing] = useState(false)
   const [hasUpdates, setHasUpdates] = useState(false)
   const [error, setError] = useState('')
   const [expanded, setExpanded] = useState<string | null>(initialCollection || null)
-  const [filter, setFilter] = useState<ArticleFilter>(directLink ? 'all' : returnToPulse?.filter || 'all')
+  const [filter, setFilter] = useState<ArticleFilter>(directLink ? directLink.filter || 'all' : returnToPulse?.filter || 'all')
   const [section, setSection] = useState<CollectionFilter>(returnToPulse?.section || 'active')
   const [mergeFrom, setMergeFrom] = useState<string | null>(null)
   const current = useRef<PulsePayload | null>(null)
@@ -49,7 +50,7 @@ export function TopicsLibrary({ initialCollection, onCollectionChange, refreshKe
   const requestId = useRef(0)
   const scroll = useRef<HTMLDivElement>(null)
   const mounted = useRef(true)
-  const restoreScroll = useRef(returnToPulse?.scroll || 0)
+  const restoreScroll = useRef(initialFilter ? 0 : returnToPulse?.scroll || 0)
   const view = useRef({ expanded, filter, section })
   view.current = { expanded, filter, section }
 
@@ -78,9 +79,13 @@ export function TopicsLibrary({ initialCollection, onCollectionChange, refreshKe
         install(next)
         setHasUpdates(false)
         if (linked.current) {
-          const target = next.collections.find(collection => collection.id === linked.current)
-          if (target) { setSection(target.articleCount < 3 ? 'small' : target.quiet ? 'quiet' : 'active'); setFilter('all') }
-          else setError('This collection is no longer available. Browse the saved collections below.')
+          const { id, filter } = linked.current
+          const target = next.collections.find(collection => collection.id === id)
+          if (target) {
+            setSection(target.articleCount < 3 ? 'small' : target.quiet ? 'quiet' : 'active')
+            setFilter(filter || 'all')
+            if (filter === 'new') requestAnimationFrame(() => document.getElementById(`pulse-${id}`)?.closest('article')?.scrollIntoView({ block: 'nearest' }))
+          } else setError('This collection is no longer available. Browse the saved collections below.')
           linked.current = undefined
         }
         const restored = next.collections.find(collection => collection.id === open.current)
@@ -106,12 +111,13 @@ export function TopicsLibrary({ initialCollection, onCollectionChange, refreshKe
       return
     }
     if (initialCollection === open.current) return
-    linked.current = initialCollection
+    linked.current = { id: initialCollection, filter: initialFilter }
+    if (initialFilter) restoreScroll.current = 0
     open.current = initialCollection
     setExpanded(initialCollection)
-    setFilter('all')
+    setFilter(initialFilter || 'all')
     void finishVisit().then(() => load(true))
-  }, [initialCollection, finishVisit, load])
+  }, [initialCollection, initialFilter, finishVisit, load])
   useEffect(() => {
     mounted.current = true
     const timer = window.setInterval(() => { if (!document.hidden) { setNow(Date.now()); void load() } }, 30_000)
@@ -143,7 +149,7 @@ export function TopicsLibrary({ initialCollection, onCollectionChange, refreshKe
     onCollectionChange(null)
   }
   useEffect(() => {
-    if (section === 'unread' && expanded && payload && !payload.collections.some(collection => collection.id === expanded && collection.unreadCount > 0)) {
+    if (!linked.current && section === 'unread' && expanded && payload && !payload.collections.some(collection => collection.id === expanded && collection.unreadCount > 0)) {
       void closeCollection()
     }
   }, [payload, section, expanded])

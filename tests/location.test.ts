@@ -101,6 +101,17 @@ describe('reader routes', () => {
     expect(result.notice).toBe('Article not found')
     expect(readerLocationUrl(result.location, links)).toBe('/feed/12/example-feed?pane=stories')
   })
+  it('follows briefing links through merges and returns unavailable collections to Pulse', async () => {
+    const targets = { ...links, collectionAliases: [{ id: 'collection-merged', linkNumber: 15, targetId: 'collection-uuid' }] }
+    for (const path of ['/pulse?collection=collection-uuid&filter=new', '/pulse?collection=collection-merged&filter=new', '/collection/15?filter=new']) {
+      const result = await resolve(path, targets)
+      expect(result.notice).toBe('')
+      expect(readerLocationUrl(result.location, targets)).toBe('/collection/14?filter=new')
+    }
+    const missing = await resolve('/pulse?collection=collection-removed&filter=new')
+    expect(missing.notice).toBe('This collection is no longer available.')
+    expect(readerLocationUrl(missing.location, links)).toBe('/pulse')
+  })
   it('resolves an unloaded article and corrects its former feed', async () => {
     const moved = { ...article, feedId: 'new-feed' }
     const targets = { ...links, entries: [], navigation: { ...links.navigation!, uncategorized: [feed, { ...feed, id: 'new-feed', title: 'New feed', linkNumber: 15 }] } }

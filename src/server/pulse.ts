@@ -225,7 +225,7 @@ export function summarizeCollection(collection: PulseCollection, now = Date.now(
     quiet: Date.parse(updatedAt) < now - 7 * DAY }
 }
 
-export function correctedCollections(input: PulseCollection[], feedback: CoverageFeedbackRecord[], now = Date.now(), includeHidden = false): PulseCollection[] {
+function correctedCollections(input: PulseCollection[], feedback: CoverageFeedbackRecord[], now = Date.now(), includeHidden = false) {
   const collections = new Map(input.map(collection => [collection.id, { ...collection, sources: [...collection.sources] }]))
   const aliases = new Map<string, string>()
   const resolve = (id: string): string => aliases.get(id) || id
@@ -246,9 +246,14 @@ export function correctedCollections(input: PulseCollection[], feedback: Coverag
     if (item.action === 'not_useful' && !includeHidden) collections.delete(collection.id)
     if (item.action === 'not_same') collection.sources = collection.sources.filter(source => source.id !== item.entryId)
   }
-  return [...collections.values()].filter(collection => collection.sources.length)
+  const visible = [...collections.values()].filter(collection => collection.sources.length)
     .map(collection => summarizeCollection(collection, now))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.revision - a.revision || a.id.localeCompare(b.id))
+  const collectionAliases = input.flatMap(({ id, linkNumber }) => {
+    const targetId = aliases.get(id)
+    return targetId && collections.get(targetId)?.sources.length ? [{ id, linkNumber, targetId }] : []
+  })
+  return { collections: visible, collectionAliases }
 }
 
 export class PulseService {
@@ -280,10 +285,10 @@ export class PulseService {
   private notify() { for (const listener of this.listeners) listener() }
 
   list(): PulsePayload {
-    const collections = correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now())
+    const { collections, collectionAliases } = correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now())
     const revision = crypto.createHash('sha1').update(JSON.stringify(collections.map(collection =>
       [collection.id, collection.headline, collection.scope, collection.quiet, collection.sources.map(source => [source.id, source.sequence, source.development])]))).digest('hex')
-    return { collections, revision, status: { enabled: this.enabled, running: Boolean(this.running),
+    return { collections, ...(collectionAliases.length ? { collectionAliases } : {}), revision, status: { enabled: this.enabled, running: Boolean(this.running),
       lastCompletedAt: this.db.getSyncValue('pulse_completed_at') || null, failed: this.failed } }
   }
 
@@ -337,7 +342,7 @@ export class PulseService {
         const cached = this.db.getArticle(entry.url)
         return cached ? { ...entry, contentHtml: cached.contentHtml, excerpt: cached.excerpt } : entry
       })
-      const all = correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now(), true)
+      const all = correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now(), true).collections
       const words = new Set(articles.flatMap(entry => normalize(entry.title).match(/[\p{L}\p{N}]+/gu) || []))
       const score = (collection: PulseCollection) => (normalize(`${collection.headline} ${collection.scope}`).match(/[\p{L}\p{N}]+/gu) || [])
         .filter(word => word.length >= 3 && words.has(word)).length
@@ -356,7 +361,7 @@ export class PulseService {
       }, checked.groups, articles, existing)
       if (!this.enabled) return
       // Corrections may have arrived while the model was running. Do not recreate a hidden or merged collection.
-      const current = new Set(correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now(), true).map(collection => collection.id))
+      const current = new Set(correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now(), true).collections.map(collection => collection.id))
       const valid = groups.filter(group => !all.some(collection => collection.id === group.id) || current.has(group.id))
       const deferred = new Set([...checked.deferred, ...groups.filter(group => !valid.includes(group)).flatMap(group => group.entryIds)])
       this.db.savePulseBatch(valid, fresh.filter(entry => !deferred.has(entry.id)).map(entry => entry.id), new Date(this.now()).toISOString())

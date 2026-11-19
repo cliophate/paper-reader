@@ -125,13 +125,29 @@ function BriefingContent({ detail, onOpenEntry }: { detail: BriefingDetail; onOp
     <header><p className="briefing-edition">Paper · {detail.kind} edition</p><h1>{detail.kind === 'morning' ? 'Your morning briefing' : 'Your evening briefing'}</h1><time>{formatDate(detail.createdAt)}</time></header>
     {empty && <p>Nothing cleared the bar for this briefing.</p>}
     {detail.selection.intro && <p className="briefing-intro">{detail.selection.intro}</p>}
-    {news.map((item, index) => <section className={`briefing-story ${item.role === 'lead' || index === 0 ? 'is-lead' : ''}`} key={index}>
-      <h2>{item.headline}</h2>
-      {imageUrl(sources.get(item.imageEntryId || '')?.thumbnailUrl) && <img className="briefing-story-image" src={imageUrl(sources.get(item.imageEntryId || '')?.thumbnailUrl)} alt="" loading="lazy" />}
-      <p>{item.summary}</p>
-      <SourceStories ids={item.entryIds} sources={sources} onOpenEntry={onOpenEntry} />
-      {item.backgroundEntryIds?.length ? <><h3 className="briefing-background-label">Background</h3><SourceStories ids={item.backgroundEntryIds} sources={sources} onOpenEntry={onOpenEntry} /></> : null}
-    </section>)}
+    {news.map((item, index) => {
+      const bullets = item.role === 'lead' ? [] : item.bullets || []
+      const lead = item.role === 'lead' || (index === 0 && !bullets.length)
+      const url = !bullets.length && imageUrl(sources.get(item.imageEntryId || '')?.thumbnailUrl)
+      const image = url && <img key={url} className="briefing-story-image" src={url} alt="" loading="lazy" onError={event => { event.currentTarget.hidden = true }} />
+      const cited = new Set(item.entryIds)
+      const background = new Set((item.backgroundEntryIds || []).filter(id => !cited.has(id)))
+      const sourceId = `briefing-news-${index + 1}-sources`
+      const sourceLabel = `Based on ${cited.size} ${cited.size === 1 ? 'source' : 'sources'}`
+      return <section className={`briefing-story ${lead ? 'is-lead' : ''}`} key={index}>
+        {lead && image}
+        <h2>{item.headline}</h2>
+        {!lead && image}
+        {bullets.length ? <ul className="briefing-bullets">{bullets.map((line, index) => <li key={index}>{line}</li>)}</ul> : <p>{item.summary}</p>}
+        <p className="briefing-source-count">{cited.size ? <a href={`#${sourceId}`}>{sourceLabel}</a> : sourceLabel}</p>
+        <SourceStories id={sourceId} ids={item.entryIds} sources={sources} onOpenEntry={onOpenEntry} />
+        {background.size > 0 && <>
+          <p className="briefing-source-count"><a href={`#${sourceId}-background`}>{background.size} background {background.size === 1 ? 'source' : 'sources'}</a></p>
+          <SourceStories id={`${sourceId}-background`} ids={[...background]} sources={sources} onOpenEntry={onOpenEntry} />
+        </>}
+        {item.collectionId && <p className="briefing-pulse-link"><a href={`/pulse?collection=${encodeURIComponent(item.collectionId)}&filter=new`}>Follow this story in Pulse</a></p>}
+      </section>
+    })}
     {detail.selection.worthNoticing.length > 0 && <section className="briefing-section"><h2>Worth noticing</h2>{detail.selection.worthNoticing.map(item => <div className="briefing-story" key={item.entryId}><SourceStories ids={[item.entryId]} sources={sources} onOpenEntry={onOpenEntry} /><p>{item.summary || item.reason}</p></div>)}</section>}
     {detail.selection.social.length > 0 && <section className="briefing-section"><h2>Seen in the feeds</h2>{detail.selection.social.map(item => {
       const source = sources.get(item.entryId)
@@ -141,8 +157,8 @@ function BriefingContent({ detail, onOpenEntry }: { detail: BriefingDetail; onOp
   </article>
 }
 
-function SourceStories({ ids, sources, onOpenEntry }: { ids: string[]; sources: Map<string, BriefingSource>; onOpenEntry: (id: string) => void }) {
-  return <ul className="briefing-source-stories">{[...new Set(ids)].map(id => {
+function SourceStories({ id, ids, sources, onOpenEntry }: { id?: string; ids: string[]; sources: Map<string, BriefingSource>; onOpenEntry: (id: string) => void }) {
+  return <ul id={id} tabIndex={id ? -1 : undefined} className="briefing-source-stories">{[...new Set(ids)].map(id => {
     const source = sources.get(id)
     return <li key={id} data-entry-id={id} data-read={source?.read}>
       {source ? <><div><button onClick={() => onOpenEntry(id)}>{source.title}</button><span>{source.feedTitle}</span></div><span className={`briefing-source-state ${source.read ? 'is-read' : ''}`}>{source.read ? 'Read' : 'Unread'}</span></>
