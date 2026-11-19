@@ -26,6 +26,12 @@ and briefing editor. Headline writing and review use the headlines model. Groupi
 membership review and Pulse summaries use the grouping model. All batch results
 pass through the same feature validation as Codex, including source IDs and evidence checks.
 
+Pulse collection questions use the discussion model and the same feature toggle
+as article discussions. Paper sends a limited set of text excerpts from the open
+collection and checks each citation against the articles it sent. Opening a
+collection can generate suggestions. Paper keeps a small in-memory cache keyed
+by collection revision. Asking for new suggestions replaces the cached set.
+
 Test connection uses the form values without saving or enabling AI. It sends
 one short request using the discussion model, without an output limit, so
 reasoning models can reply. A blank key uses the saved key, or the environment
@@ -122,7 +128,7 @@ JSON and applies the existing feature validators. It does not retry in plain tex
 mode. Servers must support at least JSON mode. Truncated replies and refusals
 fail. Existing feature retry rules still apply.
 
-Discussion uses SSE text deltas. Paper requires a successful stop and a completed
+Article discussion uses SSE text deltas. Paper requires a successful stop and a completed
 stream. Tool calls, refusals, truncated streams and malformed events fail.
 Requests are at most 2 MiB. Responses are at most 4 MiB; discussion text is limited
 to 24,000 characters. Compressed responses are rejected, and requests ask for

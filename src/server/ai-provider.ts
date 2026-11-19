@@ -20,7 +20,7 @@ export async function providerAvailability(config: Config) {
   return aiAvailability(config.codex.enabled)
 }
 
-export function runAiBatch(config: Config, feature: Exclude<AiFeature, 'discussion'>, codexModel: string, instruction: string, input: unknown, schema: Record<string, unknown>, reasoningEffort?: 'low' | 'medium', signal?: AbortSignal) {
+export function runAiBatch(config: Config, feature: AiFeature, codexModel: string, instruction: string, input: unknown, schema: Record<string, unknown>, reasoningEffort?: 'low' | 'medium', signal?: AbortSignal) {
   if (!aiEnabled(config)) throw new Error(AI_UNAVAILABLE)
   if (config.ai.provider === 'openai') return openaiBatch({ ...config.openai }, config.openai[`${feature}Model`], instruction, input, schema, signal)
   return runCodex(config.codex, codexModel, instruction, input, schema, reasoningEffort, signal)

@@ -36,6 +36,7 @@ export interface PulseCollection {
   createdAt: string
   updatedAt: string
   revision: number
+  questionsRevision?: string
   seenThrough: number
   newCount: number
   unreadCount: number

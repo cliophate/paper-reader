@@ -7,6 +7,7 @@ import crypto from 'node:crypto'
 import http from 'node:http'
 import { PaperDatabase } from '../dist-server/db.js'
 import { renderBriefing } from '../dist-server/email.js'
+import { startOpenaiFixture } from '../tests/fixtures/openai-provider.mjs'
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'paper-reader-routes-'))
 const state = path.join(temporary, 'data')
@@ -23,6 +24,7 @@ const publisher = http.createServer((request, response) => {
   }
 })
 publisher.listen(4319, '127.0.0.1'); await once(publisher, 'listening')
+const openai = await startOpenaiFixture()
 const db = new PaperDatabase(path.join(state, 'paper.sqlite'))
 const backend = db.bindStandalone()
 const feedId = db.saveLocalSubscription(backend.id, { title: 'Synthetic feed', url: 'https://example.test/feed' })
@@ -32,6 +34,11 @@ db.organization.apply(backend.id, snapshot.revision, [{ type: 'create-folder', t
 snapshot = db.organization.snapshot(backend.id)
 db.organization.apply(backend.id, snapshot.revision, [{ type: 'add-membership', feedId, folderId: snapshot.navigation.folders[0].id }])
 const now = new Date().toISOString()
+const reports = [
+  'The Willow Creek footbridge opens on Saturday morning. Cyclists can use it as soon as it opens. The path to the park reopens at the same time.',
+  'Crews moved the landing uphill after they found soft ground near the creek. The route through the park is about the same length.',
+  'The footbridge is three metres wide, with room for people on foot and on bikes to pass each other.',
+]
 for (const [index, subscriptionId] of [[1, feedId], [2, feedId], [3, feedId], [4, otherFeed]]) {
   db.importSourceEntries(backend.id, subscriptionId, [{ identity: { externalId: `synthetic-${index}` }, entry: {
     feedTitle: subscriptionId === feedId ? 'Synthetic feed' : '中文', feedUrl: 'https://example.test/feed', title: `Synthetic article ${index}`, author: 'Fixture writer',
@@ -39,9 +46,13 @@ for (const [index, subscriptionId] of [[1, feedId], [2, feedId], [3, feedId], [4
     excerpt: 'Disposable route fixture', publishedAt: now, timestamp: Date.now() - index, readingMinutes: 2, thumbnailUrl: '', kind: 'article',
   } }])
 }
+// The reader tests use feed text for scroll restoration. Put the reporting in the full-text cache.
+for (const [index, report] of reports.entries()) db.cacheArticle({ url: `https://example.test/story-${index + 1}`,
+  title: `Synthetic article ${index + 1}`, byline: 'Fixture writer', excerpt: report, contentHtml: `<p>${report}</p>`, readingMinutes: 1, fetchedAt: now })
 const articles = db.localEntriesPage({ kind: 'all', id: 'all', title: 'All articles' }, { unreadOnly: false }).items
 const members = articles.filter(article => article.feedId === feedId)
-db.savePulseBatch([{ id: 'collection-fixture', headline: 'Synthetic collection', scope: 'Synthetic route testing', entryIds: members.map(article => article.id) }], members.map(article => article.id), now)
+const developments = Object.fromEntries(members.map(article => [article.id, db.getArticle(article.url)?.excerpt || '']))
+db.savePulseBatch([{ id: 'collection-fixture', headline: 'Willow Creek footbridge', scope: 'Local reporting on a new path across the creek and into the park.', entryIds: members.map(article => article.id), developments }], members.map(article => article.id), now)
 db.commitLocalEntryState(backend.id, [members[0].id], 'star')
 db.saveReadingProgress(members[0].id, .25)
 const briefingSelection = { news: [{ headline: 'Synthetic briefing story', summary: 'Two source stories cover a synthetic development.', collectionId: 'collection-fixture',
@@ -74,11 +85,13 @@ const child = spawn(process.execPath, [path.resolve('dist-server/index.js')], { 
   PATH: process.env.PATH, NODE_NO_WARNINGS: '1', STATE_DIR: state, PAPER_BACKEND: 'standalone', PAPER_SYNC_ENABLED: 'false',
   HOST: '127.0.0.1', PORT: '4318', PUBLIC_URL: 'http://127.0.0.1:4318', CODEX_ENABLED: 'false',
   PAPER_TRUSTED_FEED_ORIGINS: 'http://127.0.0.1:4319',
+  PAPER_TRUSTED_AI_ORIGINS: openai.origin, PAPER_OPENAI_BASE_URL: `${openai.origin}/v1`, PAPER_OPENAI_DISCUSSION_MODEL: 'collection-fixture',
 } })
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { child.kill('SIGTERM'); owner.kill('SIGTERM') })
 try { await once(child, 'exit') }
 finally {
   owner.kill('SIGTERM'); await ownerExit
   publisher.closeAllConnections(); await new Promise(resolve => publisher.close(resolve))
+  await openai.close()
   await fs.rm(temporary, { recursive: true, force: true })
 }
