@@ -351,7 +351,9 @@ export class PulseService {
     if (!this.enabled) return
     const saved = this.db.pulseCatchUps()
     const { collections } = correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now())
-    const pending = collections.map(collection => ({ collection, revision: pulseCatchUpRevision(collection) }))
+    // Quiet and small collections have nothing new to summarize. New reporting makes them active again.
+    const pending = collections.filter(collection => !collection.quiet && collection.articleCount >= 3)
+      .map(collection => ({ collection, revision: pulseCatchUpRevision(collection) }))
       .filter(({ collection, revision }) => saved.get(collection.id)?.revision !== revision)
     const pendingIds = new Set(pending.map(item => item.collection.id))
     for (const id of this.catchUpRetries.keys()) if (!pendingIds.has(id)) this.catchUpRetries.delete(id)

@@ -110,6 +110,23 @@ describe('cited Pulse catch-up', () => {
     expect((model.mock.calls[5][1] as CatchUpInput).collections[0].articles).toHaveLength(7)
   })
 
+  it('summarizes only active collections with at least three articles', async () => {
+    save(['1', '2'].map(id => article(id)), 'collection-small')
+    const current = now
+    now -= 8 * DAY
+    save(['3', '4', '5'].map(id => article(id)), 'collection-quiet')
+    now = current
+    const model = vi.fn(async (_prompt: string, input: unknown) => catchUpResponse(input as CatchUpInput))
+    const service = new PulseService(db, vi.fn(), true, () => now, model)
+    await service.refresh()
+    expect(model).not.toHaveBeenCalled()
+    save(['3', '4', '5', '6'].map(id => article(id)), 'collection-quiet')
+    await service.refresh()
+    expect(model).toHaveBeenCalledOnce()
+    expect((model.mock.calls[0][1] as CatchUpInput).collections).toHaveLength(1)
+    expect(service.list().collections.find(item => item.id === 'collection-quiet')?.catchUp).toBeDefined()
+  })
+
   it('keeps the last good summary across an empty reply, provider failure and restart', async () => {
     save(['1', '2', '3'].map(id => article(id)))
     const model = vi.fn(async (_prompt: string, input: unknown) => catchUpResponse(input as CatchUpInput))
