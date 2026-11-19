@@ -904,7 +904,7 @@ describe('Sources read filter', () => {
     const heading = container.querySelector('.sidebar-heading')!
     expect(heading.children[0].textContent).toBe('Library')
     expect(heading.children[1].className).toBe('source-filter')
-    expect(heading.children).toHaveLength(2)
+    expect(heading.children[2].getAttribute('aria-label')).toBe('Settings')
     expect(container.querySelector('.organization-header [aria-label="Add feed or folder"]')).not.toBeNull()
     expect(container.querySelector('.source-nav .source-filter')).toBeNull()
     expect(container.querySelector('.source-filter [aria-pressed="true"]')?.textContent).toBe('Unread')

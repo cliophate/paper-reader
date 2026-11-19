@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db'
+import { DATABASE_VERSION } from '../src/server/auth-schema'
 import { PulseService as RealPulseService, type PulseModel, reviewPulseGroups, duplicatePulseArticle, pulseExtract, validatePulseGroups, validatePulseBatch, shortPulseReferences } from '../src/server/pulse'
 import { PULSE_CATCH_UP_PROMPT, validatePulseCatchUp } from '../src/server/pulse-catch-up'
 import { TopicService } from '../src/server/topics'
@@ -203,7 +204,7 @@ describe('cited Pulse catch-up', () => {
     db.close()
     const file = path.join(directory, 'paper.sqlite')
     db = new PaperDatabase(file)
-    expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(19)
+    expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
     expect(fs.statSync(file + '.before-pulse-catch-ups-v19').mode & 0o777).toBe(0o600)
     expect(db.pulseCatchUps().size).toBe(0)
     const service = new PulseService(db, vi.fn(), true, () => now)

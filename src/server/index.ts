@@ -15,6 +15,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import { BriefingService } from './briefing.js'
+import { BriefingDelivery } from './briefing-delivery.js'
+import { sendSmtp, SmtpError } from './smtp.js'
 import { createAiChatModel, providerConfigured, providerAvailability, runAiBatch, aiEnabled } from './ai-provider.js'
 import { testOpenaiConnection } from './openai.js'
 import { BriefingLibraryService, BriefingReadError } from './briefing-library.js'
@@ -95,6 +97,7 @@ const pulse = new PulseService(database, (prompt, input, schema) => runAiBatch(c
   providerConfigured(config) && config.collections.enabled)
 const topics = new TopicService(database, entriesSource, () => pulse.list().collections)
 const briefings = new BriefingService(config, database, entriesSource, reader, topics)
+const briefingDelivery = new BriefingDelivery(config, database, briefings)
 const briefingLibrary = new BriefingLibraryService(database, ids => synchronizer.editEntries(ids, 'read', 'briefing'))
 const app = express()
 const discussions = new DiscussionService(database, createAiChatModel(config), {
@@ -245,6 +248,7 @@ app.patch('/api/settings/connections', async (request, response) => {
     headlines.setEnabled(providerConfigured(config) && config.headlines.enabled)
     pulse.setEnabled(providerConfigured(config) && config.collections.enabled)
     if (!discussionEnabled()) discussions.stopAll()
+    briefingDelivery.settingsChanged()
     for (const listener of connectionListeners) listener()
     response.json({ ...settings, aiRuntime: await providerAvailability(config) })
   } catch (error) {
@@ -266,6 +270,26 @@ app.post('/api/settings/connections/test-ai', async (request, response) => {
     response.json({ available: false, message: error instanceof Error ? error.message : 'AI connection failed.' })
   } finally { response.off('close', cancel) }
 })
+
+app.get('/api/settings/connections/briefing-delivery', (_request, response) => {
+  response.set('Cache-Control', 'no-store').json(database.briefingDelivery.history())
+})
+
+let testingSmtp = false
+app.post('/api/settings/connections/test-smtp', asyncRoute(async (request, response) => {
+  response.set('Cache-Control', 'no-store')
+  if (testingSmtp) return response.status(429).json({ error: 'A test email is already in progress.' })
+  testingSmtp = true
+  try {
+    const smtp = connectionSettings.smtpTestConfig(request.body?.smtp ?? {})
+    const code = await sendSmtp(smtp, { subject: 'Paper test email', text: 'Paper sent this email to test your briefing delivery settings.' })
+    response.json({ message: `The mail server accepted the test email (SMTP ${code}).` })
+  } catch (error) {
+    response.status(error instanceof SettingsValidationError ? 400 : 422).json({
+      error: error instanceof SettingsValidationError || error instanceof SmtpError ? error.message : 'Could not send the test email. Check the SMTP settings.',
+    })
+  } finally { testingSmtp = false }
+}))
 
 app.get('/api/events', (request, response) => {
   if (!authConnections.register(cookie(request), response)) return
@@ -798,6 +822,7 @@ const server = app.listen(config.port, config.host, () => {
   if (!database.auth.enabled()) console.log(`Paper owner setup code, valid for 15 minutes: ${database.auth.setupCode()}`)
   logMemory('listening')
   feedIcons?.start()
+  briefingDelivery.start()
   void database.backfillMuteFilters().catch(error => console.error('Mute filter backfill failed; it will resume after restart.', error))
 })
 // Reverse proxies reuse idle upstream connections for up to two minutes (Caddy's
@@ -844,6 +869,7 @@ async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
   const iconsStopped = feedIcons?.stop()
+  const deliveryStopped = briefingDelivery.stop()
   await greader.close()
   clearInterval(memoryTimer)
   // Native SQLite can delay both worker termination and process.exit(). At the
@@ -864,6 +890,7 @@ async function shutdown() {
   await Promise.all([headlines.drain(), pulse.drain(), topics.drain(), discussions.drain()])
   await searchStopped
   await iconsStopped
+  await deliveryStopped
   storage.close()
   clearTimeout(deadline)
 }

@@ -20,6 +20,24 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); fs.rmSync(directory, { recursive: true, force: true }) })
 
 describe('private connection settings', () => {
+  it('keeps the SMTP password with its relay and supports explicit removal', () => {
+    vi.stubEnv('PAPER_SMTP_HOST', 'relay.example.test')
+    vi.stubEnv('PAPER_SMTP_USER', 'fixture')
+    vi.stubEnv('PAPER_SMTP_PASSWORD', 'synthetic-environment')
+    const settings = new ConnectionSettings(loadConfig())
+    expect(() => settings.smtpTestConfig({ port: 2525 })).toThrow('Enter the SMTP password again')
+    expect(() => settings.update({ smtp: { security: 'none' } })).toThrow('Enter the SMTP password again')
+    const saved = settings.update({ smtp: { password: 'synthetic-saved' }, briefingSchedule: { enabled: false } })
+    expect(JSON.stringify(saved)).not.toContain('synthetic-saved')
+    vi.stubEnv('PAPER_SMTP_HOST', 'different.example.test')
+    vi.stubEnv('PAPER_BRIEFING_DELIVERY', 'true')
+    const restarted = new ConnectionSettings(loadConfig())
+    expect(restarted.smtpTestConfig({})).toMatchObject({ host: 'relay.example.test', password: 'synthetic-saved' })
+    expect(restarted.view().briefingDelivery.schedule.enabled).toBe(false)
+    restarted.update({ smtp: { host: 'different.example.test', password: null } })
+    expect(new ConnectionSettings(loadConfig()).smtpTestConfig({}).password).toBe('')
+  })
+
   it('exposes only the active discussion provider and model', () => {
     vi.stubEnv('PAPER_DISCUSSION_MODEL', 'custom-codex-model')
     const settings = new ConnectionSettings(loadConfig())

@@ -572,6 +572,25 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .connection-save { margin-top: 12px; }
 .connection-card [role='status'] { font-size: 12px; color: var(--muted); }
 .connection-error { font-size: 12px; color: var(--ink); }
+.delivery-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+.delivery-fields .connection-field { margin: 6px 0; }
+.delivery-fields button, .delivery-fields + .connection-save { min-height: 36px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+.delivery-fields button:hover, .delivery-fields + .connection-save:hover { background: var(--hover); }
+.delivery-fields button:disabled, .delivery-fields + .connection-save:disabled { opacity: .5; cursor: default; }
+.delivery-fields + .connection-save { background: var(--accent); color: var(--accent-ink); }
+.delivery-fields + .connection-save:hover { background: var(--accent); }
+.delivery-history { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 14px; }
+.delivery-history h5 { font-size: 13px; margin: 0 0 8px; }
+.delivery-history ul { padding: 0; margin: 0; list-style: none; }
+.delivery-history li { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 10px 0; font-size: 12px; }
+.delivery-history li + li { border-top: 1px solid var(--line); }
+.delivery-history time { display: block; margin-top: 3px; color: var(--muted); }
+.delivery-history li p { grid-column: 1 / -1; margin: 0; color: var(--muted); line-height: 1.5; }
+@media (max-width: 520px) {
+  .delivery-fields input, .delivery-fields select, .delivery-fields button, .delivery-fields + .connection-save { min-height: 44px; }
+  .delivery-fields:last-of-type .delivery-grid { grid-template-columns: minmax(0, 1fr); }
+  .delivery-history li { grid-template-columns: minmax(0, 1fr); }
+}
 .appearance-layer { position: fixed; z-index: 120; inset: 0; }
 .appearance-popover { position: absolute; top: 66px; right: 16px; width: min(410px, calc(100% - 32px)); max-height: calc(100vh - 82px); overflow: auto; border: 1px solid var(--line); border-radius: 15px; background: var(--panel-strong); box-shadow: var(--shadow); padding: 18px; }
 .appearance-popover > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }

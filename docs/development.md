@@ -29,6 +29,10 @@ Schema v19 adds saved Pulse summaries keyed by collection and membership
 revision. Existing collections and visits are preserved. The migration makes a
 `paper.sqlite.before-pulse-catch-ups-v19` backup before upgrading.
 
+Schema v20 adds briefing delivery jobs. The migration saves
+`paper.sqlite.before-briefing-delivery-v20` before upgrading. Delivery tests use
+a loopback SMTP relay with synthetic messages and credentials.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh

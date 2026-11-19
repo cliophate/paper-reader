@@ -1439,6 +1439,11 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [closeEntry, move, openEntry, overlays, selected, refresh, fetchFullText, markAllRead, saveReadwise, setEntryState, discussionTarget, bulkPreview, reportEntry, selectionContext, entryContext])
 
+  function openSettings() {
+    setSettingsFeedId('')
+    setOverlays({ ...closedOverlays, settings: true })
+  }
+
   const appClass = `app ${sidebarVisible ? '' : 'sidebar-hidden'} ${readerChromeHidden ? 'mobile-reader-chrome-hidden' : ''}`
   return (
     <div
@@ -1468,9 +1473,10 @@ export default function App() {
       <aside className="sidebar panel">
         <div className="sidebar-heading">
           <span>Library</span>
-          {mobileLayout && <div className="source-filter">
-            <ArticleFilter unreadOnly={unreadOnly} onChange={changeUnreadOnly} />
-          </div>}
+          {mobileLayout && <>
+            <div className="source-filter"><ArticleFilter unreadOnly={unreadOnly} onChange={changeUnreadOnly} /></div>
+            <button className="icon-button" aria-label="Settings" onClick={openSettings}><Icon name="settings" /></button>
+          </>}
         </div>
         <nav
           className={`source-nav ${sourcePullDistance > 0 ? 'pulling pull-active' : ''} ${refreshing ? 'pull-active' : ''}`}
@@ -1500,7 +1506,7 @@ export default function App() {
           </div>
         </nav>
         <footer className="sidebar-footer">
-          <button onClick={() => { setSettingsFeedId(''); setOverlays({ ...closedOverlays, settings: true }) }}><Icon name="settings" /> Settings</button>
+          <button onClick={openSettings}><Icon name="settings" /> Settings</button>
           <button onClick={() => setTheme(current => toggledTheme(current, systemDark))} aria-label={darkThemeActive ? 'Use light mode' : 'Use dark mode'} title={darkThemeActive ? 'Use light mode' : 'Use dark mode'}><Icon name={darkThemeActive ? 'sun' : 'moon'} /></button>
         </footer>
       </aside>

@@ -6,7 +6,7 @@ import { ConnectionSettings } from '../src/client/components/ConnectionSettings'
 import { api } from '../src/client/api'
 import type { ConnectionsSettings } from '../src/shared/connections'
 
-vi.mock('../src/client/api', () => ({ api: { connections: vi.fn(), updateConnections: vi.fn(), testAiConnection: vi.fn() } }))
+vi.mock('../src/client/api', () => ({ api: { connections: vi.fn(), updateConnections: vi.fn(), testAiConnection: vi.fn(), briefingDeliveryHistory: vi.fn() } }))
 let root: Root
 let container: HTMLDivElement
 let settings: ConnectionsSettings
@@ -15,12 +15,17 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
   settings = {
+    briefingDelivery: {
+      smtp: { host: '', port: 587, security: 'starttls', user: '', from: '', to: '', passwordConfigured: false, passwordSource: null },
+      schedule: { enabled: false, morning: '07:30', evening: '18:30' }, timeZone: 'UTC',
+    },
     ai: { provider: 'codex', enabled: false, codexEnabled: true, discussionEnabled: true, briefingsEnabled: true, headlinesEnabled: true, collectionsEnabled: true },
     openai: { baseUrl: 'https://api.example.test/v1', discussionModel: 'discussion', headlinesModel: 'headlines', groupingModel: 'grouping', shortlistModel: 'shortlist', editorModel: 'editor', tokenConfigured: true, tokenSource: 'environment' },
     readwise: { enabled: true, location: 'later', tokenConfigured: true, tokenSource: 'environment' },
     kirby: { enabled: false, publishUrl: '', tokenConfigured: false, tokenSource: null },
   }
   vi.mocked(api.connections).mockResolvedValue(settings)
+  vi.mocked(api.briefingDeliveryHistory).mockResolvedValue([])
   vi.mocked(api.updateConnections).mockImplementation(async patch => {
     if (patch.readwise) settings = { ...settings, readwise: { ...settings.readwise, ...patch.readwise, tokenConfigured: patch.readwise.token === null ? false : true, tokenSource: patch.readwise.token === null ? null : 'settings' } }
     if (patch.ai) settings = { ...settings, ai: { ...settings.ai, ...patch.ai } }

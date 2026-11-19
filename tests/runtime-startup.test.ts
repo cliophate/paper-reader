@@ -249,3 +249,83 @@ it('refuses briefing generation without a worker or explicit unsafe local opt-in
   expect(result.code).not.toBe(0)
   expect(result.output).toContain('AI is unavailable')
 })
+
+it('masks SMTP credentials, sends a loopback test, and preserves the external briefing contract', async () => {
+  const { startSmtpFixture } = await import('./fixtures/smtp.mjs')
+  const { startOpenaiFixture } = await import('./fixtures/openai-provider.mjs')
+  const [smtp, model, number] = await Promise.all([startSmtpFixture(), startOpenaiFixture(), port()])
+  const secret = 'synthetic-internal'
+  const password = 'synthetic-private-echo'
+  const server = start('index', number, {
+    TZ: 'UTC', PAPER_INTERNAL_SECRET: secret, PAPER_AI_PROVIDER: 'openai',
+    PAPER_OPENAI_BASE_URL: model.origin + '/v1', PAPER_TRUSTED_AI_ORIGINS: model.origin,
+    PAPER_SMTP_HOST: '127.0.0.1', PAPER_SMTP_PORT: String(smtp.port), PAPER_SMTP_SECURITY: 'none',
+    PAPER_SMTP_USER: 'fixture', PAPER_SMTP_PASSWORD: password,
+    PAPER_BRIEFING_FROM: 'paper@example.test', PAPER_BRIEFING_TO: 'reader@example.test',
+  })
+  const base = `http://127.0.0.1:${number}`
+  const connections = '/api/settings/connections'
+  const request = (url: string, data: unknown, method = 'POST', headers = {}) => fetch(base + url, {
+    method, headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(data),
+  })
+  try {
+    await ready(number)
+    const response = await fetch(base + connections)
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    const initial = await response.json()
+    expect(initial.briefingDelivery).toMatchObject({
+      smtp: { passwordConfigured: true, passwordSource: 'environment', security: 'none' },
+      schedule: { enabled: false, morning: '07:30', evening: '18:30' },
+    })
+    expect(initial.briefingDelivery.smtp).not.toHaveProperty('password')
+    expect(JSON.stringify(initial)).not.toContain(password)
+    expect(smtp.connections).toBe(0)
+    const tested = await request(connections + '/test-smtp', {})
+    expect(tested.status).toBe(200)
+    expect(await tested.text()).toContain('SMTP 250')
+    expect(smtp.messages[0]).toContain('Subject: Paper test email')
+    smtp.mode = 'auth'
+    const rejected = await request(connections + '/test-smtp', {})
+    const error = await rejected.text()
+    expect(rejected.status).toBe(422)
+    expect(error).toContain('SMTP authentication failed')
+    expect(error).not.toContain(password)
+    smtp.mode = 'accept'
+
+    const internal = { 'x-paper-secret': secret }
+    const generate = '/api/internal/briefings/generate'
+    expect((await request(generate, { kind: 'morning' })).status).toBe(401)
+    for (const kind of ['morning', 'evening']) {
+      const generated = await request(generate, { kind }, 'POST', internal)
+      expect(generated.status).toBe(200)
+      const record = await generated.json()
+      expect(record).toMatchObject({ id: expect.any(String), subject: expect.any(String), html: expect.any(String), text: expect.any(String), entryCount: 0, cutoff: expect.any(String) })
+      const endpoint = '/api/internal/briefings/' + record.id
+      const rendered = await request(endpoint + '/render', {}, 'POST', internal)
+      expect(await rendered.json()).toMatchObject({ id: record.id, subject: record.subject, html: record.html, text: record.text, entryCount: record.entryCount })
+      const href = record.html.match(/href="([^"]+\/confirm\?token=[^"]+)"/)?.[1]
+      expect(href).toBeTruthy()
+      const page = await fetch(href)
+      expect(await page.text()).toContain('Mark this briefing read?')
+      expect((await request(endpoint + '/delivered', {})).status).toBe(401)
+      const delivered = await request(endpoint + '/delivered', {}, 'POST', internal)
+      expect(await delivered.json()).toEqual({ ok: true })
+      expect(await (await fetch(base + '/api/briefings/' + record.id)).json()).toMatchObject({ deliveredAt: expect.any(String) })
+    }
+    const local = new Date().toISOString().slice(11, 16)
+    const updated = await request(connections, {
+      smtp: { user: '', password: null }, briefingSchedule: { enabled: true, morning: local, evening: local },
+    }, 'PATCH')
+    const saved = await updated.json()
+    expect(updated.status).toBe(200)
+    expect(saved.briefingDelivery.smtp).toMatchObject({ passwordConfigured: false, passwordSource: null })
+    expect(JSON.stringify(saved)).not.toContain(password)
+    expect(fs.statSync(path.join(directory, 'connections.json')).mode & 0o777).toBe(0o600)
+    await expect.poll(async () => (await (await fetch(base + connections + '/briefing-delivery')).json()).filter(job => job.state === 'skipped')).toHaveLength(2)
+    expect(smtp.connections).toBe(2)
+    expect(smtp.messages).toHaveLength(1)
+  } finally {
+    server.child.kill('SIGTERM')
+    await Promise.all([server.exited, smtp.close(), model.close()])
+  }
+}, 20000)

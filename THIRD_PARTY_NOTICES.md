@@ -119,6 +119,7 @@ their Open Font License texts. Copies of the distributed notices follow.
 | nanoid | 3.3.20 | MIT | [LICENSE](licenses/npm/nanoid/LICENSE) |
 | negotiator | 1.1.0 | MIT | [LICENSE](licenses/npm/negotiator/LICENSE) |
 | content-type | 2.1.0 | MIT | [LICENSE](licenses/npm/content-type/LICENSE) |
+| nodemailer | 10.6.0 | MIT-0 | [LICENSE](licenses/npm/nodemailer/LICENSE) |
 | object-inspect | 1.13.4 | MIT | [LICENSE](licenses/npm/object-inspect/LICENSE) |
 | on-finished | 2.4.1 | MIT | [LICENSE](licenses/npm/on-finished/LICENSE) |
 | once | 1.4.0 | ISC | [LICENSE](licenses/npm/once/LICENSE) |

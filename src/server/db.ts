@@ -20,6 +20,7 @@ import { migrateLinkNumbers } from './link-numbers.js'
 import { migrateBackendKinds } from './backend-schema.js'
 import { FeedIconStore, migrateFeedIcons } from './feed-icon-store.js'
 import { migratePulseCatchUps } from './pulse-schema.js'
+import { BriefingDeliveryStore, migrateBriefingDelivery } from './briefing-delivery-store.js'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES, MINIFLUX_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
@@ -188,6 +189,7 @@ export class PaperDatabase {
   readonly organization: LocalOrganizationService
   readonly feedFetch: FeedFetchStore
   readonly feedIcons: FeedIconStore
+  readonly briefingDelivery: BriefingDeliveryStore
   private activeBackendId = ''
   private closed = false
   private checkpointHandler?: () => void
@@ -225,6 +227,10 @@ export class PaperDatabase {
           if (version > 0) this.backupBeforeMigration(19, 'pulse-catch-ups')
           migratePulseCatchUps(this.db)
         }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 20) {
+          if (version > 0) this.backupBeforeMigration(20, 'briefing-delivery')
+          migrateBriefingDelivery(this.db)
+        }
       }
       this.retention = new RetentionStore(this.db, ids => { this.commitLocalEntryState(this.activeBackendId, ids, 'read', { origin: 'retention' }) })
       this.auth = new AuthStore(this.db)
@@ -233,6 +239,7 @@ export class PaperDatabase {
       this.feedFetch = new FeedFetchStore(this.db, id => this.assertLocalBackend(id))
       this.organization = new LocalOrganizationService(this.db, id => this.assertLocalBackend(id), () => this.localNavigation())
       this.feedIcons = new FeedIconStore(this.db, id => this.organization.subscriptionChanged(id), id => this.assertLocalBackend(id))
+      this.briefingDelivery = new BriefingDeliveryStore(this.db)
     } catch (error) {
       this.db.close()
       throw error

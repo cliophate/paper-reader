@@ -4,6 +4,8 @@ Paper supports an OpenAI-compatible Chat Completions API and the isolated Codex
 worker. Choose a provider in Settings > Reading & connections, enable AI, choose
 features and save. None keeps AI off. Reading and saved AI results work without
 any provider. Changing providers affects new requests. A running batch may finish.
+Scheduled briefing email requires both AI and Briefing generation. See the
+[briefing email setup](integrations.md#briefing-email).
 
 ## OpenAI-compatible API
 
