@@ -46,9 +46,21 @@ describe('briefing news layout', () => {
     expect(result.news[1].bullets).toBeUndefined()
   })
 
-  it.each([{ bullets: undefined }, { bullets: 'One line' }, { bullets: ['The path is open.', '• The path is open.', '■'] }])('rejects a brief with fewer than two usable lines', ({ bullets }) => {
+  it.each([{ bullets: undefined }, { bullets: 'One line' }, { bullets: ['The path is open.', '• The path is open.', '■'] }])('keeps a brief with fewer than two usable lines as prose', ({ bullets }) => {
     const brief = { ...story, role: 'brief' as const, bullets: bullets as string[] }
-    expect(validateSelection(selection([brief]), entries, [], 'morning').news).toEqual([])
+    const [item] = validateSelection(selection([brief]), entries, [], 'morning').news
+    expect(item).toMatchObject({ role: 'brief', summary: story.summary })
+    expect(item.bullets).toBeUndefined()
+  })
+
+  it('uses a single line as the summary, demotes a lead without prose, and drops empty stories', () => {
+    const single = { ...story, summary: '', role: 'brief' as const, bullets: ['The path is open.'] }
+    const bareLead = { ...story, summary: '', role: 'lead' as const, bullets: ['The path is open.', 'A ferry stop opens Monday.'] }
+    const empty = { ...story, summary: '', role: 'brief' as const, bullets: [] }
+    const result = validateSelection(selection([single, bareLead, empty]), entries, [], 'morning')
+    expect(result.news).toHaveLength(2)
+    expect(result.news[0]).toMatchObject({ role: 'brief', summary: 'The path is open.' })
+    expect(result.news[1]).toMatchObject({ role: 'brief', summary: '', bullets: ['The path is open.', 'A ferry stop opens Monday.'], imageEntryId: '' })
   })
 
   it('renders square markers, plain text lines and separate source counts', () => {

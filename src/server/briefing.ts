@@ -613,10 +613,13 @@ export function validateSelection(raw: BriefingSelection, entries: Map<string, E
     const entryIds = [...new Set(strings(item.entryIds))].filter(id => entries.has(id) && !contextOnly(id) && (!clusterId || Boolean(cluster?.entryIds.includes(id))))
     const headline = emailText(String(item.headline || ''))
     if (!headline || !entryIds.length) return []
-    const requestedRole: 'lead' | 'brief' = item.role === 'lead' && !leadUsed ? 'lead' : 'brief'
-    const summary = requestedRole === 'lead' ? emailText(String(item.summary || '')) : ''
-    const bullets = requestedRole === 'brief' ? briefBullets(item.bullets) : []
-    if (requestedRole === 'lead' ? !summary : bullets.length < 2) return []
+    const requestedSummary = emailText(String(item.summary || ''))
+    const requestedBullets = briefBullets(item.bullets)
+    const requestedRole: 'lead' | 'brief' = item.role === 'lead' && !leadUsed && requestedSummary ? 'lead' : 'brief'
+    // Keep a cited story as prose when the model returns fewer than two usable lines.
+    const bullets = requestedRole === 'brief' && requestedBullets.length >= 2 ? requestedBullets : []
+    const summary = bullets.length ? '' : requestedSummary || requestedBullets.join(' ')
+    if (!summary && !bullets.length) return []
     if (requestedRole === 'lead') leadUsed = true
     const requestedImageId = String(item.imageEntryId || '')
     const imageCandidates = requestedImageId ? [requestedImageId, ...entryIds] : entryIds
