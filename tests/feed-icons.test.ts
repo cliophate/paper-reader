@@ -4,6 +4,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { createServer, type Server, type RequestListener } from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
+import { DATABASE_VERSION } from '../src/server/auth-schema'
 import { gzipSync } from 'node:zlib'
 import { afterEach, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db.js'
@@ -159,6 +160,7 @@ it('rechecks private origins on HTML and image redirects and uses the site respo
 
 function downgrade(db: PaperDatabase) {
   db.greaderDatabase.exec(`
+    DROP TABLE pulse_catch_ups;
     DROP TABLE feed_icon_state;
     DROP TABLE feed_icons;
     DELETE FROM sync_state WHERE key = 'feed_icon_key';
@@ -190,7 +192,7 @@ it('upgrades a standalone v17 database with FreshRSS URLs and keeps a private ro
       expect(backup.prepare('PRAGMA user_version').get()?.user_version).toBe(17)
       expect(backup.prepare('SELECT icon_url FROM feeds WHERE id = ?').get(id)?.icon_url).toBe(migrated)
     } finally { backup.close() }
-    expect(upgraded.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(18)
+    expect(upgraded.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
     expect(upgraded.localNavigation().uncategorized[0].iconUrl).toBe(migrated)
     const updated = vi.fn()
     const service = new FeedIconService(upgraded.feedIcons, backend, publicUrl, [origin], updated)

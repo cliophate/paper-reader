@@ -37,7 +37,7 @@ it('issues codes and recovers a running database without backend credentials or 
 it.each([13, 14])('upgrades schema %i through retention v14 to login v15 and preserves credentials on restart', async version => {
   database.close()
   const file = path.join(directory, 'paper.sqlite'), raw = new DatabaseSync(file)
-  raw.exec('DROP TABLE auth_meta; DROP TABLE auth_owner; DROP TABLE auth_setup; DROP TABLE auth_sessions; DROP TABLE auth_passkeys; DROP TABLE auth_challenges; DROP TABLE auth_apps; DROP TABLE auth_limits')
+  raw.exec('DROP TABLE auth_meta; DROP TABLE auth_owner; DROP TABLE auth_setup; DROP TABLE auth_sessions; DROP TABLE auth_passkeys; DROP TABLE auth_challenges; DROP TABLE auth_apps; DROP TABLE auth_limits; DROP TABLE pulse_catch_ups')
   if (version === 13) {
     for (const table of ['retention_auto_read', 'retention_removals', 'retention_settings', 'retention_runs', 'retention_feeds', 'retention_present', 'retention_tombstones', 'retention_briefing_entries']) raw.exec(`DROP TABLE ${table}`)
     for (const index of ['article_aliases_entry_idx', 'article_fingerprints_entry_idx', 'article_cache_age_idx', 'article_reports_entry_idx', 'reading_progress_recent_idx']) raw.exec(`DROP INDEX ${index}`)
@@ -63,7 +63,8 @@ it.each([13, 14])('upgrades schema %i through retention v14 to login v15 and pre
   backup.close()
   expect(fs.statSync(loginBackup).mode & 0o777).toBe(0o600)
   expect(fs.readdirSync(directory).filter(name => name.includes('.before-')).sort()).toEqual([
-    'paper.sqlite.before-feed-icons-v18', 'paper.sqlite.before-greader-v16', 'paper.sqlite.before-miniflux-v17', 'paper.sqlite.before-owner-login-v15', ...(version === 13 ? ['paper.sqlite.before-retention-v14'] : []),
+    'paper.sqlite.before-feed-icons-v18', 'paper.sqlite.before-greader-v16', 'paper.sqlite.before-miniflux-v17', 'paper.sqlite.before-owner-login-v15',
+    'paper.sqlite.before-pulse-catch-ups-v19', ...(version === 13 ? ['paper.sqlite.before-retention-v14'] : []),
   ])
   if (version === 13) {
     const retentionBackup = new DatabaseSync(file + '.before-retention-v14', { readOnly: true })

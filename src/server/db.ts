@@ -19,12 +19,13 @@ import { migrateSearchRows } from './search-schema.js'
 import { migrateLinkNumbers } from './link-numbers.js'
 import { migrateBackendKinds } from './backend-schema.js'
 import { FeedIconStore, migrateFeedIcons } from './feed-icon-store.js'
+import { migratePulseCatchUps } from './pulse-schema.js'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES, MINIFLUX_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
 import type { BriefingSelection, Entry, Feed, Folder, NavigationPayload, StreamRef } from './types.js'
 import type { Topic } from './topics.js'
-import type { PulseCollection, PulseSource } from '../shared/pulse.js'
+import type { PulseCatchUp, PulseCollection, PulseSource } from '../shared/pulse.js'
 import type { Discussion } from '../shared/discussion.js'
 
 export interface BriefingRecord {
@@ -219,6 +220,10 @@ export class PaperDatabase {
         if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 18) {
           if (version > 0) this.backupBeforeMigration(18, 'feed-icons')
           migrateFeedIcons(this.db)
+        }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 19) {
+          if (version > 0) this.backupBeforeMigration(19, 'pulse-catch-ups')
+          migratePulseCatchUps(this.db)
         }
       }
       this.retention = new RetentionStore(this.db, ids => { this.commitLocalEntryState(this.activeBackendId, ids, 'read', { origin: 'retention' }) })
@@ -1079,17 +1084,19 @@ export class PaperDatabase {
 
   pulseCollections(): PulseCollection[] {
     const rows = this.db.prepare(`SELECT pulse_memberships.collection_id, pulse_memberships.sequence,
-      pulse_memberships.added_at, pulse_memberships.development, entries.id, entries.feed_id,
+      pulse_memberships.added_at, pulse_memberships.development, article_arrivals.sequence AS link_number, entries.id, entries.feed_id,
       entries.read, entries.state_revision, entries.feed_title, entries.title, entries.url, entries.feed_url, entries.author,
       entries.published_at, entries.timestamp, entries.thumbnail_url
       FROM pulse_memberships JOIN entries ON entries.id = pulse_memberships.entry_id
+      LEFT JOIN article_arrivals ON article_arrivals.entry_id = entries.id
       WHERE NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = entries.id)
       ORDER BY pulse_memberships.sequence DESC`).iterate()
     const sources = new Map<string, PulseSource[]>()
     for (const row of rows) {
       const id = String(row.collection_id)
       const members = sources.get(id) || []
-      members.push({ id: String(row.id), feedId: String(row.feed_id), read: Boolean(row.read), stateRevision: Number(row.state_revision), publication: decodeHtmlText(String(row.feed_title)),
+      members.push({ id: String(row.id), linkNumber: row.link_number === null ? undefined : Number(row.link_number),
+        feedId: String(row.feed_id), read: Boolean(row.read), stateRevision: Number(row.state_revision), publication: decodeHtmlText(String(row.feed_title)),
         domain: sourceDomain(String(row.url)) || sourceDomain(String(row.feed_url)), title: decodeHtmlText(String(row.title)), url: String(row.url),
         author: decodeHtmlText(String(row.author)), publishedAt: String(row.published_at), timestamp: Number(row.timestamp),
         thumbnailUrl: normalizeFeedThumbnail({ url: String(row.url), thumbnailUrl: String(row.thumbnail_url) }),
@@ -1105,6 +1112,17 @@ export class PaperDatabase {
         seenThrough: Number(row.seen_through), newCount: 0, unreadCount: 0, publicationCount: 0,
         articleCount: members.length, quiet: false, sources: members.map(source => ({ ...source, isNew: source.sequence > Number(row.seen_through) })) }
     })
+  }
+
+  pulseCatchUps() {
+    return new Map(this.db.prepare('SELECT collection_id, revision, summary_json FROM pulse_catch_ups').all().map(row =>
+      [String(row.collection_id), { revision: String(row.revision), summary: JSON.parse(String(row.summary_json)) as PulseCatchUp }]))
+  }
+
+  savePulseCatchUp(id: string, revision: string, summary: PulseCatchUp) {
+    this.db.prepare(`INSERT INTO pulse_catch_ups(collection_id, revision, summary_json) VALUES (?, ?, ?)
+      ON CONFLICT(collection_id) DO UPDATE SET revision = excluded.revision, summary_json = excluded.summary_json`)
+      .run(id, revision, JSON.stringify(summary))
   }
 
   visitPulseCollection(id: string, sequence: number): void {

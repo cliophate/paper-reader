@@ -1,4 +1,5 @@
 export interface PulseSource {
+  linkNumber?: number
   stateRevision?: number
   id: string
   feedId: string
@@ -17,6 +18,16 @@ export interface PulseSource {
   addedAt: string
 }
 
+export interface PulseSummaryLine {
+  text: string
+  entryIds: string[]
+}
+
+export interface PulseCatchUp {
+  latest: PulseSummaryLine[]
+  background: PulseSummaryLine[]
+}
+
 export interface PulseCollection {
   linkNumber?: number
   id: string
@@ -32,6 +43,7 @@ export interface PulseCollection {
   articleCount: number
   quiet: boolean
   sources: PulseSource[]
+  catchUp?: PulseCatchUp
 }
 
 export interface PulsePayload {
