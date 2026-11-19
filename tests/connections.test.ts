@@ -38,6 +38,15 @@ describe('private connection settings', () => {
     expect(new ConnectionSettings(loadConfig()).smtpTestConfig({}).password).toBe('')
   })
 
+  it('accepts a sender display name but only a bare recipient address', () => {
+    const settings = new ConnectionSettings(loadConfig())
+    settings.update({ smtp: { from: 'Paper <paper@example.test>', to: 'reader@example.test' } })
+    expect(settings.smtpTestConfig({})).toMatchObject({ from: 'Paper <paper@example.test>', to: 'reader@example.test' })
+    expect(() => settings.update({ smtp: { from: 'Paper <not an address>' } })).toThrow('Name <address>')
+    expect(() => settings.update({ smtp: { from: '<paper@example.test>' } })).toThrow('Name <address>')
+    expect(() => settings.update({ smtp: { to: 'Reader <reader@example.test>' } })).toThrow('recipient')
+  })
+
   it('exposes only the active discussion provider and model', () => {
     vi.stubEnv('PAPER_DISCUSSION_MODEL', 'custom-codex-model')
     const settings = new ConnectionSettings(loadConfig())

@@ -266,7 +266,8 @@ Under **Briefing email**, enter the SMTP host, port and security mode. Use TLS
 for a relay that encrypts from the start, STARTTLS for one that requires an
 upgrade, or None for a trusted relay that expects a plaintext connection.
 Enter the SMTP username and password if the relay requires authentication.
-Enter one sender address and one recipient address. **Send test email** sends
+Enter a sender, either an address or a name and address such as
+`Paper <briefings@example.com>`, and one recipient address. **Send test email** sends
 to the recipient using the form values and reports the SMTP status.
 
 Choose morning and evening times. The schedule uses Paper's `TZ` and runs once
@@ -297,7 +298,7 @@ recipient inbox when history shows **Acceptance unconfirmed**.
 | `PAPER_SMTP_SECURITY` | `starttls`, `tls`, or `none`. If unset, `PAPER_SMTP_SECURE=true` selects TLS. |
 | `PAPER_SMTP_PORT` | 587 for STARTTLS, 465 for TLS, or 25 for None |
 | `PAPER_SMTP_USER` and `PAPER_SMTP_PASSWORD` | Credentials for authenticated relays |
-| `PAPER_BRIEFING_FROM` and `PAPER_BRIEFING_TO` | Sender and recipient addresses |
+| `PAPER_BRIEFING_FROM` and `PAPER_BRIEFING_TO` | Sender (`address` or `Name <address>`) and recipient address |
 
 Saved settings override these defaults. To change the SMTP host, port,
 security mode or username, re-enter the password or remove it.

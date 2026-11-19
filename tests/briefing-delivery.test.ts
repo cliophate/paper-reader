@@ -260,3 +260,11 @@ it('uses the sender domain for the Message-ID', async () => {
   await scheduler().tick()
   expect(smtp.messages[0]).toMatch(/^Message-ID: <[^@>]+@example\.test>/mi)
 })
+
+it('keeps a sender display name in the header and sends the bare address in the envelope', async () => {
+  config.smtp.from = 'Paper <paper@example.test>'
+  await scheduler().tick()
+  expect(db.briefingDelivery.history()).toMatchObject([{ state: 'delivered' }])
+  expect(smtp.senders).toEqual(['paper@example.test'])
+  expect(smtp.messages[0]).toMatch(/^From: Paper <paper@example\.test>$/m)
+})
