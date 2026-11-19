@@ -14,6 +14,11 @@ type Job = ReturnType<PaperDatabase['briefingDelivery']['due']>[number]
 
 class DeliverySkipped extends SmtpError {}
 
+// Spam filters score Message-IDs whose domain doesn't match the sender.
+export function senderDomain(from: string): string {
+  return /@([A-Za-z0-9.-]+\.[A-Za-z]{2,})>?\s*$/.exec(from.trim())?.[1].toLowerCase() || 'paper.invalid'
+}
+
 export class BriefingDelivery {
   private readonly clock: BriefingClock
   private timer?: ReturnType<typeof setInterval>
@@ -159,7 +164,7 @@ export class BriefingDelivery {
     try {
       await sendSmtp(this.config.smtp, {
         subject: briefing.subject, text: briefing.text, html: briefing.html,
-        messageId: `<${job.id}@paper.invalid>`,
+        messageId: `<${job.id}@${senderDomain(this.config.smtp.from)}>`,
       }, () => {
         const disabled = this.skipReason()
         if (disabled) throw new DeliverySkipped(disabled)

@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BriefingDelivery } from '../src/server/briefing-delivery'
+import { BriefingDelivery, senderDomain } from '../src/server/briefing-delivery'
 import { BriefingClock } from '../src/server/briefing-schedule'
 import { loadConfig, type Config } from '../src/server/config'
 import { PaperDatabase, type BriefingRecord } from '../src/server/db'
@@ -251,4 +251,12 @@ it('backs up schema v19 privately before migration and preserves saved briefings
     expect(backup.prepare("SELECT id FROM briefings WHERE id = ?").get(briefing.id)).toEqual({ id: briefing.id })
     expect(backup.prepare("SELECT 1 FROM sqlite_master WHERE name = 'briefing_delivery_jobs'").get()).toBeUndefined()
   } finally { backup.close(); db = new PaperDatabase(config.databasePath) }
+})
+
+it('uses the sender domain for the Message-ID', async () => {
+  expect(senderDomain('Paper <Briefings@Example.TEST>')).toBe('example.test')
+  expect(senderDomain('paper@mail.example.test')).toBe('mail.example.test')
+  expect(senderDomain('no address')).toBe('paper.invalid')
+  await scheduler().tick()
+  expect(smtp.messages[0]).toMatch(/^Message-ID: <[^@>]+@example\.test>/mi)
 })
