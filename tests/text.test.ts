@@ -2,6 +2,10 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { cleanArticleHtml, decodeHtmlText, emailText, excerpt, firstImage, plainText, readingMinutes } from '../src/server/text.js'
 
+const cleanupCpuLimitMs = 5_000
+// The child also needs wall time for Node startup, module loading and CPU contention.
+const childTimeoutMs = 30_000
+
 describe('article text', () => {
   it('removes scripts and unsafe attributes', () => {
     const result = cleanArticleHtml('<p onclick="alert(1)">Hello</p><script>alert(2)</script><a href="javascript:alert(3)">bad</a>')
@@ -138,13 +142,15 @@ describe('article text', () => {
 
   it.each(['enclosure', 'hero', 'footer', 'image', 'deep', 'nestedParagraphs'])('bounds repeated or deep %s markup in a killable subprocess', name => {
     const child = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/article-cleanup-benchmark.mjs', 'src/server/text.ts', '--case', name, '10000'], {
-      encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
+      encoding: 'utf8', timeout: childTimeoutMs, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
       env: { PATH: process.env.PATH },
     })
     expect(child.error).toBeUndefined()
     expect(child.status, child.stderr).toBe(0)
-    expect(JSON.parse(child.stdout).count).toBe(10000)
-  }, 10_000)
+    const { count, cpuMs } = JSON.parse(child.stdout)
+    expect(count).toBe(10000)
+    expect(cpuMs).toBeLessThan(cleanupCpuLimitMs)
+  }, childTimeoutMs + 10_000)
 
   it('separates block boundaries without splitting inline words', () => {
     for (const tag of ['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'tr', 'td', 'th', 'figcaption', 'article', 'section', 'dt', 'dd']) {

@@ -11,11 +11,13 @@ if (process.argv[3] === '--case') {
   const { cleanArticleHtml } = await import(moduleUrl)
   const name = process.argv[4], count = Number(process.argv[5])
   const input = cleanupInputs[name](count)
+  const cpuStart = process.cpuUsage()
   const start = performance.now()
   const output = cleanArticleHtml(input)
   const ms = performance.now() - start
+  const cpu = process.cpuUsage(cpuStart)
   assert(output.length > 0)
-  console.log(JSON.stringify({ name, count, bytes: Buffer.byteLength(input), ms }))
+  console.log(JSON.stringify({ name, count, bytes: Buffer.byteLength(input), ms, cpuMs: (cpu.user + cpu.system) / 1000 }))
 } else {
   for (const name of Object.keys(cleanupInputs)) {
     for (const count of name === 'enclosure' ? [100, 500, 1000, 1500] : [1000, 5000, 10000]) {
