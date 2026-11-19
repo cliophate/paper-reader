@@ -107,8 +107,8 @@ test('opens the briefing collection expanded on new articles', async ({ page, re
   const card = page.locator('.pulse-card').filter({ has: page.getByRole('button', { name: collection.headline, exact: true }) })
   await expect(card.getByRole('button', { name: collection.headline, exact: true })).toHaveAttribute('aria-expanded', 'true')
   await expect(card.getByRole('button', { name: /^New \d/ })).toHaveAttribute('aria-pressed', 'true')
-  await expect(card.locator('.topic-sources ol > li')).toHaveCount(collection.articleCount - 1)
-  await expect(card.locator('.topic-sources ol')).not.toContainText(first.title)
+  await expect(card.locator('.pulse-thread > li')).toHaveCount(collection.articleCount - 1)
+  await expect(card.locator('.pulse-thread')).not.toContainText(first.title)
 })
 
 test('an emailed collection link lands on Pulse when the collection has been removed', async ({ page, request }) => {
