@@ -1619,7 +1619,7 @@ export default function App() {
           setTopicsRefreshKey(current => current + 1)
           void loadNavigation().catch(() => notify('The source stories are read. Counts will refresh shortly.'))
         }} />
-        : <TopicsLibrary initialCollection={linkedCollection} initialFilter={collectionFilter} onCollectionChange={collection => {
+        : <TopicsLibrary initialCollection={linkedCollection} initialFilter={collectionFilter} discussionConfigured={status.discussionConfigured} onCollectionChange={collection => {
           if (collection) routeCollections.current = [...routeCollections.current.filter(item => item.id !== collection.id), collection]
           readerLinks.current.collections = routeCollections.current
           if (collection?.id === linkedCollection) return

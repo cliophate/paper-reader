@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { acknowledgePulseVisit, refreshPulseState } from '../pulse'
 import type { PulseCollection, PulsePayload, PulseSource } from '../../shared/pulse'
+import { CollectionQuestions } from './CollectionQuestions'
 import { Icon } from './Icon'
 import { PulseCatchUp, PulseCollectionOptions } from './PulseCatchUp'
 
@@ -25,6 +26,7 @@ function rememberPulseReturn(value: PulseReturn | null) {
 interface TopicsLibraryProps {
   initialCollection?: string
   initialFilter?: 'new'
+  discussionConfigured?: boolean
   onCollectionChange: (collection: PulseCollection | null) => void
   refreshKey: number
   onBack: () => void
@@ -33,7 +35,7 @@ interface TopicsLibraryProps {
   notify: (message: string, action?: { label: string; run: () => void }) => void
 }
 
-export function TopicsLibrary({ initialCollection, initialFilter, onCollectionChange, refreshKey, onBack, onOpenEntry, onMarkRead, notify }: TopicsLibraryProps) {
+export function TopicsLibrary({ initialCollection, initialFilter, discussionConfigured, onCollectionChange, refreshKey, onBack, onOpenEntry, onMarkRead, notify }: TopicsLibraryProps) {
   const directLink = initialCollection && (initialFilter || initialCollection !== returnToPulse?.id) ? { id: initialCollection, filter: initialFilter } : undefined
   const [payload, setPayload] = useState<PulsePayload | null>(null)
   const [now, setNow] = useState(Date.now)
@@ -176,8 +178,7 @@ export function TopicsLibrary({ initialCollection, initialFilter, onCollectionCh
     rememberPulseReturn({ id: collection.id, filter: view.current.filter === 'new' ? 'unread' : view.current.filter,
       section: view.current.section, scroll: scroll.current?.scrollTop || 0 })
     const sourceFilter = view.current.expanded === collection.id ? view.current.filter : view.current.section === 'unread' ? 'unread' : 'all'
-    const sources = threadSources(collection, sourceFilter)
-    const ids = (sources.some(source => source.id === id) ? sources : threadSources(collection, 'all')).map(source => source.id)
+    const ids = threadSources(collection, sourceFilter, id).map(source => source.id)
     onOpenEntry(id, { id: collection.id, title: collection.headline, ids, linkNumber: collection.linkNumber })
   }
   const markRead = async (ids: string[]) => {
@@ -239,7 +240,7 @@ export function TopicsLibrary({ initialCollection, initialFilter, onCollectionCh
         {!payload && !error && <div className="topics-state"><h2>Loading Pulse</h2></div>}
         {payload && !collections.length && <div className="topics-state"><h2>{section === 'small' ? 'No small collections' : section === 'unread' ? 'No unread collections' : section === 'quiet' ? 'No quiet collections yet' : payload.status.running ? 'Finding the connections' : 'No active collections yet'}</h2><p>{section === 'small' ? 'Collections reduced by filters or corrections remain recoverable here.' : section === 'unread' ? 'You have read every article in your collections. Browse Active or Quiet to revisit them.' : section === 'quiet' ? 'Older collections will remain here for later reading.' : 'Collections appear when several articles follow the same developing subject.'}</p></div>}
         {ordered.map(collection => <CollectionCard key={collection.id} collection={collection}
-          lead={collection === lead} now={now} unreadOnly={section === 'unread'} summariesEnabled={Boolean(payload?.status.enabled)}
+          lead={collection === lead} now={now} unreadOnly={section === 'unread'} summariesEnabled={Boolean(payload?.status.enabled)} discussionConfigured={discussionConfigured}
           expanded={expanded === collection.id} filter={filter} onExpand={next => showCollection(collection, next)} onCollapse={() => void closeCollection()}
           onOpenEntry={id => openArticle(id, collection)} onMarkRead={markRead} merging={Boolean(mergeFrom)} mergingThis={mergeFrom === collection.id}
           onMerge={() => mergeFrom && void saveFeedback('merge', mergeFrom, '', collection.id)} onStartMerge={() => setMergeFrom(collection.id)}
@@ -249,8 +250,8 @@ export function TopicsLibrary({ initialCollection, initialFilter, onCollectionCh
   </section>
 }
 
-function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, summariesEnabled, onExpand, onCollapse, onOpenEntry, onMarkRead, merging, mergingThis, onMerge, onStartMerge, onHide, onRemove }: {
-  collection: PulseCollection; lead: boolean; now: number; expanded: boolean; filter: ArticleFilter; unreadOnly: boolean; summariesEnabled: boolean
+function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, summariesEnabled, discussionConfigured, onExpand, onCollapse, onOpenEntry, onMarkRead, merging, mergingThis, onMerge, onStartMerge, onHide, onRemove }: {
+  collection: PulseCollection; lead: boolean; now: number; expanded: boolean; filter: ArticleFilter; unreadOnly: boolean; summariesEnabled: boolean; discussionConfigured?: boolean
   onExpand: (filter: ArticleFilter) => Promise<void>; onCollapse: () => void; onOpenEntry: (id: string) => void
   onMarkRead: (ids: string[], expectedRevisions?: Record<string, number>) => Promise<boolean>; merging: boolean; mergingThis: boolean
   onMerge: () => void; onStartMerge: () => void; onHide: () => void; onRemove: (id: string) => void
@@ -317,6 +318,7 @@ function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, s
       event.preventDefault()
       void onExpand('all').then(() => requestAnimationFrame(() => { list.current?.focus(); list.current?.scrollIntoView({ block: 'start' }) }))
     }}>{earlier ? `${earlier} earlier ${earlier === 1 ? 'article' : 'articles'}` : 'View collection'}</a>}
+    {expanded && discussionConfigured && collection.questionsRevision && <CollectionQuestions key={collection.questionsRevision} collection={collection} revision={collection.questionsRevision} onOpenEntry={onOpenEntry} />}
     {expanded && <div className="pulse-card-actions">
       <button disabled={marking || !unreadIds.length} onClick={() => void markRead()}>{marking ? 'Marking read…' : `Mark ${unreadIds.length} unread as read`}</button><button onClick={onCollapse}>Close collection</button>
     </div>}
@@ -333,8 +335,8 @@ function collectionImage(sources: PulseSource[], failed: string[]) {
   }
 }
 
-function threadSources(collection: PulseCollection, filter: ArticleFilter) {
-  return collection.sources.filter(source => filter === 'all' || (filter === 'new' ? source.isNew : filter === 'read' ? source.read : !source.read))
+function threadSources(collection: PulseCollection, filter: ArticleFilter, includeId?: string) {
+  return collection.sources.filter(source => source.id === includeId || filter === 'all' || (filter === 'new' ? source.isNew : filter === 'read' ? source.read : !source.read))
     .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))
 }
 

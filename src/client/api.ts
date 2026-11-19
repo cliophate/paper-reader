@@ -2,6 +2,7 @@ import type { RetentionPolicy, RetentionPreview, RetentionView } from '../shared
 import type { FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarget } from '../shared/feed-checks'
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
 import type { PulsePayload } from '../shared/pulse'
+import type { CollectionAnswer } from '../shared/discussion'
 import type { ConnectionsSettings, ConnectionsUpdate } from '../shared/connections'
 import type { BriefingReadResult } from '../shared/briefings'
 import type { ActivityRecord, ArticleReport, BriefingDetail, BriefingSummary, CoverageFeedback, Entry, EntryPage, FullArticle, MuteFilter, NavigationPayload, StreamRef, XThreadPost } from './types'
@@ -52,6 +53,10 @@ export const api = {
   briefingFeedback: (id: string, feedback: 'useful' | 'too_broad' | 'missed') =>
     request<{ ok: boolean; feedback: string }>(`/api/briefings/${encodeURIComponent(id)}/feedback`, { method: 'POST', body: JSON.stringify({ feedback }) }),
   pulse: () => request<PulsePayload>('/api/pulse'),
+  collectionSuggestions: (id: string, revision: string, refresh: boolean, signal: AbortSignal) =>
+    request<{ questions: string[] }>(`/api/discussion/collection/${encodeURIComponent(id)}/suggestions`, { method: 'POST', body: JSON.stringify({ revision, refresh }), signal: sourceRequestSignal(signal) }),
+  collectionAnswer: (id: string, revision: string, question: string, previousAnswer: string | undefined, signal: AbortSignal) =>
+    request<CollectionAnswer>(`/api/discussion/collection/${encodeURIComponent(id)}/answer`, { method: 'POST', body: JSON.stringify({ revision, question, previousAnswer }), signal: sourceRequestSignal(signal) }),
   visitPulse: (collectionId: string, sequence: number) => request<{ ok: boolean }>('/api/pulse/visit', { method: 'POST', body: JSON.stringify({ collectionId, sequence }), keepalive: true }),
   pulseFeedback: (action: 'not_same' | 'not_useful' | 'merge', clusterId: string, entryId = '', targetClusterId = '') =>
     request<CoverageFeedback>('/api/pulse/feedback', { method: 'POST', body: JSON.stringify({ action, clusterId, entryId, targetClusterId }) }),

@@ -43,6 +43,17 @@ export async function startOpenaiFixture() {
       response.end(); return
     }
     if (!body.response_format) { json({ choices: [{ message: { content: 'OK' } }] }); return }
+    if (body.model === 'collection-fixture') {
+      const input = JSON.parse(body.messages[1].content.split('\n').at(-1))
+      if (!input.question) return result({ questions: input.previousQuestions.length
+        ? ['How wide is the bridge?', 'When can cyclists use the bridge?']
+        : ['When does the new footbridge open?', 'What changed during construction?'] })
+      if (input.question.toLowerCase().includes('cost')) return result({ answer: '', sourceIds: [] })
+      const source = input.articles.find(article => article.text.includes('Saturday morning'))
+      if (!source) return result({ answer: '', sourceIds: [] })
+      return result({ answer: input.previousAnswer === undefined ? 'The Willow Creek footbridge opens on Saturday morning.'
+        : 'Cyclists can use the bridge as soon as it opens, and the path to the park reopens at the same time.', sourceIds: [source.id] })
+    }
     result({ groups: [], model: body.model })
   })
   server.listen(0, '127.0.0.1')

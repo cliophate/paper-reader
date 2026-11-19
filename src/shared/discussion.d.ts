@@ -25,3 +25,8 @@ export interface Discussion {
   source: DiscussionSource
   messages: DiscussionMessage[]
 }
+
+export interface CollectionAnswer {
+  text: string
+  entryIds: string[]
+}

@@ -290,15 +290,19 @@ export class PulseService {
   private notify() { for (const listener of this.listeners) listener() }
 
   list(): PulsePayload {
-    const { collections, collectionAliases } = correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now())
+    const { collections: corrected, collectionAliases } = correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now())
+    const collections = corrected.map(collection => ({
+      ...collection,
+      questionsRevision: crypto.createHash('sha256').update(JSON.stringify([collection.headline, collection.scope,
+        collection.sources.map(source => [source.id, source.sequence, source.title, source.publication, source.development])])).digest('hex'),
+    }))
     const saved = this.enabled ? this.db.pulseCatchUps() : undefined
     for (const collection of collections) {
       const summary = saved?.get(collection.id)?.summary
       if (summary) collection.catchUp = validatePulseCatchUp(summary, new Map(collection.sources.map(source => [source.id, source])))
     }
     const revision = crypto.createHash('sha1').update(JSON.stringify(collections.map(collection =>
-      [collection.id, collection.headline, collection.scope, collection.quiet, saved?.get(collection.id)?.revision,
-        collection.sources.map(source => [source.id, source.sequence, source.development])]))).digest('hex')
+      [collection.id, collection.questionsRevision, collection.quiet, saved?.get(collection.id)?.revision]))).digest('hex')
     return { collections, ...(collectionAliases.length ? { collectionAliases } : {}), revision, status: { enabled: this.enabled, running: Boolean(this.running),
       lastCompletedAt: this.db.getSyncValue('pulse_completed_at') || null, failed: this.failed } }
   }

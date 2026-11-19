@@ -989,6 +989,36 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
   .pulse-card-actions button, .pulse-article-tabs button { min-height: 36px; }
 }
 
+.collection-questions { display: grid; gap: 8px; margin-block-start: 12px; font-family: var(--ui); }
+.collection-questions > header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0 12px; }
+.collection-questions h3 { margin: 0; font: 650 14px/1.4 var(--ui); }
+.collection-questions button { cursor: pointer; }
+.collection-questions button:disabled { opacity: .55; cursor: default; }
+.collection-questions-refresh, .collection-reply-actions button { min-height: 36px; padding: 4px 0; border: 0; background: none; color: var(--muted); font: 600 12px/1.4 var(--ui); text-align: start; }
+.collection-questions-refresh:hover:not(:disabled), .collection-reply-actions button:hover:not(:disabled), .collection-reply-sources a:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.collection-suggestions, .collection-reply-sources { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.collection-suggestions button, .collection-questions form label, .collection-questions form button { border: 1px solid var(--line); border-radius: 7px; background: transparent; }
+.collection-suggestions button { width: 100%; min-height: 44px; padding: 8px 10px; font: 400 14px/1.4 var(--ui); text-align: start; overflow-wrap: anywhere; }
+.collection-suggestions button:hover:not(:disabled), .collection-questions form button:hover:not(:disabled) { border-color: var(--faint); }
+.collection-questions form { display: flex; gap: 6px; }
+.collection-questions form label { display: flex; align-items: center; flex: 1; min-width: 0; padding-inline-start: 10px; }
+.collection-questions form label svg { width: 14px; height: 14px; flex: none; color: var(--muted); }
+.collection-questions form label:focus-within { outline: 2px solid var(--ink); outline-offset: 2px; }
+.collection-questions form input { width: 100%; min-width: 0; min-height: 44px; padding: 8px; border: 0; outline: none; background: transparent; color: var(--ink); font: 400 16px var(--ui); }
+.collection-questions form input::placeholder { color: var(--muted); opacity: 1; font-size: 14px; }
+.collection-questions form button { padding: 0 12px; font: 650 13px var(--ui); }
+.collection-questions-status { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.collection-questions-status[role='alert'] { color: var(--danger); }
+.collection-replies { display: grid; gap: 16px; margin-block-start: 6px; }
+.collection-replies:empty { display: none; }
+.collection-reply { overflow-wrap: anywhere; }
+.collection-reply h4 { margin: 0; font: 650 13px/1.4 var(--ui); }
+.collection-reply > p { max-width: 70ch; margin: 5px 0 0; font: 400 16px/1.55 var(--reader-font); white-space: pre-line; }
+.collection-reply-actions { display: flex; flex-wrap: wrap; gap: 0 16px; }
+.collection-reply-sources { gap: 0; color: var(--muted); font: 400 12px/1.4 var(--ui); }
+.collection-reply-sources li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
+.collection-reply-sources a { display: inline-block; min-height: 24px; padding-block: 3px; color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+
 .entry-unsubscribe > span { min-width: 0; padding: 6px 0; }
 .entry-unsubscribe small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 3px; color: var(--muted); font-size: 11px; }
 

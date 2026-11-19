@@ -19,6 +19,7 @@ import { createAiChatModel, providerConfigured, providerAvailability, runAiBatch
 import { testOpenaiConnection } from './openai.js'
 import { BriefingLibraryService, BriefingReadError } from './briefing-library.js'
 import { DiscussionService, discussionSource } from './discussion.js'
+import { CollectionDiscussionError } from './collection-discussion.js'
 import { HeadlineService } from './headlines.js'
 import { openRuntimeStorage } from './runtime-storage.js'
 import { StandaloneBackend } from './standalone-backend.js'
@@ -96,7 +97,11 @@ const topics = new TopicService(database, entriesSource, () => pulse.list().coll
 const briefings = new BriefingService(config, database, entriesSource, reader, topics)
 const briefingLibrary = new BriefingLibraryService(database, ids => synchronizer.editEntries(ids, 'read', 'briefing'))
 const app = express()
-const discussions = new DiscussionService(database, createAiChatModel(config))
+const discussions = new DiscussionService(database, createAiChatModel(config), {
+  enabled: discussionEnabled,
+  get: id => pulse.list().collections.find(collection => collection.id === id),
+  model: (prompt, input, schema, signal) => runAiBatch(config, 'discussion', config.codex.discussionModel, prompt, input, schema, 'low', signal),
+})
 logMemory('services ready')
 
 synchronizer.onSyncCompleted(() => {
@@ -189,6 +194,28 @@ app.delete('/api/discussion', (request, response) => {
   try { discussions.remove(String(request.body?.entryId || '')); response.json({ ok: true }) }
   catch (error) { response.status(409).json({ error: error instanceof Error ? error.message : 'Could not delete discussion' }) }
 })
+
+const collectionDiscussionRoute = (kind: 'suggestions' | 'answer') => asyncRoute(async (request, response) => {
+  response.set('Cache-Control', 'no-store')
+  const id = String(request.params.id)
+  const { revision, refresh, question, previousAnswer } = request.body || {}
+  if (typeof revision !== 'string' || !/^[a-f0-9]{64}$/.test(revision) || (kind === 'answer'
+    && (typeof question !== 'string' || (previousAnswer !== undefined && typeof previousAnswer !== 'string')))) {
+    return response.status(400).json({ error: 'Invalid collection question request.' })
+  }
+  try {
+    const result = kind === 'suggestions'
+      ? { questions: await discussions.suggest(id, revision, refresh === true) }
+      : await withRequestSignal(request, response, signal => discussions.answer(id, revision, question, previousAnswer, signal))
+    if (!response.destroyed) response.json(result)
+  } catch (error) {
+    if (response.destroyed) return
+    if (error instanceof CollectionDiscussionError) return response.status(error.status).json({ error: error.message })
+    response.status(502).json({ error: kind === 'suggestions' ? 'Paper could not get suggested questions. Try again.' : 'Paper could not answer right now. Try again.' })
+  }
+})
+app.post('/api/discussion/collection/:id/suggestions', collectionDiscussionRoute('suggestions'))
+app.post('/api/discussion/collection/:id/answer', collectionDiscussionRoute('answer'))
 
 app.get('/api/status', (_request, response) => response.json({
   publicUrl: process.env.PUBLIC_URL ? new URL(config.publicUrl).origin : '',

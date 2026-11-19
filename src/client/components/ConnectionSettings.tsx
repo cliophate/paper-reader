@@ -92,7 +92,7 @@ function AiConnection({ settings, openai, runtime, onSave }: { settings: AiSetti
     </fieldset>
     <fieldset disabled={!ai.enabled}>
       <legend>Features</legend>
-      <Toggle label="Article discussions" checked={ai.discussionEnabled} disabled={!provider} onChange={toggle('discussionEnabled')} />
+      <Toggle label="Article discussions and collection questions" checked={ai.discussionEnabled} disabled={!provider} onChange={toggle('discussionEnabled')} />
       <Toggle label="Clearer headlines" checked={ai.headlinesEnabled} disabled={!provider} onChange={toggle('headlinesEnabled')} />
       <Toggle label="Pulse story grouping" checked={ai.collectionsEnabled} disabled={!provider} onChange={toggle('collectionsEnabled')} />
       <Toggle label="Briefing generation" checked={ai.briefingsEnabled} disabled={!provider} onChange={toggle('briefingsEnabled')} />

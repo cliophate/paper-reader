@@ -92,9 +92,9 @@ describe('connection settings forms', () => {
     await render()
     const ai = form('AI features')
     const toggle = (label: string) => [...ai.querySelectorAll('label')].find(item => item.textContent === label)!.querySelector<HTMLInputElement>('input')!
-    expect(toggle('Article discussions').matches(':disabled')).toBe(true)
+    expect(toggle('Article discussions and collection questions').matches(':disabled')).toBe(true)
     await act(async () => toggle('Enable AI features').click())
-    expect(toggle('Article discussions').matches(':disabled')).toBe(false)
+    expect(toggle('Article discussions and collection questions').matches(':disabled')).toBe(false)
     await act(async () => toggle('Clearer headlines').click())
     await submit(ai)
     expect(api.updateConnections).toHaveBeenCalledWith({ ai: { ...settings.ai, enabled: true, headlinesEnabled: false } })

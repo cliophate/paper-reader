@@ -52,6 +52,8 @@
   "POST /api/briefings/:id/feedback": "session",
   "POST /api/briefings/:id/read": "session",
   "POST /api/discussion": "session",
+  "POST /api/discussion/collection/:id/answer": "session",
+  "POST /api/discussion/collection/:id/suggestions": "session",
   "POST /api/discussion/message": "session",
   "POST /api/discussion/stop": "session",
   "POST /api/entries/item": "session",
