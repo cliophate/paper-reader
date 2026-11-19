@@ -1621,7 +1621,7 @@ export default function App() {
           if (collection?.id === linkedCollection) return
           pushLocation({ view: 'pulse', selectedId: '', collection: collection?.id })
           setLinkedCollection(collection?.id)
-        }} feedIcons={feedIcons} refreshKey={topicsRefreshKey} onBack={openSources} onOpenEntry={(id, context) => void openTopicEntry(id, context)} onMarkRead={markTopicRead} notify={notify} />}
+        }} refreshKey={topicsRefreshKey} onBack={openSources} onOpenEntry={(id, context) => void openTopicEntry(id, context)} onMarkRead={markTopicRead} notify={notify} />}
 
       <MobileTabs boundaryStore={articleBoundaryStore}>
         <button className={view === 'reader' && mobilePane === 'sources' ? 'active' : ''} onClick={openSources}><Icon name="folder" /><span>Sources</span></button>

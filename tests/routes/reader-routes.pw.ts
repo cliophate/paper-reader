@@ -232,6 +232,9 @@ test('Pulse sections move above mobile navigation and keep their keyboard contro
   await page.route('**/api/pulse', async route => {
     const data: PulsePayload = await (await route.fetch()).json()
     const source = collection.sources[0]
+    const active = data.collections.find(item => item.id === collection.id)!
+    active.sources.push({ ...source, id: 'earlier-report', publishedAt: '2020-01-01T10:00:00Z', read: true, isNew: false })
+    active.articleCount++
     data.collections.push({ ...collection, id: 'small', linkNumber: 99, headline: 'Small collection', articleCount: 1,
       unreadCount: Number(!source.read), newCount: Number(source.isNew), publicationCount: 1, sources: [source] })
     await route.fulfill({ json: data })
@@ -259,11 +262,12 @@ test('Pulse sections move above mobile navigation and keep their keyboard contro
   await active.click()
   await page.locator('.topics-scroll').evaluate(node => { node.scrollTop = node.scrollHeight })
   expect((await card.boundingBox())!.y + (await card.boundingBox())!.height).toBeLessThan(bar.y)
-  const count = card.getByRole('link', { name: '3 articles' })
+  const count = card.getByRole('link', { name: '1 earlier article' })
+  await expect(count).toHaveAccessibleDescription(/4 articles/)
   const href = await count.getAttribute('href')
   await count.click()
   await expect(page).toHaveURL(new RegExp(href! + '$'))
-  await expect(card.getByRole('button', { name: 'All 3' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(card.locator('.topic-sources')).toBeFocused()
+  await expect(card.getByRole('button', { name: 'All 4' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(card.locator('[tabindex="-1"]')).toBeFocused()
   await expect(card.locator('.pulse-filter-count')).toContainText('1 publication')
 })

@@ -44,10 +44,10 @@ describe('Pulse visit and update interface', () => {
     const markRead = vi.fn().mockResolvedValue(true)
     const notify = vi.fn()
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-    const render = (refreshKey: number) => <TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={refreshKey} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={notify} />
+    const render = (refreshKey: number) => <TopicsLibrary onCollectionChange={() => {}} refreshKey={refreshKey} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={notify} />
     await act(async () => root!.render(render(0)))
     expect(container.textContent).toContain('2 unread')
-    await act(async () => button(container, 'View 3 new articles').click())
+    await act(async () => button(container, 'Collection one').click())
     expect(visit).not.toHaveBeenCalled()
     expect(markRead).not.toHaveBeenCalled()
     latest = payload([collection('one', [source('4', 4), source('1', 1), source('2', 2, true), source('3', 3)])], 'two')
@@ -61,10 +61,10 @@ describe('Pulse visit and update interface', () => {
     latest = payload([collection('one', [source('4', 4), ...latest.collections[0].sources.slice(1).map(s => ({ ...s, isNew: false }))])], 'two')
     await act(async () => button(container, 'Show updates').click())
     expect(container.textContent).toContain('Feature report 4')
-    expect(container.textContent).toContain('View 1 new article')
+    expect(container.querySelectorAll('.pulse-source.is-new')).toHaveLength(1)
     expect(load).toHaveBeenCalledTimes(3)
-    expect(button(container, 'Mark 3 unread as read').closest('.pulse-card-top')).not.toBeNull()
     expect(container.querySelector('.pulse-title')?.getAttribute('aria-expanded')).toBe('false')
+    await act(async () => button(container, 'Collection one').click())
     await act(async () => button(container, 'Mark 3 unread as read').click())
     expect(markRead).toHaveBeenCalledWith(['4', '1', '3'])
     expect(container.textContent).toContain('0 unread')
@@ -76,8 +76,8 @@ describe('Pulse visit and update interface', () => {
     const visit = vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
     const markRead = vi.fn()
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={() => {}} />))
-    await act(async () => button(container, 'View collection').click())
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={() => {}} />))
+    await act(async () => button(container, 'Collection one').click())
     await act(async () => root!.unmount()); root = undefined
     expect(visit).toHaveBeenCalledWith('one', 3)
     expect(markRead).not.toHaveBeenCalled()
@@ -93,20 +93,22 @@ describe('Pulse visit and update interface', () => {
     const visit = vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
     const markRead = vi.fn().mockResolvedValue(true)
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={() => {}} />))
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={() => {}} />))
     const toolbar = container.querySelector('.pulse-toolbar') as HTMLElement
     await act(async () => button(toolbar, 'Unread 2').click())
     expect([...container.querySelectorAll('h2')].map(node => node.textContent)).toEqual(['Collection active', 'Collection quiet'])
     expect(container.textContent).toContain('Feature report 4')
     expect(container.textContent).not.toContain('Feature report 3')
     const quiet = [...container.querySelectorAll<HTMLElement>('.pulse-card')][1]
-    await act(async () => button(quiet, 'View collection').click())
+    expect(quiet.querySelector('.pulse-earlier')?.textContent).toBe('View collection')
+    await act(async () => button(quiet, 'Collection quiet').click())
     expect(button(quiet, 'Unread 1').getAttribute('aria-pressed')).toBe('true')
     await act(async () => button(quiet, 'Mark 1 unread as read').click())
     expect(markRead).toHaveBeenCalledWith(['4'], { '4': 7 })
     expect(visit).toHaveBeenCalledWith('quiet', 4)
     expect(container.textContent).not.toContain('Collection quiet')
     expect(button(toolbar, 'Unread 1')).toBeDefined()
+    await act(async () => button(container, 'Collection active').click())
     await act(async () => button(container, 'Mark 1 unread as read').click())
     expect(container.textContent).toContain('No unread collections')
     await act(async () => button(toolbar, 'Quiet 1').click())
@@ -114,16 +116,17 @@ describe('Pulse visit and update interface', () => {
     expect(container.textContent).toContain('0 unread')
   })
 
-  it('opens unread or read articles directly from a card and switches without changing read state', async () => {
+  it('switches article filters in the expanded thread without changing read state', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
     vi.spyOn(api, 'pulse').mockResolvedValue(payload([collection('mixed', [source('1', 1), source('2', 2, true), source('3', 3)])]))
     const visit = vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
     const markRead = vi.fn()
     const onOpenEntry = vi.fn()
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={onOpenEntry} onMarkRead={markRead} notify={() => {}} />))
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} refreshKey={0} onBack={() => {}} onOpenEntry={onOpenEntry} onMarkRead={markRead} notify={() => {}} />))
     const card = container.querySelector('.pulse-card') as HTMLElement
-    const titles = () => [...card.querySelectorAll('.topic-source-copy > span:last-child')].map(node => node.textContent)
+    await act(async () => button(card, 'Collection mixed').click())
+    const titles = () => [...card.querySelectorAll('.pulse-story-title')].map(node => node.textContent)
     await act(async () => button(card, 'Read 1').click())
     expect(titles()).toEqual(['Feature report 2'])
     await act(async () => button(card, 'Unread 2').click())
@@ -142,17 +145,17 @@ describe('Pulse collection size and catch-up', () => {
     vi.spyOn(api, 'pulse').mockResolvedValue(payload([collection('small', [source('solo', 1)]), collection('full', [source('1', 2), source('2', 3, true), source('3', 4, true)])]))
     vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
     expect(container.textContent).not.toContain('Collection small')
-    expect(container.querySelector('.pulse-footer')?.textContent).toContain('Based on 3 articles')
-    expect(button(container, 'Unread 1')).toBeDefined()
+    expect(container.querySelector('#pulse-full-count')?.textContent).toBe('3 articles, 1 unread')
     await act(async () => button(container.querySelector('.pulse-toolbar') as HTMLElement, 'Small 1').click())
     expect(container.textContent).toContain('Collection small')
     expect(container.textContent).not.toContain('Collection full')
-    expect(container.querySelector('.pulse-footer a')?.textContent).toBe('1 article')
+    expect(container.querySelector('#pulse-small-count')?.textContent).toBe('1 article, 1 unread')
+    expect(container.querySelector('.pulse-earlier')?.textContent).toBe('View collection')
   })
 
-  it('updates the footer clock even while the background request is pending', async () => {
+  it('updates thread times even while the background request is pending', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
     vi.useFakeTimers()
     try {
@@ -160,11 +163,11 @@ describe('Pulse collection size and catch-up', () => {
       const item = collection('clock', [source('1', 1), source('2', 2), source('3', 3)])
       vi.spyOn(api, 'pulse').mockResolvedValueOnce(payload([item])).mockImplementation(() => new Promise(() => {}))
       const container = document.createElement('div'); root = createRoot(container)
-      await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
-      const footer = container.querySelector('.pulse-footer')!
-      expect(footer.textContent).toBe('Updated 20 minutes ago · Based on 3 articles')
+      await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
+      const time = container.querySelector('.pulse-story time')!
+      expect(time.textContent).toBe('20 min')
       await act(async () => vi.advanceTimersByTime(60_000))
-      expect(footer.textContent).toBe('Updated 21 minutes ago · Based on 3 articles')
+      expect(time.textContent).toBe('21 min')
     } finally { vi.useRealTimers() }
   })
 
@@ -177,7 +180,7 @@ describe('Pulse collection size and catch-up', () => {
       { ...collection('older', sources), updatedAt: '2026-09-15T10:00:00Z' }, collection('b', sources), lead,
     ]))
     const container = document.createElement('div'); root = createRoot(container)
-    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
     expect([...container.querySelectorAll('.pulse-title')].map(item => item.textContent)).toEqual(['Collection a', 'Collection fewer', 'Collection older', 'Collection b'])
     expect(container.querySelectorAll('.pulse-lead')).toHaveLength(1)
     const image = () => container.querySelector<HTMLImageElement>('.pulse-lead-image')
@@ -190,6 +193,25 @@ describe('Pulse collection size and catch-up', () => {
     expect(container.querySelector('.pulse-lead h2')?.textContent).toBe('Collection a')
   })
 
+  it('previews the newest three articles in the lead and one in each other collection', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    const sources = [2, 1, 4, 3].map(day => ({ ...source(String(day), day, day === 3), publishedAt: `2026-09-0${day}T12:00:00Z`,
+      isNew: day !== 3, development: `Excerpt ${day}` }))
+    vi.spyOn(api, 'pulse').mockResolvedValue(payload([collection('a', sources), collection('b', sources)]))
+    const open = vi.fn()
+    const container = document.createElement('div'); root = createRoot(container)
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} refreshKey={0} onBack={() => {}} onOpenEntry={open} onMarkRead={vi.fn()} notify={() => {}} />))
+    const [lead, compact] = container.querySelectorAll('.pulse-card')
+    expect(Array.from(lead.querySelectorAll('.pulse-story-title'), item => item.textContent)).toEqual(['Feature report 4', 'Feature report 3', 'Feature report 2'])
+    expect(lead.querySelector('.pulse-earlier')?.textContent).toBe('1 earlier article')
+    expect(compact.querySelectorAll('.pulse-source')).toHaveLength(1)
+    expect(compact.querySelector('.pulse-earlier')?.textContent).toBe('3 earlier articles')
+    expect(lead.querySelector('.is-new q')?.textContent).toBe('Excerpt 4')
+    expect(lead.querySelector('.is-read q')).toBeNull()
+    await act(async () => lead.querySelector<HTMLButtonElement>('.pulse-story')!.click())
+    expect(open).toHaveBeenCalledWith('4', expect.objectContaining({ ids: ['4', '3', '2', '1'] }))
+  })
+
   it('opens a digest link to its collection and shows supported excerpts and clear filtered counts', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
     const items = [{ ...source('1', 1), development: 'The new release adds offline maps.' }, source('2', 2, true), source('3', 3, true)]
@@ -197,7 +219,7 @@ describe('Pulse collection size and catch-up', () => {
     vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
     const open = vi.fn()
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} initialCollection="linked" feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={open} onMarkRead={vi.fn()} notify={() => {}} />))
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} initialCollection="linked" refreshKey={0} onBack={() => {}} onOpenEntry={open} onMarkRead={vi.fn()} notify={() => {}} />))
     expect(container.querySelector('.pulse-title')?.getAttribute('aria-expanded')).toBe('true')
     expect(container.querySelector('.pulse-catchup blockquote')?.textContent).toBe('The new release adds offline maps.')
     await act(async () => button(container.querySelector('.pulse-card') as HTMLElement, 'Unread 1').click())
