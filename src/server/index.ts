@@ -161,6 +161,12 @@ if (standalone) app.get('/feed-icons/:icon', (request, response) => {
   }).send(bytes)
 })
 
+// Shutdown ends event streams before it stops the services that notify them.
+// Writing to an ended response emits ERR_STREAM_WRITE_AFTER_END.
+function writeEvent(response: Response, chunk: string) {
+  if (!response.writableEnded && !response.destroyed) response.write(chunk)
+}
+
 // Article discussion has no subscription, read-state or publishing capabilities.
 app.get('/api/discussion', (request, response) => response.json({ discussion: discussions.get(String(request.query.entryId || '')), enabled: discussionEnabled(), provider: connectionSettings.discussionProvider() }))
 app.get('/api/discussion/events', (request, response) => {
@@ -170,10 +176,10 @@ app.get('/api/discussion/events', (request, response) => {
   response.flushHeaders()
   eventResponses.add(response)
   response.on('close', () => eventResponses.delete(response))
-  const send = (discussion: unknown) => response.write(`data: ${JSON.stringify(discussion)}\n\n`)
+  const send = (discussion: unknown) => writeEvent(response, `data: ${JSON.stringify(discussion)}\n\n`)
   const unsubscribe = discussions.subscribe(id, send)
   send(discussions.get(id))
-  const timer = setInterval(() => response.write(': keepalive\n\n'), 15000)
+  const timer = setInterval(() => writeEvent(response, ': keepalive\n\n'), 15000)
   response.on('close', () => { clearInterval(timer); unsubscribe() })
 })
 app.post('/api/discussion', asyncRoute(async (request, response) => {
@@ -302,18 +308,18 @@ app.get('/api/events', (request, response) => {
   response.flushHeaders()
   eventResponses.add(response)
   response.on('close', () => eventResponses.delete(response))
-  response.write('retry: 3000\n\n')
+  writeEvent(response, 'retry: 3000\n\n')
 
   const unsubscribe = synchronizer.onSyncCompleted(completedAt => {
-    response.write(`event: sync\ndata: ${JSON.stringify({ completedAt })}\n\n`)
+    writeEvent(response, `event: sync\ndata: ${JSON.stringify({ completedAt })}\n\n`)
   })
-  const unsubscribeState = synchronizer.onStateChanged(change => response.write(`event: state\ndata: ${JSON.stringify(change)}\n\n`))
-  const unsubscribePulse = pulse.onUpdated(() => { response.write('event: pulse\ndata: {}\n\n') })
-  const connectionsChanged = () => response.write('event: connections\ndata: {}\n\n')
+  const unsubscribeState = synchronizer.onStateChanged(change => writeEvent(response, `event: state\ndata: ${JSON.stringify(change)}\n\n`))
+  const unsubscribePulse = pulse.onUpdated(() => { writeEvent(response, 'event: pulse\ndata: {}\n\n') })
+  const connectionsChanged = () => writeEvent(response, 'event: connections\ndata: {}\n\n')
   connectionListeners.add(connectionsChanged)
-  const navigationChanged = () => response.write('event: navigation\ndata: {}\n\n')
+  const navigationChanged = () => writeEvent(response, 'event: navigation\ndata: {}\n\n')
   if (feedIcons) navigationListeners.add(navigationChanged)
-  const keepAlive = setInterval(() => response.write(': keep-alive\n\n'), 25_000)
+  const keepAlive = setInterval(() => writeEvent(response, ': keep-alive\n\n'), 25_000)
   keepAlive.unref()
   request.on('close', () => {
     clearInterval(keepAlive)

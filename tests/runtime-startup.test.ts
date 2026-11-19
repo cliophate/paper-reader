@@ -183,6 +183,24 @@ it('bounds remote search pages and resumes from the returned continuation', asyn
   }
 }, 15000)
 
+it('shuts down cleanly with Pulse on and an event stream open', async () => {
+  const number = await port()
+  const server = start('index', number, {
+    PAPER_AI_PROVIDER: 'openai', PAPER_OPENAI_API_KEY: 'synthetic-key', PAPER_OPENAI_BASE_URL: 'http://127.0.0.1:9/v1', PAPER_TRUSTED_AI_ORIGINS: 'http://127.0.0.1:9',
+  })
+  await ready(number)
+  expect((await (await fetch(`http://127.0.0.1:${number}/api/pulse`)).json()).status.enabled).toBe(true)
+  const events = http.get(`http://127.0.0.1:${number}/api/events`)
+  const [response] = await once(events, 'response') as [http.IncomingMessage]
+  response.resume()
+  // Pulse notifies its listeners while shutdown is disabling it, after the stream has ended.
+  server.child.kill('SIGTERM')
+  const { code, output } = await server.exited
+  events.destroy()
+  expect(output).not.toContain('ERR_STREAM_WRITE_AFTER_END')
+  expect(code).toBe(0)
+})
+
 it('returns 400 for unknown streams and invalid feed preview input', async () => {
   const fixture = http.createServer((_request, response) => response.end('<html><title>Website</title></html>')).listen(0, '127.0.0.1')
   await once(fixture, 'listening')
