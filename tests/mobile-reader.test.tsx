@@ -147,6 +147,8 @@ describe('mobile reader switching', () => {
     expect(container.textContent).toContain('Post 80')
   })
 
+  // About 85 key presses each re-render the reader. This checks behavior, so give
+  // it headroom on busy runners instead of the five-second default.
   it('keeps the reverse window on foreground Refresh, then Next enters the following feed', async () => {
     const feeds = ['instagram', 'tech'].map(id => feed(id, 0))
     vi.mocked(api.navigation).mockResolvedValue({ unread: 0, starred: 0, uncategorized: feeds, folders: [] })
@@ -179,7 +181,7 @@ describe('mobile reader switching', () => {
     expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 19')
     await key('j')
     expect(container.querySelector('.article-scroll h1')?.textContent).toContain('Post 20')
-  })
+  }, 20_000)
 
   it('starts a reordered stream from its first forward page after entering it backward', async () => {
     const feeds = ['instagram', 'tech'].map(id => feed(id, 0))
