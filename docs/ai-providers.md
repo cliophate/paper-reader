@@ -22,9 +22,9 @@ Completions and the feature's output format.
 | vLLM | `http://localhost:8000/v1` | The served model name |
 
 Paper has separate fields for discussion, headlines, grouping, briefing shortlist
-and briefing editor. Headline writing and review use the headlines model. Grouping
-and membership review use the grouping model. All batch results pass through the
-same feature validation as Codex, including source IDs and evidence checks.
+and briefing editor. Headline writing and review use the headlines model. Grouping,
+membership review and Pulse summaries use the grouping model. All batch results
+pass through the same feature validation as Codex, including source IDs and evidence checks.
 
 Test connection uses the form values without saving or enabling AI. It sends
 one short request using the discussion model, without an output limit, so

@@ -1066,6 +1066,39 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
 .pulse-filter-count button { border: 0; padding: 6px 0; background: none; color: var(--ink); font: inherit; text-decoration: underline; cursor: pointer; }
 .summary-square, .briefing-document > .briefing-story > p, .briefing-section .briefing-source-stories + p { position: relative; padding-inline-start: 1em; }
 .summary-square::before, .briefing-document > .briefing-story > p::before, .briefing-section .briefing-source-stories + p::before { content: ''; position: absolute; inset-inline-start: 0; top: .65em; width: 5px; height: 5px; background: var(--signal); }
+.pulse-summaries { display: grid; gap: 12px; margin-block-start: 18px; }
+.pulse-summary-header { display: flex; align-items: center; gap: 4px; }
+.pulse-summary-header h3 { margin: 0; font: 650 14px/1.4 var(--ui); }
+.pulse-summary-header h3 button, .pulse-summary-icon { display: flex; align-items: center; justify-content: center; gap: 4px; padding: 0; min-height: 28px; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; }
+.pulse-summary-header h3 svg { width: 11px; height: 11px; color: var(--muted); }
+.pulse-summary-header h3 button[aria-expanded='true'] svg { transform: rotate(90deg); }
+.pulse-summary-icon { width: 28px; color: var(--muted); font: 600 17px/1 var(--ui); }
+.pulse-summary-icon svg { width: 13px; height: 13px; }
+.pulse-summary-icon::-webkit-details-marker { display: none; }
+.pulse-summary-icon::marker { content: ''; }
+.pulse-summary-icon:hover, .pulse-collection-options[open] > .pulse-summary-icon { color: var(--ink); background: var(--hover); }
+.pulse-latest, .pulse-background { max-width: 45rem; margin: 3px 0 0; overflow-wrap: anywhere; }
+.pulse-latest { display: grid; gap: 4px; padding: 0; list-style: none; font: 400 15px/1.5 var(--ui); }
+.pulse-background { font: 400 15px/1.65 var(--reader-font); }
+.pulse-summary-info { margin: 0 0 4px; color: var(--muted); font: 400 12px/1.5 var(--ui); }
+.pulse-citations { display: inline-block; }
+.pulse-citations a { display: inline-block; padding-inline: 3px; color: var(--muted); font: 600 11px/1.5 var(--ui); text-decoration: underline; text-underline-offset: 2px; }
+.pulse-citations a:hover { color: var(--ink); }
+.pulse-collection-options { position: relative; }
+.pulse-article-tabs > .pulse-collection-options { margin-inline-start: auto; }
+.pulse-options-menu { position: absolute; z-index: 4; inset-block-start: calc(100% + 4px); width: min(280px, calc(100vw - 32px)); padding: 6px; display: grid; gap: 4px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-strong); box-shadow: var(--shadow); }
+.pulse-options-menu[data-opens-up='true'] { inset-block: auto calc(100% + 4px); }
+.pulse-options-menu button { min-height: 36px; padding: 6px 8px; border: 0; border-radius: 5px; color: var(--ink); background: var(--soft); text-align: start; font: 650 13px/1.4 var(--ui); cursor: pointer; }
+.pulse-options-menu button:hover { background: var(--hover); }
+.pulse-options-menu button:disabled { opacity: .6; cursor: default; }
+.pulse-options-menu button.primary { color: var(--accent-ink); background: var(--accent); }
+.pulse-options-menu form { min-width: 0; display: grid; gap: 4px; margin-top: 2px; padding: 6px 0 0; border-top: 1px solid var(--line); }
+.pulse-options-menu label { min-width: 0; display: grid; gap: 4px; padding: 0 8px; color: var(--muted); font-size: 12px; }
+.pulse-options-menu select { width: 100%; min-height: 36px; padding: 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-strong); color: var(--ink); font: inherit; }
+@media (max-width: 700px) {
+  .pulse-summary-icon { width: 32px; }
+  .pulse-summary-header h3 button, .pulse-summary-icon { min-height: 32px; }
+}
 
 .organization-bulk { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
 .organization-bulk > span { font-size: 12px; color: var(--muted); }

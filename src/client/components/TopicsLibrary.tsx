@@ -3,6 +3,7 @@ import { api } from '../api'
 import { acknowledgePulseVisit, refreshPulseState } from '../pulse'
 import type { PulseCollection, PulsePayload, PulseSource } from '../../shared/pulse'
 import { Icon } from './Icon'
+import { PulseCatchUp, PulseCollectionOptions } from './PulseCatchUp'
 
 type ArticleFilter = 'new' | 'unread' | 'read' | 'all'
 type CollectionFilter = 'unread' | 'active' | 'quiet' | 'small'
@@ -175,7 +176,8 @@ export function TopicsLibrary({ initialCollection, initialFilter, onCollectionCh
     rememberPulseReturn({ id: collection.id, filter: view.current.filter === 'new' ? 'unread' : view.current.filter,
       section: view.current.section, scroll: scroll.current?.scrollTop || 0 })
     const sourceFilter = view.current.expanded === collection.id ? view.current.filter : view.current.section === 'unread' ? 'unread' : 'all'
-    const ids = threadSources(collection, sourceFilter).map(source => source.id)
+    const sources = threadSources(collection, sourceFilter)
+    const ids = (sources.some(source => source.id === id) ? sources : threadSources(collection, 'all')).map(source => source.id)
     onOpenEntry(id, { id: collection.id, title: collection.headline, ids, linkNumber: collection.linkNumber })
   }
   const markRead = async (ids: string[]) => {
@@ -233,11 +235,11 @@ export function TopicsLibrary({ initialCollection, initialFilter, onCollectionCh
         {payload?.status.failed && <p className="pulse-notice" role="status">Grouping is delayed. Your saved collections are available; Paper will retry automatically.</p>}
         {payload && !payload.status.enabled && <p className="pulse-notice">Automatic grouping is paused. Saved collections are still available.</p>}
         <p className="visually-hidden">{section === 'small' ? 'Collections with fewer than three visible articles. Merge related collections or keep them here until more reporting arrives.' : section === 'unread' ? 'Collections with unread articles, including quiet collections.' : section === 'active' ? 'Collections with articles added in the last seven days, whether read or unread.' : 'No additions in seven days. Unread articles stay here, and new coverage can bring a collection back.'}</p>
-        {merging && <div className="topics-merge-notice"><span>Choose the collection that belongs with "{merging.headline}".</span><button onClick={() => setMergeFrom(null)}>Cancel</button></div>}
+        {merging && <div className="topics-merge-notice"><span>Open the collection that belongs with "{merging.headline}", then choose Merge into this collection.</span><button onClick={() => setMergeFrom(null)}>Cancel</button></div>}
         {!payload && !error && <div className="topics-state"><h2>Loading Pulse</h2></div>}
         {payload && !collections.length && <div className="topics-state"><h2>{section === 'small' ? 'No small collections' : section === 'unread' ? 'No unread collections' : section === 'quiet' ? 'No quiet collections yet' : payload.status.running ? 'Finding the connections' : 'No active collections yet'}</h2><p>{section === 'small' ? 'Collections reduced by filters or corrections remain recoverable here.' : section === 'unread' ? 'You have read every article in your collections. Browse Active or Quiet to revisit them.' : section === 'quiet' ? 'Older collections will remain here for later reading.' : 'Collections appear when several articles follow the same developing subject.'}</p></div>}
         {ordered.map(collection => <CollectionCard key={collection.id} collection={collection}
-          lead={collection === lead} now={now} unreadOnly={section === 'unread'}
+          lead={collection === lead} now={now} unreadOnly={section === 'unread'} summariesEnabled={Boolean(payload?.status.enabled)}
           expanded={expanded === collection.id} filter={filter} onExpand={next => showCollection(collection, next)} onCollapse={() => void closeCollection()}
           onOpenEntry={id => openArticle(id, collection)} onMarkRead={markRead} merging={Boolean(mergeFrom)} mergingThis={mergeFrom === collection.id}
           onMerge={() => mergeFrom && void saveFeedback('merge', mergeFrom, '', collection.id)} onStartMerge={() => setMergeFrom(collection.id)}
@@ -247,8 +249,8 @@ export function TopicsLibrary({ initialCollection, initialFilter, onCollectionCh
   </section>
 }
 
-function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, onExpand, onCollapse, onOpenEntry, onMarkRead, merging, mergingThis, onMerge, onStartMerge, onHide, onRemove }: {
-  collection: PulseCollection; lead: boolean; now: number; expanded: boolean; filter: ArticleFilter; unreadOnly: boolean
+function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, summariesEnabled, onExpand, onCollapse, onOpenEntry, onMarkRead, merging, mergingThis, onMerge, onStartMerge, onHide, onRemove }: {
+  collection: PulseCollection; lead: boolean; now: number; expanded: boolean; filter: ArticleFilter; unreadOnly: boolean; summariesEnabled: boolean
   onExpand: (filter: ArticleFilter) => Promise<void>; onCollapse: () => void; onOpenEntry: (id: string) => void
   onMarkRead: (ids: string[], expectedRevisions?: Record<string, number>) => Promise<boolean>; merging: boolean; mergingThis: boolean
   onMerge: () => void; onStartMerge: () => void; onHide: () => void; onRemove: (id: string) => void
@@ -268,6 +270,21 @@ function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, o
     try { await onMarkRead(unreadIds) } finally { setMarking(false) }
   }
   const listId = `pulse-${collection.id}`
+  const catchUp = expanded && summariesEnabled ? collection.catchUp : undefined
+  const newIds = new Set(catchUp ? collection.sources.filter(source => source.isNew).map(source => source.id) : [])
+  const latest = catchUp?.latest.filter(line => line.entryIds.every(id => newIds.has(id))) || []
+  const background = catchUp?.background || []
+  const hasCatchUp = latest.length > 0 || background.length > 0
+  const options = (label: string) => <PulseCollectionOptions label={label} name={`${listId}-options`} actions={() => <>
+    {merging && !mergingThis ? <button type="button" className="primary" onClick={onMerge}>Merge into this collection</button>
+      : <button type="button" disabled={mergingThis} onClick={onStartMerge}>Merge collection</button>}
+    <button type="button" onClick={onHide}>Hide collection</button>
+    <form onSubmit={event => {
+      event.preventDefault()
+      const id = new FormData(event.currentTarget).get('entryId')
+      if (typeof id === 'string' && collection.sources.some(source => source.id === id)) onRemove(id)
+    }}><label>Remove an article<select name="entryId" required defaultValue=""><option value="" disabled>Choose an article</option>{collection.sources.map(source => <option key={source.id} value={source.id}>{source.title}</option>)}</select></label><button type="submit">Remove article</button></form>
+  </>} />
   return <article className={`pulse-card ${lead ? 'pulse-lead' : ''}`}>
     <header className="pulse-card-header">
       <div><h2><button className="pulse-title" aria-expanded={expanded} aria-controls={listId} aria-describedby={`${listId}-count`} onClick={() => expanded ? onCollapse() : onExpand(unreadOnly ? 'unread' : 'all')}>{collection.headline}</button></h2>
@@ -280,28 +297,28 @@ function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, o
     </header>
     <div id={listId} ref={list} tabIndex={-1}>
       {expanded && <>
+        {hasCatchUp && <PulseCatchUp collection={collection} latest={latest} background={background} options={options} onOpenEntry={onOpenEntry} />}
         <div className="pulse-tabs pulse-article-tabs" role="group" aria-label={`Articles in ${collection.headline}`}>
           <button aria-pressed={filter === 'unread'} onClick={() => onExpand('unread')}>Unread <span>{collection.unreadCount}</span></button>
           <button aria-pressed={filter === 'read'} onClick={() => onExpand('read')}>Read <span>{collection.articleCount - collection.unreadCount}</span></button>
           <button aria-pressed={filter === 'new'} onClick={() => onExpand('new')}>New <span>{collection.newCount}</span></button>
           <button aria-pressed={filter === 'all'} onClick={() => onExpand('all')}>All <span>{collection.articleCount}</span></button>
+          {!hasCatchUp && options('Collection options')}
         </div>
         <p className="pulse-filter-count">{sources.length} {filter === 'all' ? 'of' : filter + ' of'} {collection.articleCount} articles · {collection.publicationCount} {collection.publicationCount === 1 ? 'publication' : 'publications'}
           {filter !== 'all' && <button onClick={() => onExpand('all')}>Show all</button>}
         </p>
       </>}
       {!sources.length && <p className="pulse-empty">{filter === 'new' ? 'No new articles since your last visit.' : filter === 'read' ? 'You have not read any articles in this collection yet.' : 'You have read every article in this collection.'}</p>}
-      <ol className="pulse-thread">{sources.map(source => <SourceRow key={source.id} source={source} now={now} onOpen={() => onOpenEntry(source.id)} onRemove={expanded ? () => onRemove(source.id) : undefined} />)}</ol>
+      <ol className="pulse-thread">{sources.map(source => <SourceRow key={source.id} source={source} now={now} onOpen={() => onOpenEntry(source.id)} showOriginal={expanded} />)}</ol>
     </div>
     {!expanded && <a className="pulse-earlier" href={collection.linkNumber ? `/collection/${collection.linkNumber}` : `/?view=pulse&collection=${encodeURIComponent(collection.id)}`} aria-controls={listId} aria-describedby={`${listId}-count`} onClick={event => {
       if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
       event.preventDefault()
       void onExpand('all').then(() => requestAnimationFrame(() => { list.current?.focus(); list.current?.scrollIntoView({ block: 'start' }) }))
     }}>{earlier ? `${earlier} earlier ${earlier === 1 ? 'article' : 'articles'}` : 'View collection'}</a>}
-    {(expanded || merging) && <div className="pulse-card-actions">
-      {expanded && <><button disabled={marking || !unreadIds.length} onClick={() => void markRead()}>{marking ? 'Marking read…' : `Mark ${unreadIds.length} unread as read`}</button><button onClick={onCollapse}>Close collection</button></>}
-      {merging && !mergingThis ? <button onClick={onMerge}>Merge into this collection</button> : <button disabled={mergingThis} onClick={onStartMerge}>{mergingThis ? 'Choose another collection' : 'Merge collection'}</button>}
-      <button onClick={onHide}>Hide collection</button>
+    {expanded && <div className="pulse-card-actions">
+      <button disabled={marking || !unreadIds.length} onClick={() => void markRead()}>{marking ? 'Marking read…' : `Mark ${unreadIds.length} unread as read`}</button><button onClick={onCollapse}>Close collection</button>
     </div>}
   </article>
 }
@@ -321,7 +338,7 @@ function threadSources(collection: PulseCollection, filter: ArticleFilter) {
     .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))
 }
 
-function SourceRow({ source, now, onOpen, onRemove }: { source: PulseSource; now: number; onOpen: () => void; onRemove?: () => void }) {
+function SourceRow({ source, now, onOpen, showOriginal }: { source: PulseSource; now: number; onOpen: () => void; showOriginal: boolean }) {
   return <li className={`pulse-source ${source.isNew ? 'is-new' : ''} ${source.read ? 'is-read' : ''}`}>
     <button className="pulse-story" onClick={onOpen}>
       <time dateTime={source.publishedAt} title={new Date(source.publishedAt).toLocaleString()}>{relativeTime(source.publishedAt, now)}</time>
@@ -330,8 +347,7 @@ function SourceRow({ source, now, onOpen, onRemove }: { source: PulseSource; now
         {source.isNew && source.development && <q>{source.development}</q>}
       </span>
     </button>
-    {onRemove && <div className="pulse-source-actions"><button onClick={onRemove} aria-label={`Remove ${source.title} from collection`} title="Does not belong in this collection"><Icon name="close" /></button>
-      <a href={source.url} target="_blank" rel="noreferrer" aria-label={`Open ${source.title} on ${source.domain}`} title="Open original"><Icon name="external" /></a></div>}
+    {showOriginal && <div className="pulse-source-actions"><a href={source.url} target="_blank" rel="noreferrer" aria-label={`Open ${source.title} on ${source.domain}`} title="Open original"><Icon name="external" /></a></div>}
   </li>
 }
 

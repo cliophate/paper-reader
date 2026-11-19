@@ -4,10 +4,13 @@ import type { Entry } from './types.js'
 import type { PulseCollection, PulsePayload } from '../shared/pulse.js'
 import { canonicalTopicUrl } from './topics.js'
 import { decodeHtmlText, plainText } from './text.js'
+import { generatePulseCatchUps, pulseCatchUpRevision, validatePulseCatchUp } from './pulse-catch-up.js'
 
 const DAY = 86_400_000
 const BATCH_SIZE = 120
 const CONTEXT_SIZE = 80
+const CATCH_UP_BATCH_SIZE = 4
+const CATCH_UP_RETRY_MS = 15 * 60_000
 export type PulseModel = (prompt: string, input: unknown, schema: Record<string, unknown>) => Promise<unknown>
 export interface PulseGroup { id: string; headline: string; scope: string; entryIds: string[]; developments?: Record<string, string> }
 
@@ -30,7 +33,7 @@ export const PULSE_SCHEMA: Record<string, unknown> = {
   },
 }
 
-export function pulseExtract(entry: Entry): string {
+export function pulseExtract(entry: Pick<Entry, 'contentHtml' | 'excerpt'>): string {
   return plainText(entry.contentHtml || entry.excerpt).replace(/\s+/g, ' ').slice(0, 2400)
 }
 const normalize = (text: string) => decodeHtmlText(text).normalize('NFKC').toLowerCase()
@@ -262,15 +265,17 @@ export class PulseService {
   private timer?: ReturnType<typeof setInterval>
   private failed = false
   private retryAfter = 0
+  private catchUpRetries = new Map<string, { revision: string; after: number }>()
   private listeners = new Set<() => void>()
 
   constructor(private readonly db: PaperDatabase, private readonly model: PulseModel, private enabled = true,
-    private readonly now: () => number = Date.now, private readonly reviewModel: PulseModel = model) { this.model = shortPulseReferences(model) }
+    private readonly now: () => number = Date.now, private readonly reviewModel: PulseModel = model,
+    private readonly catchUpModel: PulseModel = model) { this.model = shortPulseReferences(model) }
 
   setEnabled(enabled: boolean) {
     if (enabled === this.enabled) return
     this.enabled = enabled
-    if (enabled) { this.retryAfter = 0; this.start() } else this.stop()
+    if (enabled) { this.retryAfter = 0; this.catchUpRetries.clear(); this.start() } else this.stop()
     this.notify()
   }
 
@@ -286,8 +291,14 @@ export class PulseService {
 
   list(): PulsePayload {
     const { collections, collectionAliases } = correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now())
+    const saved = this.enabled ? this.db.pulseCatchUps() : undefined
+    for (const collection of collections) {
+      const summary = saved?.get(collection.id)?.summary
+      if (summary) collection.catchUp = validatePulseCatchUp(summary, new Map(collection.sources.map(source => [source.id, source])))
+    }
     const revision = crypto.createHash('sha1').update(JSON.stringify(collections.map(collection =>
-      [collection.id, collection.headline, collection.scope, collection.quiet, collection.sources.map(source => [source.id, source.sequence, source.development])]))).digest('hex')
+      [collection.id, collection.headline, collection.scope, collection.quiet, saved?.get(collection.id)?.revision,
+        collection.sources.map(source => [source.id, source.sequence, source.development])]))).digest('hex')
     return { collections, ...(collectionAliases.length ? { collectionAliases } : {}), revision, status: { enabled: this.enabled, running: Boolean(this.running),
       lastCompletedAt: this.db.getSyncValue('pulse_completed_at') || null, failed: this.failed } }
   }
@@ -319,15 +330,49 @@ export class PulseService {
 
   refresh(): Promise<void> {
     if (this.running) return this.running
-    if (!this.enabled || this.now() < this.retryAfter) return Promise.resolve()
-    this.running = this.run().catch(error => {
+    if (!this.enabled) return Promise.resolve()
+    this.running = (this.now() < this.retryAfter ? Promise.resolve() : this.run()).catch(error => {
       if (!this.enabled) return
       // Do not log model output or article data. A failed batch remains pending.
       this.failed = true
       this.retryAfter = this.now() + 15 * 60_000
       console.warn(`Pulse grouping delayed: ${safeFailureReason(error)}. Saved collections remain available.`)
+    }).then(() => this.refreshCatchUps()).catch(() => {
+      if (this.enabled) console.warn('Pulse summaries delayed. Saved summaries remain available.')
     }).finally(() => { this.running = null; this.notify() })
     return this.running
+  }
+
+  private async refreshCatchUps() {
+    if (!this.enabled) return
+    const saved = this.db.pulseCatchUps()
+    const { collections } = correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now())
+    const pending = collections.map(collection => ({ collection, revision: pulseCatchUpRevision(collection) }))
+      .filter(({ collection, revision }) => saved.get(collection.id)?.revision !== revision)
+    const pendingIds = new Set(pending.map(item => item.collection.id))
+    for (const id of this.catchUpRetries.keys()) if (!pendingIds.has(id)) this.catchUpRetries.delete(id)
+    const batch = pending.filter(({ collection, revision }) => {
+      const retry = this.catchUpRetries.get(collection.id)
+      return retry?.revision !== revision || retry.after <= this.now()
+    }).sort((a, b) => (this.catchUpRetries.get(a.collection.id)?.after || 0) - (this.catchUpRetries.get(b.collection.id)?.after || 0))
+      .slice(0, CATCH_UP_BATCH_SIZE)
+    if (!batch.length) return
+    for (const { collection, revision } of batch) this.catchUpRetries.set(collection.id, { revision, after: this.now() + CATCH_UP_RETRY_MS })
+
+    const summaries = await generatePulseCatchUps(this.catchUpModel, batch.map(item => item.collection), source => {
+      const entry = this.db.getArticle(source.url) || this.db.localEntry(source.id)
+      return entry ? pulseExtract(entry) : source.development || ''
+    })
+    if (!this.enabled || !summaries.size) return
+    // A correction can land while the model is working. Save only against the membership it saw.
+    const current = new Map(correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now()).collections
+      .filter(collection => summaries.has(collection.id)).map(collection => [collection.id, pulseCatchUpRevision(collection)]))
+    for (const { collection, revision } of batch) {
+      const summary = summaries.get(collection.id)
+      if (!summary || current.get(collection.id) !== revision) continue
+      this.db.savePulseCatchUp(collection.id, revision, summary)
+      this.catchUpRetries.delete(collection.id)
+    }
   }
 
   private async run() {

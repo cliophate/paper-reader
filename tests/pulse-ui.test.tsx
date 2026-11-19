@@ -140,6 +140,24 @@ describe('Pulse visit and update interface', () => {
 })
 
 describe('Pulse collection size and catch-up', () => {
+  it('shows the thread excerpt and collection options when AI is disabled', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    const item = collection('disabled', [{ ...source('1', 1), development: 'The trial adds a second route.' }, source('2', 2), source('3', 3)])
+    const initial = payload([{ ...item, catchUp: { latest: [{ text: 'A second route has opened.', entryIds: ['1'] }], background: [] } }])
+    vi.spyOn(api, 'pulse').mockResolvedValue({ ...initial, status: { ...initial.status, enabled: false } })
+    vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
+    const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} initialCollection="disabled" feedIcons={new Map()} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
+    expect(container.querySelector('.pulse-summaries')).toBeNull()
+    expect(container.querySelector('.pulse-thread q')?.textContent).toBe('The trial adds a second route.')
+    const menu = container.querySelector<HTMLDetailsElement>('.pulse-article-tabs .pulse-collection-options')!
+    expect(menu.querySelector('summary')?.getAttribute('aria-label')).toBe('Collection options')
+    await act(async () => { menu.open = true; menu.dispatchEvent(new Event('toggle')) })
+    expect(button(container, 'Merge collection').closest('.pulse-options-menu')).not.toBeNull()
+    expect(button(container, 'Hide collection').closest('.pulse-options-menu')).not.toBeNull()
+    expect(button(container, 'Remove article').closest('.pulse-options-menu')).not.toBeNull()
+  })
+
   it('keeps singletons out of the main overview but available in Small', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
     vi.spyOn(api, 'pulse').mockResolvedValue(payload([collection('small', [source('solo', 1)]), collection('full', [source('1', 2), source('2', 3, true), source('3', 4, true)])]))

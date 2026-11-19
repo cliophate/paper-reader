@@ -1,9 +1,10 @@
 import type { SVGProps } from 'react'
 
 // Feather 4.29.2, MIT. See licenses/feather/LICENSE and docs/provenance.md.
-type IconName = 'archive' | 'back' | 'bookmark' | 'check' | 'chevron' | 'close' | 'copy' | 'discussion' | 'edit' | 'external' | 'feed' | 'folder' | 'moon' | 'plus' | 'reader' | 'refresh' | 'report' | 'search' | 'settings' | 'star' | 'sun' | 'topics'
+type IconName = 'archive' | 'back' | 'bookmark' | 'check' | 'chevron' | 'close' | 'copy' | 'discussion' | 'edit' | 'external' | 'feed' | 'folder' | 'info' | 'moon' | 'plus' | 'reader' | 'refresh' | 'report' | 'search' | 'settings' | 'star' | 'sun' | 'topics'
 
 const paths: Record<IconName, React.ReactNode> = {
+  info: <><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></>,
   archive: <><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></>,
   back: <><polyline points="15 18 9 12 15 6"/></>,
   bookmark: <><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></>,

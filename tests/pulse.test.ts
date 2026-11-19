@@ -4,14 +4,15 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db'
 import { PulseService as RealPulseService, type PulseModel, reviewPulseGroups, duplicatePulseArticle, pulseExtract, validatePulseGroups, validatePulseBatch, shortPulseReferences } from '../src/server/pulse'
+import { PULSE_CATCH_UP_PROMPT, validatePulseCatchUp } from '../src/server/pulse-catch-up'
 import { TopicService } from '../src/server/topics'
 import { PaperRepository } from '../src/server/repository'
 import type { Entry } from '../src/server/types'
 
 const acceptReview: PulseModel = async (_prompt, input) => ({ decisions: (input as { articles: Array<{ id: string }> }).articles.map(entry => ({ entryId: entry.id, relevant: true, duplicateOf: '', excerpt: '' })) })
 class PulseService extends RealPulseService {
-  constructor(db: PaperDatabase, model: PulseModel, enabled = true, now: () => number = Date.now) {
-    super(db, model, enabled, now, acceptReview)
+  constructor(db: PaperDatabase, model: PulseModel, enabled = true, now: () => number = Date.now, catchUpModel: PulseModel = async () => ({ collections: [] })) {
+    super(db, model, enabled, now, acceptReview, catchUpModel)
   }
 }
 
@@ -33,6 +34,165 @@ function save(entries: Entry[], id = 'collection-one') {
   db.upsertEntries(entries)
   db.savePulseBatch([{ id, headline: 'Orion 9', scope: 'The Orion 9 release and its features.', entryIds: entries.map(entry => entry.id) }], entries.map(entry => entry.id), new Date(now).toISOString())
 }
+
+type CatchUpInput = { collections: Array<{ collectionId: string; articles: Array<{ id: string; title: string; isNew: boolean }> }> }
+function catchUpResponse(input: CatchUpInput) {
+  return { collections: input.collections.map(collection => ({
+    collectionId: collection.collectionId,
+    latest: collection.articles.filter(entry => entry.isNew).slice(0, 2).map(entry => ({ text: entry.title, entryIds: [entry.id] })),
+    background: [{ text: 'The release follows a public trial.', entryIds: [collection.articles.at(-1)!.id] }],
+  })) }
+}
+
+describe('cited Pulse catch-up', () => {
+  it('drops the whole line when any citation is foreign, missing or invalid', () => {
+    const articles = new Map([['a1', { id: 'new', isNew: true }], ['a2', { id: 'older', isNew: false }]])
+    expect(validatePulseCatchUp({
+      latest: [
+        { text: 'Foreign source.', entryIds: ['a1', 'a3'] },
+        { text: 'Missing citations.' },
+        { text: 'No citations.', entryIds: [] },
+        { text: 'Invalid ID.', entryIds: ['a1', 2] },
+        { text: 'Old news.', entryIds: ['a2'] },
+        { text: 'New routes opened.', entryIds: ['a1', 'a1'] },
+      ],
+      background: [
+        { text: 'Unsupported context.', entryIds: ['a3'] },
+        { text: 'The pilot began in May.', entryIds: ['a2'] },
+      ],
+    }, articles)).toEqual({
+      latest: [{ text: 'New routes opened.', entryIds: ['new'] }],
+      background: [{ text: 'The pilot began in May.', entryIds: ['older'] }],
+    })
+    expect(validatePulseCatchUp({ latest: [], background: [] }, articles)).toBeUndefined()
+    expect(validatePulseCatchUp(null, articles)).toBeUndefined()
+  })
+
+  it('refreshes after additions, removals and merges, while visits and read state only change what is shown', async () => {
+    save(['1', '2', '3'].map(id => article(id)))
+    const model = vi.fn(async (_prompt: string, input: unknown) => catchUpResponse(input as CatchUpInput))
+    const service = new PulseService(db, vi.fn(), true, () => now, model)
+    const before = service.list().revision
+    await service.refresh()
+    const initial = service.list().collections[0]
+    expect(initial.catchUp?.latest).toHaveLength(2)
+    expect(initial.catchUp?.latest[0].entryIds).toEqual(['3'])
+    expect(service.list().revision).not.toBe(before)
+    expect(model.mock.calls[0][0]).toBe(PULSE_CATCH_UP_PROMPT)
+    expect((model.mock.calls[0][1] as CatchUpInput).collections[0].articles[0]).toMatchObject({ id: 'a1', isNew: true })
+
+    service.visit(initial.id, initial.revision)
+    db.upsertEntries([article('3', undefined, { read: true })])
+    await service.refresh()
+    expect(model).toHaveBeenCalledOnce()
+    expect(service.list().collections[0].catchUp).toEqual({ latest: [], background: initial.catchUp?.background })
+
+    save([article('4')])
+    await service.refresh()
+    const updated = service.list().collections[0]
+    expect(updated.catchUp?.latest.map(line => line.entryIds)).toEqual([['4']])
+    expect((model.mock.calls[1][1] as CatchUpInput).collections[0].articles.map(entry => entry.isNew)).toEqual([true, false, false, false])
+    const corrected = service.feedback({ action: 'not_same', clusterId: initial.id, entryId: '2' })
+    await service.refresh()
+    expect(service.list().collections[0].revision).toBe(updated.revision)
+    expect(model).toHaveBeenCalledTimes(3)
+    expect(service.removeFeedback(corrected.id)).toBe(true)
+    await service.refresh()
+    expect(model).toHaveBeenCalledTimes(4)
+
+    save(['5', '6', '7'].map(id => article(id)), 'collection-two')
+    await service.refresh()
+    const target = service.list().collections.find(item => item.id === 'collection-two')!
+    service.feedback({ action: 'merge', clusterId: initial.id, targetClusterId: target.id })
+    await service.refresh()
+    expect(model).toHaveBeenCalledTimes(6)
+    expect(service.list().collections[0]).toMatchObject({ id: target.id, revision: target.revision, articleCount: 7 })
+    expect((model.mock.calls[5][1] as CatchUpInput).collections[0].articles).toHaveLength(7)
+  })
+
+  it('keeps the last good summary across an empty reply, provider failure and restart', async () => {
+    save(['1', '2', '3'].map(id => article(id)))
+    const model = vi.fn(async (_prompt: string, input: unknown) => catchUpResponse(input as CatchUpInput))
+    const service = new PulseService(db, vi.fn(), true, () => now, model)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await service.refresh()
+      const saved = db.pulseCatchUps().get('collection-one')
+      expect(saved?.summary.latest).toHaveLength(2)
+      save([article('4')])
+      model.mockResolvedValueOnce({ collections: [] })
+      await service.refresh()
+      expect(db.pulseCatchUps().get('collection-one')).toEqual(saved)
+      expect(service.list().collections[0].catchUp).toEqual(saved?.summary)
+      await service.refresh()
+      expect(model).toHaveBeenCalledTimes(2)
+      now += 16 * 60_000
+      model.mockRejectedValueOnce(new Error('Fixture provider unavailable'))
+      await service.refresh()
+      expect(db.pulseCatchUps().get('collection-one')).toEqual(saved)
+      service.feedback({ action: 'not_same', clusterId: 'collection-one', entryId: '3' })
+      expect(service.list().collections[0].catchUp?.latest.map(line => line.entryIds)).toEqual([['2']])
+      db.close()
+      db = new PaperDatabase(path.join(directory, 'paper.sqlite'))
+      const reopened = new PulseService(db, vi.fn(), false, () => now, model)
+      await reopened.refresh()
+      expect(model).toHaveBeenCalledTimes(3)
+      expect(reopened.list().collections[0].catchUp).toBeUndefined()
+      expect(db.pulseCatchUps().get('collection-one')).toEqual(saved)
+    } finally { warn.mockRestore() }
+  })
+
+  it('bounds each model request and keeps short article references unique across collections', async () => {
+    for (const prefix of ['a', 'b', 'c', 'd', 'e']) save([1, 2, 3].map(id => article(prefix + id)), 'collection-' + prefix)
+    const model = vi.fn(async (_prompt: string, input: unknown) => {
+      const batch = input as CatchUpInput
+      const reply = catchUpResponse(batch)
+      if (batch.collections.length > 1) reply.collections[0].latest[0].entryIds.push(batch.collections[1].articles[0].id)
+      return reply
+    })
+    const service = new PulseService(db, vi.fn(), true, () => now, model)
+    await service.refresh()
+    expect(model).toHaveBeenCalledOnce()
+    expect((model.mock.calls[0][1] as CatchUpInput).collections).toHaveLength(4)
+    expect(service.list().collections[0].catchUp?.latest).toHaveLength(1)
+    await service.refresh()
+    expect((model.mock.calls[1][1] as CatchUpInput).collections).toHaveLength(1)
+    expect(db.pulseCatchUps().size).toBe(5)
+  })
+
+  it('discards a response when a correction lands before it can be saved', async () => {
+    save(['1', '2', '3'].map(id => article(id)))
+    let finish!: () => void
+    let started!: () => void
+    const requested = new Promise<void>(resolve => { started = resolve })
+    const model = vi.fn((_prompt: string, input: unknown) => new Promise(resolve => {
+      finish = () => resolve(catchUpResponse(input as CatchUpInput))
+      started()
+    }))
+    const service = new PulseService(db, vi.fn(), true, () => now, model)
+    const running = service.refresh()
+    await requested
+    expect(model).toHaveBeenCalledOnce()
+    service.feedback({ action: 'not_same', clusterId: 'collection-one', entryId: '2' })
+    finish()
+    await running
+    expect(db.pulseCatchUps().size).toBe(0)
+  })
+
+  it('migrates v18 without changing the collection membership or visits', () => {
+    save(['1', '2', '3'].map(id => article(id)))
+    db.visitPulseCollection('collection-one', 2)
+    db.greaderDatabase.exec('DROP TABLE pulse_catch_ups; PRAGMA user_version = 18')
+    db.close()
+    const file = path.join(directory, 'paper.sqlite')
+    db = new PaperDatabase(file)
+    expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(19)
+    expect(fs.statSync(file + '.before-pulse-catch-ups-v19').mode & 0o777).toBe(0o600)
+    expect(db.pulseCatchUps().size).toBe(0)
+    const service = new PulseService(db, vi.fn(), true, () => now)
+    expect(service.list().collections[0]).toMatchObject({ articleCount: 3, newCount: 1, seenThrough: 2 })
+  })
+})
 
 describe('continuing Pulse collections', () => {
   it('stops before review and further batches when disabled during grouping', async () => {

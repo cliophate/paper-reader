@@ -25,6 +25,10 @@ bookmarks and nested offline routes.
 and the first-deletion backup. The smoke suite also deletes 100,000 of 200,000
 synthetic articles while checking the existing two-second health limit.
 
+Schema v19 adds saved Pulse summaries keyed by collection and membership
+revision. Existing collections and visits are preserved. The migration makes a
+`paper.sqlite.before-pulse-catch-ups-v19` backup before upgrading.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh
