@@ -25,23 +25,36 @@ export function renderBriefing(input: RenderInput): { subject: string; html: str
   }).format(input.cutoff)
 
   const orderedNews = [...input.selection.news].sort((a, b) => Number(b.role === 'lead') - Number(a.role === 'lead'))
-  const newsHtml = orderedNews.map((topic, index) => {
-    const sources = topic.entryIds.map(id => input.entries.get(id)).filter((entry): entry is Entry => Boolean(entry))
-    const background = (topic.backgroundEntryIds || []).map(id => input.entries.get(id)).filter((entry): entry is Entry => Boolean(entry))
-    const collectionUrl = topic.collectionId ? new URL(`/?view=pulse&collection=${encodeURIComponent(topic.collectionId)}`, input.confirmUrl).href : ''
-    const lead = topic.role === 'lead' || (!input.selection.news.some(item => item.role === 'lead') && index === 0)
-    const imageEntry = topic.imageEntryId ? input.entries.get(topic.imageEntryId) : null
-    const image = imageEntry ? safeImageUrl(imageEntry.thumbnailUrl) : ''
+  const news = orderedNews.map((topic, index) => {
+    const cited = new Set(topic.entryIds)
+    const context = new Set((topic.backgroundEntryIds || []).filter(id => !cited.has(id)))
+    const entriesFor = (ids: Set<string>) => [...ids].map(id => input.entries.get(id)).filter((entry): entry is Entry => Boolean(entry))
+    const bullets = topic.role === 'lead' ? [] : topic.bullets || []
+    const lead = topic.role === 'lead' || (index === 0 && !bullets.length)
+    const collectionUrl = topic.collectionId ? new URL(`/pulse?collection=${encodeURIComponent(topic.collectionId)}&filter=new`, input.confirmUrl).href : ''
+    return {
+      topic, lead, bullets, collectionUrl,
+      sourceId: `briefing-news-${index + 1}-sources`,
+      sources: entriesFor(cited),
+      background: entriesFor(context),
+      sourceLabel: `Based on ${cited.size} ${cited.size === 1 ? 'source' : 'sources'}`,
+      backgroundLabel: context.size ? `${context.size} background ${context.size === 1 ? 'source' : 'sources'}` : '',
+    }
+  })
+  const newsHtml = news.map(({ topic, lead, bullets, collectionUrl, sourceId, sources, background, sourceLabel, backgroundLabel }) => {
+    const image = !bullets.length ? safeImageUrl(input.entries.get(topic.imageEntryId || '')?.thumbnailUrl || '') : ''
+    const imageHtml = image ? `<img src="${escapeHtml(image)}" alt="" width="680" style="display:block;width:100%;height:auto;max-height:440px;object-fit:cover;border-radius:12px;margin:0 0 18px">` : ''
     return `
       <section style="margin:0 0 ${lead ? '46px' : '34px'}">
         ${lead ? '<p style="font-size:11px;font-weight:800;letter-spacing:.15em;text-transform:uppercase;margin:0 0 10px;color:#77766f">Lead story</p>' : ''}
+        ${lead ? imageHtml : ''}
         <h2 class="${lead ? 'paper-lead-title' : 'paper-brief-title'}" style="font-size:${lead ? '32px' : '23px'};line-height:${lead ? '1.08' : '1.2'};letter-spacing:-0.025em;margin:0 0 12px;color:#171714">${escapeHtml(emailText(topic.headline))}</h2>
-        ${image ? `<img src="${escapeHtml(image)}" alt="" width="680" style="display:block;width:100%;height:auto;max-height:440px;object-fit:cover;border-radius:12px;margin:18px 0 18px;background:#e7e5df">` : ''}
-        <p style="font-size:${lead ? '18px' : '16px'};line-height:1.58;margin:0 0 18px;color:#4d4c47">${escapeHtml(emailText(topic.summary))}</p>
-        <div style="border-left:2px solid #deddd7;padding-left:15px">
-          ${sources.map(source => sourceLink(source)).join('')}
-          ${background.length ? `<p style="font-size:12px;color:#77766f">Background, kept separate from articles marked read</p>${background.map(source => sourceLink(source)).join('')}` : ''}
-        </div>
+        ${lead ? '' : imageHtml}
+        ${bullets.length ? bulletTable(bullets) : `<p style="font-size:${lead ? '18px' : '16px'};line-height:1.58;margin:0 0 18px;color:#4d4c47">${escapeHtml(emailText(topic.summary))}</p>`}
+        <p style="font-size:13px;color:#55544e;margin:0 0 10px">${sources.length ? `<a href="#${sourceId}" style="color:#55544e">${sourceLabel}</a>` : sourceLabel}</p>
+        ${sources.length ? `<div id="${sourceId}" style="border-left:2px solid #deddd7;padding-left:15px">${sources.map(sourceLink).join('')}</div>` : ''}
+        ${backgroundLabel ? `<p style="font-size:13px;color:#55544e;margin:12px 0 10px">${background.length ? `<a href="#${sourceId}-background" style="color:#55544e">${backgroundLabel}</a>` : backgroundLabel}</p>` : ''}
+        ${background.length ? `<div id="${sourceId}-background" style="border-left:2px solid #deddd7;padding-left:15px">${background.map(sourceLink).join('')}</div>` : ''}
         ${collectionUrl ? `<p><a href="${escapeHtml(collectionUrl)}" style="color:#55544e">Follow this story in Pulse</a></p>` : ''}
       </section>`
   }).join('')
@@ -114,13 +127,12 @@ export function renderBriefing(input: RenderInput): { subject: string; html: str
 
   const textParts = [`Paper ${input.kind} briefing`, date]
   if (input.selection.intro) textParts.push('', emailText(input.selection.intro))
-  for (const topic of orderedNews) {
-    textParts.push('', emailText(topic.headline), emailText(topic.summary))
-    if (topic.collectionId) textParts.push(`Follow this story in Pulse: ${new URL(`/?view=pulse&collection=${encodeURIComponent(topic.collectionId)}`, input.confirmUrl).href}`)
-    for (const id of [...topic.entryIds, ...(topic.backgroundEntryIds || [])]) {
-      const entry = input.entries.get(id)
-      if (entry) textParts.push(`${topic.backgroundEntryIds?.includes(id) ? 'Background: ' : ''}${emailText(entry.title)} | ${entry.url}`)
-    }
+  for (const { topic, bullets, collectionUrl, sources, background, sourceLabel, backgroundLabel } of news) {
+    textParts.push('', emailText(topic.headline), ...(bullets.length ? bullets.map(emailText) : [emailText(topic.summary)]), sourceLabel)
+    for (const entry of sources) textParts.push(`${emailText(entry.title)} | ${entry.url}`)
+    if (backgroundLabel) textParts.push(backgroundLabel)
+    for (const entry of background) textParts.push(`Background: ${emailText(entry.title)} | ${entry.url}`)
+    if (collectionUrl) textParts.push(`Follow this story in Pulse: ${collectionUrl}`)
   }
   if (input.selection.worthNoticing.length) textParts.push('', 'Worth noticing')
   for (const item of input.selection.worthNoticing) {
@@ -136,11 +148,17 @@ export function renderBriefing(input: RenderInput): { subject: string; html: str
   return { subject, html, text: textParts.join('\n') }
 }
 
+function bulletTable(bullets: string[]): string {
+  return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 12px">${bullets.map(line => `
+    <tr><td aria-hidden="true" valign="top" width="16" style="color:#a43b31;font-size:9px;line-height:24px">&#9632;</td>
+    <td valign="top" style="color:#4d4c47;font-size:16px;line-height:24px;padding:0 0 6px">${escapeHtml(emailText(line))}</td></tr>`).join('')}</table>`
+}
+
 function sourceLink(entry: Entry): string {
   return `<p style="font-size:15px;line-height:1.4;margin:0 0 9px"><a href="${escapeHtml(entry.url)}" style="color:#171714;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px">${escapeHtml(emailText(entry.title))}</a> <span style="color:#8a8982">${escapeHtml(emailText(entry.feedTitle))}</span></p>`
 }
 
-function safeImageUrl(value: string): string {
+export function safeImageUrl(value: string): string {
   try {
     const url = new URL(value)
     return ['http:', 'https:'].includes(url.protocol) ? url.href : ''

@@ -140,8 +140,13 @@ describe('continuing Pulse collections', () => {
     try {
       service.feedback({ action: 'merge', clusterId: 'collection-a', targetClusterId: 'collection-b' })
       service.feedback({ action: 'merge', clusterId: 'collection-b', targetClusterId: 'collection-c' })
-      expect(service.list().collections).toHaveLength(1)
-      expect(service.list().collections[0]).toMatchObject({ id: 'collection-c', articleCount: 9 })
+      const merged = service.list()
+      expect(merged.collections).toHaveLength(1)
+      expect(merged.collections[0]).toMatchObject({ id: 'collection-c', articleCount: 9 })
+      expect(merged.collectionAliases).toEqual(expect.arrayContaining(['collection-a', 'collection-b'].map(id =>
+        ({ id, linkNumber: db.linkNumber('collection', id), targetId: 'collection-c' }))))
+      service.feedback({ action: 'not_useful', clusterId: 'collection-c' })
+      expect(service.list().collectionAliases).toBeUndefined()
     } finally { clock.useRealTimers() }
   })
 

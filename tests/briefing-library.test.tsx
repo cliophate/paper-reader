@@ -116,6 +116,34 @@ describe('briefing web flow', () => {
     expect(open).toHaveBeenCalledWith('one')
   })
 
+  it('keeps the lead image above the copy and links counts to each source list', async () => {
+    const lead = detail.selection.news[0]
+    lead.imageEntryId = 'one'
+    lead.collectionId = 'collection-library'
+    lead.backgroundEntryIds = ['two', 'background']
+    detail.sources[0].thumbnailUrl = 'https://example.test/library.png'
+    detail.selection.news.push({ role: 'brief', headline: 'Library hours', summary: '', entryIds: ['two'], bullets: ['The library opens at nine.', 'It closes at five.'] })
+    await render()
+    const image = container.querySelector('.briefing-story.is-lead img')!
+    expect(image.nextElementSibling?.textContent).toBe(lead.headline)
+    expect(image.nextElementSibling?.nextElementSibling?.textContent).toBe(lead.summary)
+    const countLink = container.querySelector<HTMLAnchorElement>('a[href="#briefing-news-1-sources"]')!
+    expect(countLink.textContent).toBe('Based on 2 sources')
+    expect(container.querySelectorAll(`${countLink.hash} li`)).toHaveLength(2)
+    expect(container.querySelector('a[href="#briefing-news-1-sources-background"]')?.textContent).toBe('1 background source')
+    expect(container.querySelector('a[href^="/pulse"]')?.getAttribute('href')).toBe('/pulse?collection=collection-library&filter=new')
+    expect([...container.querySelectorAll('.briefing-bullets li')].map(line => line.textContent)).toEqual(['The library opens at nine.', 'It closes at five.'])
+    image.dispatchEvent(new Event('error'))
+    expect(image.hasAttribute('hidden')).toBe(true)
+  })
+
+  it('shows the prose in an old briefing with no image or collection', async () => {
+    await render()
+    const lead = container.querySelector('.briefing-story.is-lead')!
+    expect(lead.querySelector('img, .briefing-bullets, .briefing-pulse-link')).toBeNull()
+    expect(lead.querySelector('p')?.textContent).toBe(detail.selection.news[0].summary)
+  })
+
   it('does not let an earlier background fetch overwrite a successful read confirmation', async () => {
     await render()
     let finishList!: (items: BriefingDetail[]) => void

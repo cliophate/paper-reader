@@ -1,10 +1,12 @@
 import type { Entry, NavigationPayload, StreamKind, StreamRef } from './types'
+import type { PulsePayload } from '../shared/pulse'
 
 export type MobilePane = 'sources' | 'stories' | 'article'
 
 export interface ReaderLocation {
   articleNumber?: number
   collectionNumber?: number
+  collectionFilter?: 'new'
   view: 'reader' | 'briefings' | 'pulse'
   stream: StreamRef
   selectedId: string
@@ -46,6 +48,7 @@ export interface ReaderLinks {
   navigation?: NavigationPayload | null
   entries?: Entry[]
   collections?: Array<{ id: string; linkNumber?: number; headline: string; sources: Array<{ id: string }> }>
+  collectionAliases?: PulsePayload['collectionAliases']
 }
 
 const oldParameters = ['kind', 'id', 'title', 'entry', 'view', 'collection', 'library', 'searchKind', 'searchId', 'searchTitle', 'searchUnread']
@@ -79,8 +82,10 @@ export function readReaderLocation(input = window.location.pathname + window.loc
     if (place === 'starred') location.stream = { kind: 'starred', id: 'starred', title: 'Starred' }
     else if (place === 'recent' || place === 'offline') location.library = place
     else location.view = place as 'briefings' | 'pulse'
+    if (place === 'pulse') location.collection = params.get('collection') || undefined
     if (parts.length === 3 && parts[1] === 'a' && location.view === 'reader') location.articleNumber = number(parts[2])
   }
+  if (location.view === 'pulse' && (location.collection || location.collectionNumber) && params.get('filter') === 'new') location.collectionFilter = 'new'
   location.mobilePane = params.has('pane') ? validPane(params.get('pane')) : location.articleNumber ? 'article' : 'sources'
   const scope = params.get('in')?.split('/')
   if (scope?.length === 2 && ['feed', 'folder'].includes(scope[0]) && number(scope[1])) {
@@ -111,11 +116,20 @@ export async function resolveReaderLocation(input: ReaderLocation, links: Reader
     location.searchStream = linkedStream(input.searchStream, links)
     if (!location.searchStream) notice = 'Search source not found'
   }
-  const collection = input.collection || input.collectionNumber
-    ? links.collections?.find(item => input.collection ? item.id === input.collection : item.linkNumber === input.collectionNumber) : undefined
+  const matchesCollection = (item: { id: string; linkNumber?: number }) => input.collection ? item.id === input.collection : item.linkNumber === input.collectionNumber
+  let collection: NonNullable<ReaderLinks['collections']>[number] | undefined
   if (input.collection || input.collectionNumber) {
+    const targetId = links.collectionAliases?.find(matchesCollection)?.targetId
+    collection = links.collections?.find(item => targetId ? item.id === targetId : matchesCollection(item))
     if (collection) { location.collection = collection.id; location.collectionNumber = collection.linkNumber }
-    else { notice = 'Collection not found'; location.collection = undefined; location.collectionNumber = undefined; location.view = 'reader' }
+    else {
+      const keepPulseOpen = input.view === 'pulse' && (input.collectionFilter === 'new' || Boolean(input.collection))
+      notice = keepPulseOpen ? 'This collection is no longer available.' : 'Collection not found'
+      location.collection = undefined
+      location.collectionNumber = undefined
+      location.collectionFilter = undefined
+      location.view = keepPulseOpen ? 'pulse' : 'reader'
+    }
   }
   const entry = input.articleNumber
     ? links.entries?.find(item => item.linkNumber === input.articleNumber) || await fetchEntry(input.articleNumber)
@@ -149,6 +163,10 @@ export function readerLocationUrl(location: ReaderLocation, links: ReaderLinks =
     path = `/${stream.kind === 'feed' ? 'feed' : 'folder'}/${stream.linkNumber}${slug ? `/${slug}` : ''}`
   }
   if (articleNumber && location.view === 'reader') path = `${path === '/' ? '' : path}/a/${articleNumber}`
+  if (location.view === 'pulse' && (location.collection || collectionNumber)) {
+    if (!collectionNumber && location.collection) params.set('collection', location.collection)
+    if (location.collectionFilter) params.set('filter', location.collectionFilter)
+  }
   if (location.query && location.searchUnread) params.set('unread', '1')
   else if (!location.unreadOnly) params.set('unread', '0')
   if (location.query) {

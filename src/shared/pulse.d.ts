@@ -36,6 +36,7 @@ export interface PulseCollection {
 
 export interface PulsePayload {
   collections: PulseCollection[]
+  collectionAliases?: Array<{ id: string; linkNumber?: number; targetId: string }>
   revision: string
   status: {
     enabled: boolean

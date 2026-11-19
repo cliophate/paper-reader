@@ -5,6 +5,7 @@ export interface BriefingSelection {
     backgroundEntryIds?: string[]
     headline: string
     summary: string
+    bullets?: string[]
     entryIds: string[]
     role?: 'lead' | 'brief'
     imageEntryId?: string

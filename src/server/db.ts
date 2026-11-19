@@ -1042,7 +1042,7 @@ export class PaperDatabase {
   previousPulseBriefings(collectionId: string): Array<{ headline: string; summary: string; deliveredAt: string }> {
     const rows = this.db.prepare("SELECT selection_json, delivered_at FROM briefings WHERE status IN ('delivered', 'acknowledged') ORDER BY cutoff DESC LIMIT 30").all()
     return rows.flatMap(row => (JSON.parse(String(row.selection_json)) as BriefingSelection).news
-      .filter(item => item.collectionId === collectionId).map(item => ({ headline: item.headline, summary: item.summary, deliveredAt: String(row.delivered_at) }))).slice(0, 3)
+      .filter(item => item.collectionId === collectionId).map(item => ({ headline: item.headline, summary: item.bullets?.length ? item.bullets.join('\n') : item.summary, deliveredAt: String(row.delivered_at) }))).slice(0, 3)
   }
 
   savePulseBatch(groups: Array<{ id: string; headline: string; scope: string; entryIds: string[]; developments?: Record<string, string> }>, scannedIds: string[], now: string) {
