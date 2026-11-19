@@ -221,7 +221,7 @@ describe('Pulse collection size and catch-up', () => {
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
     await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} initialCollection="linked" refreshKey={0} onBack={() => {}} onOpenEntry={open} onMarkRead={vi.fn()} notify={() => {}} />))
     expect(container.querySelector('.pulse-title')?.getAttribute('aria-expanded')).toBe('true')
-    expect(container.querySelector('.pulse-catchup blockquote')?.textContent).toBe('The new release adds offline maps.')
+    expect(container.querySelector('.pulse-story q')?.textContent).toBe('The new release adds offline maps.')
     await act(async () => button(container.querySelector('.pulse-card') as HTMLElement, 'Unread 1').click())
     expect(container.querySelector('.pulse-filter-count')?.textContent).toContain('1 unread of 3 articles')
     await act(async () => button(container, 'Show all').click())

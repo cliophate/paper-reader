@@ -961,7 +961,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .pulse-story-title { display: block; margin-top: 1px; font-size: 14.5px; line-height: 1.35; font-weight: 600; }
 .pulse-story:hover .pulse-story-title { text-decoration: underline; text-underline-offset: 2px; }
 .pulse-source.is-read .pulse-story-title { color: var(--muted); font-weight: 400; }
-.pulse-story q, .pulse-catchup blockquote { color: var(--muted); font: 400 14px/1.5 var(--reader-font); }
+.pulse-story q { color: var(--muted); font: 400 14px/1.5 var(--reader-font); }
 .pulse-story q { display: block; margin-top: 5px; quotes: none; }
 .pulse-earlier { display: inline-block; margin-inline-start: calc(var(--thread-time) + var(--thread-track)); color: var(--ink); font-size: 12.5px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 .pulse-source-actions { display: flex; gap: 2px; }
@@ -1058,13 +1058,6 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
 .pulse-filter-count button { border: 0; padding: 6px 0; background: none; color: var(--ink); font: inherit; text-decoration: underline; cursor: pointer; }
 .summary-square, .briefing-document > .briefing-story > p, .briefing-section .briefing-source-stories + p { position: relative; padding-inline-start: 1em; }
 .summary-square::before, .briefing-document > .briefing-story > p::before, .briefing-section .briefing-source-stories + p::before { content: ''; position: absolute; inset-inline-start: 0; top: .65em; width: 5px; height: 5px; background: var(--signal); }
-.pulse-catchup { padding: 16px 0; border-top: 1px solid var(--line); }
-.pulse-catchup h3 { font-size: 14px; margin: 0 0 12px; }
-.pulse-catchup ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
-.pulse-catchup li > button { display: block; border: 0; padding: 4px 0; background: none; color: var(--ink); font: inherit; font-size: 14px; line-height: 1.5; text-align: left; font-weight: 600; cursor: pointer; }
-.pulse-catchup li > button:hover { text-decoration: underline; text-underline-offset: 3px; }
-.pulse-catchup blockquote { margin: 6px 0; padding-left: 12px; border-left: 2px solid var(--line); font-size: 14px; line-height: 1.5; }
-.pulse-catchup li > span, .pulse-catchup > p { font-size: 12px; color: var(--muted); }
 
 .organization-bulk { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
 .organization-bulk > span { font-size: 12px; color: var(--muted); }

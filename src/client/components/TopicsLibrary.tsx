@@ -272,15 +272,6 @@ function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, o
         if (event.currentTarget.naturalWidth <= 1 || event.currentTarget.naturalHeight <= 1) rejectImage()
       }} />}
     </header>
-    {expanded && collection.sources.some(source => source.isNew) && <div className="pulse-catchup">
-      <h3>{collection.seenThrough ? 'Since your last visit' : 'Latest reporting'}</h3>
-      <ul>{collection.sources.filter(source => source.isNew).slice(0, 3).map(source => <li className="summary-square" key={source.id}>
-        <button onClick={() => onOpenEntry(source.id)}>{source.title}</button>
-        {source.development && <blockquote>{source.development}</blockquote>}
-        <span>{source.publication}</span>
-      </li>)}</ul>
-      <p>Excerpts from the linked reporting. Open an article for its full context.</p>
-    </div>}
     <div id={listId} ref={list} tabIndex={-1}>
       {expanded && <>
         <div className="pulse-tabs pulse-article-tabs" role="group" aria-label={`Articles in ${collection.headline}`}>
