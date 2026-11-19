@@ -8,6 +8,7 @@ test('shows cited summaries and feedback only in an expanded Pulse thread', asyn
   const collection = payload.collections[0]
   const [first, second, older] = collection.sources
   first.development = 'The first stage opened on Monday.'
+  second.development = older.development = ''
   first.isNew = second.isNew = true
   older.isNew = false
   collection.seenThrough = older.sequence
