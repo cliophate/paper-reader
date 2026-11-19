@@ -135,6 +135,7 @@ For access from other devices, follow the [remote access guide](docs/access.md).
 Open **Settings > Reading & connections** to enable:
 
 - AI discussions, headline cleanup, Pulse story grouping, and briefings.
+- Scheduled morning and evening briefing emails using your SMTP relay.
 - Readwise Reader saves.
 - Kirby note drafts through a compatible publishing plugin.
 
@@ -144,6 +145,10 @@ with a ChatGPT login. See [AI providers](docs/ai-providers.md) for setup. AI ins
 from before alpha.4 must follow the
 [worker upgrade steps](docs/integrations.md#upgrade-an-existing-ai-installation).
 Reading works without any of these connections.
+
+Briefing email starts off. Enter your SMTP details under **Briefing email** and
+send a test before saving. If you use n8n or another scheduler, disable that
+workflow before turning on **Send scheduled briefings**.
 
 See the [integration guide](docs/integrations.md) for full setup instructions.
 

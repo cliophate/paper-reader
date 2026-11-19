@@ -1,5 +1,6 @@
 import path from 'node:path'
 import type { AiProvider } from '../shared/connections.js'
+import type { BriefingSchedule, SmtpFields, SmtpSecurity } from '../shared/briefing-delivery.js'
 import { minifluxBaseUrl } from './miniflux-url.js'
 
 function value(name: string, fallback = ''): string {
@@ -46,6 +47,30 @@ function timeZone(): string {
   return result
 }
 
+function boundedInteger(name: string, fallback: number, min: number, max: number): number {
+  const result = Number(value(name, String(fallback)))
+  if (!Number.isInteger(result) || result < min || result > max) throw new Error(`${name} must be an integer from ${min} to ${max}`)
+  return result
+}
+
+export type SmtpConfig = SmtpFields & { password: string }
+
+function smtpConfig(): SmtpConfig {
+  const secure = value('PAPER_SMTP_SECURE')
+  if (secure && secure !== 'true' && secure !== 'false') throw new Error('PAPER_SMTP_SECURE must be true or false')
+  const security = value('PAPER_SMTP_SECURITY', secure === 'true' ? 'tls' : 'starttls') as SmtpSecurity
+  if (!['tls', 'starttls', 'none'].includes(security)) throw new Error('PAPER_SMTP_SECURITY must be tls, starttls or none')
+  return {
+    host: value('PAPER_SMTP_HOST'),
+    port: boundedInteger('PAPER_SMTP_PORT', security === 'tls' ? 465 : security === 'starttls' ? 587 : 25, 1, 65535),
+    security,
+    user: value('PAPER_SMTP_USER'),
+    password: process.env.PAPER_SMTP_PASSWORD ?? '',
+    from: value('PAPER_BRIEFING_FROM'),
+    to: value('PAPER_BRIEFING_TO'),
+  }
+}
+
 export type Config = ReturnType<typeof loadConfig>
 
 export function stateDirectory() { return value('STATE_DIR', path.resolve('data')) }
@@ -63,6 +88,11 @@ export function loadConfig(secrets?: { internalSecret: string; signingSecret: st
   const provider = value('PAPER_AI_PROVIDER', value('CODEX_ENABLED') === 'true' ? 'codex' : 'none') as AiProvider
   if (!['none', 'codex', 'openai'].includes(provider)) throw new Error('PAPER_AI_PROVIDER must be none, codex or openai')
   const stateDir = stateDirectory()
+  const briefingSchedule: BriefingSchedule = {
+    enabled: value('PAPER_BRIEFING_DELIVERY') === 'true',
+    morning: value('PAPER_BRIEFING_SCHEDULE_MORNING', '07:30'),
+    evening: value('PAPER_BRIEFING_SCHEDULE_EVENING', '18:30'),
+  }
   return {
     backend,
     port: Number(value('PORT', '8080')),
@@ -118,6 +148,9 @@ export function loadConfig(secrets?: { internalSecret: string; signingSecret: st
     briefing: {
       includeReadUntil: optionalDate('PAPER_BRIEFING_INCLUDE_READ_UNTIL'),
     },
+    smtp: smtpConfig(),
+    briefingSchedule,
+    briefingGraceMs: boundedInteger('PAPER_BRIEFING_GRACE_MINUTES', 180, 1, 1440) * 60_000,
     sync: {
       enabled: value('PAPER_SYNC_ENABLED', 'true') === 'true',
       localReads: value('PAPER_LOCAL_READS', 'true') === 'true',

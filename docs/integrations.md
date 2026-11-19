@@ -8,9 +8,10 @@ tokens, or a real .env. Open Settings > Reading & connections to enable or disab
 AI, Readwise Reader, and Kirby notes. Changes take effect without restarting
 Paper. The same settings apply to every device using this server.
 
-Settings accepts Readwise and Kirby tokens and OpenAI-compatible API keys. Password fields stay blank after
-saving; blank means keep the current token. Remove token clears it when you
-save and prevents fallback to an environment token. Turning a connection off
+Settings accepts Readwise and Kirby tokens, OpenAI-compatible API keys, and an
+SMTP password. Secret fields stay blank after saving. Leave them blank to keep
+the current value. Choose Remove and save to clear the secret and prevent an
+environment value from taking over. Turning a connection off
 keeps its credentials so you can enable it again later.
 
 Paper saves overrides in STATE_DIR/connections.json, normally data/connections.json,
@@ -258,10 +259,52 @@ PAPER_READER_FALLBACK_ENABLED defaults to false. Setting it to true permits
 blocked or unreadable article URLs to be sent to https://r.jina.ai for extraction.
 Leave it disabled if you want full-text requests to contact only the publisher.
 
-## Email automation
+## Briefing email
 
-Paper provides a briefing CLI and internal HTTP endpoints. It does not include
-an SMTP account, recipient, or active n8n workflow. A scheduler can call
+Enable AI and **Briefing generation** in **Settings > Reading & connections**.
+Under **Briefing email**, enter the SMTP host, port and security mode. Use TLS
+for a relay that encrypts from the start, STARTTLS for one that requires an
+upgrade, or None for a trusted relay that expects a plaintext connection.
+Enter the SMTP username and password if the relay requires authentication.
+Enter one sender address and one recipient address. **Send test email** sends
+to the recipient using the form values and reports the SMTP status.
+
+Choose morning and evening times. The schedule uses Paper's `TZ` and runs once
+per edition and local date. If clocks jump forward over a scheduled time, Paper
+moves that run forward by the size of the jump. When a time repeats, Paper uses
+the first occurrence.
+
+Scheduled delivery is off by default. **Disable the external workflow in n8n
+or your other scheduler before turning on Send scheduled briefings.** Save the
+settings after enabling the schedule. Paper skips an edition it already recorded
+as delivered. Check **Delivery history** for the last ten jobs and their errors.
+
+Paper catches up on startup for up to three hours after a scheduled time. Older
+runs are marked missed. If a temporary SMTP failure occurs, Paper retries the
+saved email after one minute, then five minutes, then fifteen minutes. A restart
+keeps the saved email and retry time. Paper records delivery after the relay
+accepts the message. If Paper loses the connection after starting the message
+and cannot confirm acceptance, it stops retrying. Check the relay logs or
+recipient inbox when history shows **Acceptance unconfirmed**.
+
+| Environment default | Value |
+| --- | --- |
+| `PAPER_BRIEFING_DELIVERY` | `false` |
+| `PAPER_BRIEFING_SCHEDULE_MORNING` | `07:30` |
+| `PAPER_BRIEFING_SCHEDULE_EVENING` | `18:30` |
+| `PAPER_BRIEFING_GRACE_MINUTES` | `180`, accepts 1 to 1440 |
+| `PAPER_SMTP_HOST` | SMTP hostname or IP address |
+| `PAPER_SMTP_SECURITY` | `starttls`, `tls`, or `none`. If unset, `PAPER_SMTP_SECURE=true` selects TLS. |
+| `PAPER_SMTP_PORT` | 587 for STARTTLS, 465 for TLS, or 25 for None |
+| `PAPER_SMTP_USER` and `PAPER_SMTP_PASSWORD` | Credentials for authenticated relays |
+| `PAPER_BRIEFING_FROM` and `PAPER_BRIEFING_TO` | Sender and recipient addresses |
+
+Saved settings override these defaults. To change the SMTP host, port,
+security mode or username, re-enter the password or remove it.
+
+### External automation
+
+Paper also provides a briefing CLI and internal HTTP endpoints. A scheduler can call
 POST /api/internal/briefings/generate with x-paper-secret and a JSON body such as
 {"kind":"morning"}. The render and delivered endpoints are documented by the
 routes in src/server/index.ts. Keep the secret in the scheduler's credential

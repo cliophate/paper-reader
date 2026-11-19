@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { Config } from './config.js'
 import type { ConnectionsSettings, ConnectionsUpdate } from '../shared/connections.js'
+import type { BriefingSchedule, SmtpUpdate } from '../shared/briefing-delivery.js'
+import { isIP } from 'node:net'
 
 export class SettingsValidationError extends Error {}
 
@@ -10,15 +12,58 @@ const aiKeys = ['enabled', 'codexEnabled', 'discussionEnabled', 'briefingsEnable
 const openaiKeys = ['baseUrl', 'token', 'discussionModel', 'headlinesModel', 'groupingModel', 'shortlistModel', 'editorModel'] as const
 const locations = new Set(['new', 'later', 'archive', 'feed'])
 
+function sameSmtpConnection(a: Config['smtp'], b: Config['smtp']): boolean {
+  return a.host.toLowerCase() === b.host.toLowerCase() && a.port === b.port && a.security === b.security && a.user === b.user
+}
+
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new SettingsValidationError('Settings must be an object.')
   return value as Record<string, unknown>
+}
+
+function validateSmtp(raw: unknown): SmtpUpdate {
+  const checked: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(object(raw))) {
+    if (key === 'port') {
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 65535) throw new SettingsValidationError('Enter an SMTP port from 1 to 65535.')
+    } else if (key === 'security') {
+      if (value !== 'tls' && value !== 'starttls' && value !== 'none') throw new SettingsValidationError('Choose TLS, STARTTLS, or none for SMTP security.')
+    } else if (key === 'password') {
+      if (value !== null && (typeof value !== 'string' || value.length > 4096 || /[\x00-\x1f\x7f]/.test(value))) throw new SettingsValidationError('Enter the SMTP password on one line.')
+      if (value === '') continue
+    } else if (key === 'host' || key === 'user' || key === 'from' || key === 'to') {
+      if (typeof value !== 'string' || value.length > 254 || /[\x00-\x1f\x7f]/.test(value)) throw new SettingsValidationError('Enter SMTP fields on one line.')
+      const field = value.trim()
+      if (key === 'host' && field && !isIP(field) && !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(field)) throw new SettingsValidationError('Enter an SMTP hostname or IP address without a URL or port.')
+      if ((key === 'from' || key === 'to') && field && !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*$/i.test(field)) throw new SettingsValidationError('Enter a single email address for the sender and recipient.')
+      checked[key] = field
+      continue
+    } else throw new SettingsValidationError('Unknown SMTP setting.')
+    checked[key] = value
+  }
+  return checked
+}
+
+function validateSchedule(raw: unknown): Partial<BriefingSchedule> {
+  const checked: Partial<BriefingSchedule> = {}
+  for (const [key, value] of Object.entries(object(raw))) {
+    if (key === 'enabled') {
+      if (typeof value !== 'boolean') throw new SettingsValidationError('The delivery switch must be true or false.')
+      checked.enabled = value
+    } else if (key === 'morning' || key === 'evening') {
+      if (typeof value !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) throw new SettingsValidationError('Enter each briefing time in 24-hour HH:MM format.')
+      checked[key] = value
+    } else throw new SettingsValidationError('Unknown briefing schedule setting.')
+  }
+  return checked
 }
 
 // Never include submitted values in validation errors. They may contain credentials.
 function validate(input: unknown): ConnectionsUpdate {
   const result: ConnectionsUpdate = {}
   for (const [section, raw] of Object.entries(object(input))) {
+    if (section === 'smtp') { result.smtp = validateSmtp(raw); continue }
+    if (section === 'briefingSchedule') { result.briefingSchedule = validateSchedule(raw); continue }
     if (section !== 'ai' && section !== 'readwise' && section !== 'kirby' && section !== 'openai') throw new SettingsValidationError('Unknown connection.')
     const fields = object(raw)
     const allowed: readonly string[] = section === 'ai' ? [...aiKeys, 'provider'] : section === 'openai' ? openaiKeys : section === 'readwise' ? ['enabled', 'location', 'token'] : ['enabled', 'publishUrl', 'token']
@@ -60,11 +105,17 @@ function validate(input: unknown): ConnectionsUpdate {
 
 export class ConnectionSettings {
   private saved: ConnectionsUpdate = {}
-  private readonly defaults: ConnectionsSettings & { readwiseToken: string; kirbyToken: string; openaiToken: string }
+  private readonly defaults: Omit<ConnectionsSettings, 'briefingDelivery'> & { readwiseToken: string; kirbyToken: string; openaiToken: string }
   private readonly filename: string
+  private readonly smtpDefaults: Config['smtp']
+  private readonly scheduleDefaults: Config['briefingSchedule']
 
   constructor(private readonly config: Config) {
     this.filename = path.join(config.stateDir, 'connections.json')
+    validateSmtp(config.smtp)
+    validateSchedule(config.briefingSchedule)
+    this.smtpDefaults = { ...config.smtp }
+    this.scheduleDefaults = { ...config.briefingSchedule }
     this.defaults = {
       ai: {
         enabled: config.ai.enabled,
@@ -122,7 +173,13 @@ export class ConnectionSettings {
       url.username = ''; url.password = ''; url.search = ''; url.hash = ''
       publishUrl = url.toString()
     } catch { publishUrl = '' }
+    const { password, ...smtp } = this.smtpConfig()
     return {
+      briefingDelivery: {
+        smtp: { ...smtp, passwordConfigured: Boolean(password), passwordSource: password ? (this.saved.smtp?.password ? 'settings' : 'environment') : null },
+        schedule: { ...this.scheduleDefaults, ...this.saved.briefingSchedule },
+        timeZone: this.config.timeZone,
+      },
       ai,
       openai: { ...Object.fromEntries(openaiKeys.filter(key => key !== 'token').map(key => [key, this.saved.openai?.[key] ?? this.defaults.openai[key]])) as Omit<ConnectionsSettings['openai'], 'tokenConfigured' | 'tokenSource'>,
         tokenConfigured: Boolean(this.token('openai')), tokenSource: this.token('openai') ? (this.saved.openai?.token ? 'settings' : 'environment') : null },
@@ -147,14 +204,40 @@ export class ConnectionSettings {
     return { ...this.config.openai, ...patch, token: patch.token === null ? '' : patch.token ?? this.token('openai') }
   }
 
+  private smtpConfig(patch?: SmtpUpdate): Config['smtp'] {
+    const config = { ...this.smtpDefaults, ...this.saved.smtp, ...patch, password: '' }
+    const password = patch?.password === undefined ? this.saved.smtp?.password : patch.password
+    config.password = password === undefined && sameSmtpConnection(config, this.smtpDefaults) ? this.smtpDefaults.password : password ?? ''
+    return config
+  }
+
+  private requirePasswordForServer(patch: SmtpUpdate | undefined) {
+    if (!patch || patch.password !== undefined || !this.config.smtp.password) return
+    const next = this.smtpConfig(patch)
+    if (!sameSmtpConnection(next, this.config.smtp)) {
+      throw new SettingsValidationError('Enter the SMTP password again for the new connection, or remove it.')
+    }
+  }
+
+  smtpTestConfig(input: unknown): Config['smtp'] {
+    const patch = validateSmtp(input)
+    this.requirePasswordForServer(patch)
+    return this.smtpConfig(patch)
+  }
+
   update(input: unknown): ConnectionsSettings {
     const patch = validate(input)
     this.requireKeyForOrigin(patch.openai)
+    this.requirePasswordForServer(patch.smtp)
+    if (patch.smtp?.password) {
+      const { host, port, security, user } = this.smtpConfig(patch.smtp)
+      patch.smtp = { ...patch.smtp, host, port, security, user }
+    }
     if (patch.ai?.provider === undefined && patch.ai?.codexEnabled !== undefined) {
       patch.ai.provider = patch.ai.codexEnabled ? 'codex' : 'none'
     }
     const next = { ...this.saved }
-    for (const section of ['ai', 'readwise', 'kirby', 'openai'] as const) {
+    for (const section of ['ai', 'readwise', 'kirby', 'openai', 'smtp', 'briefingSchedule'] as const) {
       if (patch[section]) Object.assign(next, { [section]: { ...this.saved[section], ...patch[section] } })
     }
     fs.mkdirSync(this.config.stateDir, { recursive: true, mode: 0o700 })
@@ -170,6 +253,8 @@ export class ConnectionSettings {
 
   private apply() {
     const view = this.view()
+    this.config.smtp = this.smtpConfig()
+    this.config.briefingSchedule = view.briefingDelivery.schedule
     this.config.ai.enabled = view.ai.enabled
     this.config.ai.provider = view.ai.provider
     this.config.codex.enabled = view.ai.enabled && view.ai.provider === 'codex'

@@ -119,7 +119,12 @@ const SELECTION_SCHEMA = {
 }
 
 export class BriefingService {
-  private readonly generating = new Map<string, { controller: AbortController; result: Promise<BriefingRecord>; callers: number }>()
+  private readonly generating = new Map<string, {
+    controller: AbortController
+    result: Promise<BriefingRecord>
+    callers: number
+    onSaved: Set<(record: BriefingRecord) => void>
+  }>()
 
   constructor(
     private readonly config: Config,
@@ -130,6 +135,15 @@ export class BriefingService {
   ) {}
 
   async generate(kind: 'morning' | 'evening', force = false, signal?: AbortSignal): Promise<BriefingRecord> {
+    return this.shareGeneration(kind, force, signal)
+  }
+
+  generateScheduled(kind: 'morning' | 'evening', signal: AbortSignal, onSaved: (record: BriefingRecord) => void): Promise<BriefingRecord> {
+    // Scheduled delivery checks for a saved edition by its local date.
+    return this.shareGeneration(kind, true, signal, onSaved)
+  }
+
+  private async shareGeneration(kind: 'morning' | 'evening', force: boolean, signal?: AbortSignal, onSaved?: (record: BriefingRecord) => void): Promise<BriefingRecord> {
     signal?.throwIfAborted()
     let job = this.generating.get(kind)
     if (!job) {
@@ -140,7 +154,8 @@ export class BriefingService {
         if (this.generating.get(kind) === current) this.generating.delete(kind)
       }
       controller.signal.addEventListener('abort', clear, { once: true })
-      const current = { controller, callers: 0, result: abortable(() => this.generateEdition(kind, force, controller.signal), controller.signal).finally(() => {
+      const saved = new Set<(record: BriefingRecord) => void>()
+      const current = { controller, callers: 0, onSaved: saved, result: abortable(() => this.generateEdition(kind, force, controller.signal, saved), controller.signal).finally(() => {
         clear()
         controller.signal.removeEventListener('abort', clear)
       }) }
@@ -149,18 +164,22 @@ export class BriefingService {
     }
     const current = job
     current.callers += 1
+    const attach = (record: BriefingRecord) => { if (!signal?.aborted) onSaved?.(record) }
+    if (onSaved) current.onSaved.add(attach)
     try {
       return await abortable(() => current.result, signal)
     } catch (error) {
       if (signal?.aborted) throw new AiError('cancelled')
       throw error
     } finally {
+      current.onSaved.delete(attach)
       current.callers -= 1
       if (!current.callers) current.controller.abort(new AiError('cancelled'))
     }
   }
 
-  private async generateEdition(kind: 'morning' | 'evening', force: boolean, signal: AbortSignal): Promise<BriefingRecord> {
+  private async generateEdition(kind: 'morning' | 'evening', force: boolean, signal: AbortSignal,
+    onSaved: ReadonlySet<(record: BriefingRecord) => void>): Promise<BriefingRecord> {
     signal.throwIfAborted()
     if (!this.config.ai.briefingsEnabled || !aiEnabled(this.config)) throw new Error('Briefing generation is disabled. Enable it in Settings.')
     const recent = force ? null : this.db.recentGeneratedBriefing(kind, new Date(Date.now() - 15 * 60_000))
@@ -268,6 +287,7 @@ export class BriefingService {
       signal.throwIfAborted()
       this.db.createBriefing(record, entries)
       this.db.recordBriefingConsidered([...new Set([...writers, ...all].map(entry => entry.id))], cutoff.getTime())
+      for (const attach of onSaved) attach(record)
     })
     return record
   }

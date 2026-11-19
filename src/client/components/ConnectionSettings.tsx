@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { api } from '../api'
 import type { AiSettings, ConnectionsSettings, ConnectionsUpdate } from '../../shared/connections'
+import type { BriefingDeliverySettings, DeliveryHistoryItem, DeliveryState, SmtpFields } from '../../shared/briefing-delivery'
 
 export function ConnectionSettings({ onChanged }: { onChanged: () => Promise<void> }) {
   const [settings, setSettings] = useState<ConnectionsSettings | null>(null)
@@ -26,6 +27,7 @@ export function ConnectionSettings({ onChanged }: { onChanged: () => Promise<voi
     {!settings && !error && <p role="status">Loading connections...</p>}
     {settings && <>
       <AiConnection runtime={settings.aiRuntime} settings={settings.ai} openai={settings.openai} onSave={save} />
+      <BriefingEmail settings={settings.briefingDelivery} onSave={save} />
       <TokenConnection kind="readwise" settings={settings} onSave={save} />
       <TokenConnection kind="kirby" settings={settings} onSave={save} />
       <p className="connection-help">Tokens stay on the server and are never returned by Settings. Stored tokens are private files, without encryption at rest. Use HTTPS for remote access and protect Paper with your proxy login. Anyone with access to Paper can change these settings.</p>
@@ -37,7 +39,9 @@ function Toggle({ label, checked, onChange, disabled = false }: { label: string;
   return <label className="connection-toggle"><input type="checkbox" checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)} /><span>{label}</span></label>
 }
 
-function ConnectionForm({ title, children, onSave }: { title: string; children: ReactNode; onSave: () => Promise<void> }) {
+function ConnectionForm({ title, children, onSave, footer, testing = false, saveLabel = `Save ${title}` }: {
+  title: string; children: ReactNode; onSave: () => Promise<void>; footer?: ReactNode; testing?: boolean; saveLabel?: string
+}) {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -50,9 +54,10 @@ function ConnectionForm({ title, children, onSave }: { title: string; children: 
   }
   return <form className="connection-card" aria-label={title} onSubmit={event => void submit(event)} onChange={() => setMessage('')}>
     <h4>{title}</h4>
-    <fieldset disabled={busy}>{children}<button className="connection-save" type="submit">{busy ? 'Saving...' : `Save ${title}`}</button></fieldset>
+    <fieldset disabled={busy || testing}>{children}<button className="connection-save" type="submit">{busy ? 'Saving...' : saveLabel}</button></fieldset>
     {error && <p className="connection-error" role="alert">{error}</p>}
     {message && <p role="status">{message}</p>}
+    {footer}
   </form>
 }
 
@@ -116,8 +121,104 @@ function AiConnection({ settings, openai, runtime, onSave }: { settings: AiSetti
       <p>Complete the login link and one-time code in your own browser. Device login may need enabling in your ChatGPT security or workspace settings. See <a href="https://learn.chatgpt.com/docs/auth" target="_blank" rel="noreferrer">Codex authentication</a>.</p>
       <p>New installs generate the worker secret during setup. Existing installs must follow the AI upgrade steps in <code>docs/integrations.md</code> to add it, remove the old auth mounts and shared worker network from Paper, and configure the socket volume. Both containers must use the same UID and GID. The Codex option requires the worker. Native development can use <code>PAPER_AI_LOCAL=unsafe</code> only with synthetic feeds. This lets model processes read Paper data and secrets.</p>
       <p>Codex model names come from your server's <code>.env</code>. Set <code>PAPER_DISCUSSION_MODEL</code> for discussions, <code>PAPER_COLLECTION_MODEL</code> for Pulse, and <code>PAPER_HEADLINE_WRITER_MODEL</code> / <code>PAPER_HEADLINE_REVIEWER_MODEL</code> for headlines. Briefings use <code>CODEX_SHORTLIST_MODEL</code> / <code>CODEX_EDITOR_MODEL</code>. Choose models your provider account can access, then restart Paper after changing the environment.</p>
-      <p>Codex credentials remain in the CLI login store. API keys use the private connection settings file. Existing briefings and discussions remain saved when AI is off. Briefing schedules require separate automation.</p>
+      <p>Codex credentials remain in the CLI login store. API keys use the private connection settings file. Existing briefings and discussions remain saved when AI is off.</p>
     </details>
+  </ConnectionForm>
+}
+
+const deliveryLabels: Record<DeliveryState, string> = {
+  pending: 'Queued', generating: 'Generating', ready: 'Ready', sending: 'Sending', retrying: 'Waiting to retry',
+  delivered: 'Delivered', failed: 'Failed', unconfirmed: 'Acceptance unconfirmed', skipped: 'Skipped', missed: 'Missed',
+}
+
+function DeliveryHistory({ timeZone }: { timeZone: string }) {
+  const [history, setHistory] = useState<DeliveryHistoryItem[] | null>(null)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    let current = true
+    async function load() {
+      try {
+        const jobs = await api.briefingDeliveryHistory()
+        if (current) { setHistory(jobs); setFailed(false) }
+      } catch { if (current) setFailed(true) }
+    }
+    void load()
+    const timer = setInterval(() => void load(), 15_000)
+    return () => { current = false; clearInterval(timer) }
+  }, [])
+  const format = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone })
+  return <section className="delivery-history" aria-label="Delivery history">
+    <h5>Delivery history</h5>
+    {failed && <p className="connection-error" role="alert">Could not load delivery history. Check your connection to Paper.</p>}
+    {!failed && !history && <p role="status">Loading delivery history...</p>}
+    {!failed && history?.length === 0 && <p className="connection-help">No scheduled runs yet.</p>}
+    {Boolean(history?.length) && <ul>{history?.map(job => <li key={job.id}>
+      <div><strong>{job.kind === 'morning' ? 'Morning' : 'Evening'}</strong> <time dateTime={new Date(job.scheduledAt).toISOString()}>{format.format(job.scheduledAt)}</time></div>
+      <span>{deliveryLabels[job.state]}</span>
+      {job.lastError && <p>{job.lastError}</p>}
+    </li>)}</ul>}
+  </section>
+}
+
+function BriefingEmail({ settings, onSave }: { settings: BriefingDeliverySettings; onSave: (patch: ConnectionsUpdate) => Promise<void> }) {
+  const [schedule, setSchedule] = useState(settings.schedule)
+  const [fields, setFields] = useState<Omit<SmtpFields, 'port'>>(() => {
+    const { port: _port, passwordConfigured: _configured, passwordSource: _source, ...smtp } = settings.smtp
+    return smtp
+  })
+  const [port, setPort] = useState(String(settings.smtp.port))
+  const [password, setPassword] = useState('')
+  const [remove, setRemove] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ message: string; ok: boolean } | null>(null)
+  const smtp = () => ({ ...fields, port: Number(port), ...(remove ? { password: null } : password ? { password } : {}) })
+  const field = <K extends keyof typeof fields>(key: K, value: typeof fields[K]) => setFields(current => ({ ...current, [key]: value }))
+  async function save() {
+    await onSave({ smtp: smtp(), briefingSchedule: schedule })
+    setPassword('')
+    setRemove(false)
+  }
+  async function test() {
+    setTesting(true)
+    setTestResult(null)
+    try { setTestResult({ ok: true, ...(await api.testSmtp(smtp())) }) }
+    catch (error) { setTestResult({ ok: false, message: error instanceof Error ? error.message : 'Could not send the test email.' }) }
+    finally { setTesting(false) }
+  }
+  return <ConnectionForm title="Briefing email" saveLabel="Save briefing email" onSave={save} testing={testing} footer={<DeliveryHistory timeZone={settings.timeZone} />}>
+    <Toggle label="Send scheduled briefings" checked={schedule.enabled} onChange={enabled => setSchedule(current => ({ ...current, enabled }))} />
+    <p className="connection-help">Disable your external briefing workflow before turning this on. Scheduled mail requires AI and briefing generation.</p>
+    <fieldset className="delivery-fields">
+      <legend>Schedule in {settings.timeZone}</legend>
+      <div className="delivery-grid">
+        {(['morning', 'evening'] as const).map(kind => <label className="connection-field" key={kind}>
+          {kind === 'morning' ? 'Morning' : 'Evening'}<input type="time" required value={schedule[kind]} onChange={event => setSchedule(current => ({ ...current, [kind]: event.target.value }))} />
+        </label>)}
+      </div>
+    </fieldset>
+    <fieldset className="delivery-fields" onChange={() => setTestResult(null)}>
+      <legend>SMTP connection</legend>
+      <div className="delivery-grid">
+        <label className="connection-field">SMTP host<input value={fields.host} onChange={event => field('host', event.target.value)} autoComplete="off" spellCheck={false} /></label>
+        <label className="connection-field">Port<input type="number" required min={1} max={65535} value={port} onChange={event => setPort(event.target.value)} /></label>
+        <label className="connection-field">Security<select value={fields.security} onChange={event => field('security', event.target.value as SmtpFields['security'])}>
+          <option value="tls">TLS</option><option value="starttls">STARTTLS</option><option value="none">None</option>
+        </select></label>
+        <label className="connection-field">Username<input value={fields.user} onChange={event => field('user', event.target.value)} autoComplete="off" spellCheck={false} /></label>
+      </div>
+      <label className="connection-field">Password<input type="password" value={password} onChange={event => { setPassword(event.target.value); setRemove(false) }} placeholder={settings.smtp.passwordConfigured && !remove ? 'Leave blank to keep current password' : ''} autoComplete="new-password" maxLength={4096} /></label>
+      {settings.smtp.passwordConfigured && <p className="connection-help">
+        {remove ? 'Saving removes the password and disables any environment password.' : settings.smtp.passwordSource === 'environment' ? 'Password provided by the server environment.' : 'Password saved on the server.'}{' '}
+        <button type="button" onClick={() => { setRemove(!remove); setPassword(''); setTestResult(null) }}>{remove ? 'Keep password' : 'Remove password'}</button>
+      </p>}
+      <div className="delivery-grid">
+        <label className="connection-field">Sender<input type="email" value={fields.from} onChange={event => field('from', event.target.value)} autoComplete="off" /></label>
+        <label className="connection-field">Recipient<input type="email" value={fields.to} onChange={event => field('to', event.target.value)} autoComplete="off" /></label>
+      </div>
+      <p className="connection-help">Send a test to the recipient using these form values before saving.</p>
+      <button type="button" onClick={() => void test()}>{testing ? 'Sending test...' : 'Send test email'}</button>
+      {testResult && <p role={testResult.ok ? 'status' : 'alert'} className={testResult.ok ? undefined : 'connection-error'}>{testResult.message}</p>}
+    </fieldset>
   </ConnectionForm>
 }
 

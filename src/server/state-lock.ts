@@ -14,10 +14,10 @@ export interface StateLock {
 
 // This permanent database is separate from application backups and replacements.
 // Normal processes share a read lock; schema upgrades require exclusive access.
-export function acquireStateLock(directory: string, mode: StateLock['mode']): StateLock {
+export function acquireStateLock(directory: string, mode: StateLock['mode'], purpose: 'storage' | 'briefing-delivery' = 'storage'): StateLock {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
   const stateDir = fs.realpathSync(directory)
-  const filename = path.join(stateDir, 'paper-lock.sqlite')
+  const filename = path.join(stateDir, purpose === 'storage' ? 'paper-lock.sqlite' : 'paper-briefing-delivery-lock.sqlite')
   let db: DatabaseSync | undefined
   try {
     try { fs.closeSync(fs.openSync(filename, 'wx', 0o600)) }

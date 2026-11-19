@@ -1,3 +1,5 @@
+import type { BriefingDeliverySettings, BriefingSchedule, SmtpUpdate } from './briefing-delivery.js'
+
 export type AiProvider = 'none' | 'codex' | 'openai'
 
 export interface OpenAiSettings {
@@ -22,6 +24,7 @@ export interface AiSettings {
 }
 
 export interface ConnectionsSettings {
+  briefingDelivery: BriefingDeliverySettings
   aiRuntime?: { available: boolean; message: string }
   openai: OpenAiSettings
   ai: AiSettings
@@ -30,6 +33,8 @@ export interface ConnectionsSettings {
 }
 
 export interface ConnectionsUpdate {
+  smtp?: SmtpUpdate
+  briefingSchedule?: Partial<BriefingSchedule>
   ai?: Partial<AiSettings>
   openai?: Partial<Omit<OpenAiSettings, 'tokenConfigured' | 'tokenSource'>> & { token?: string | null }
   readwise?: { enabled?: boolean; location?: string; token?: string | null }
