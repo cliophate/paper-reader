@@ -6,6 +6,11 @@ import type { ConnectionsSettings, ConnectionsUpdate } from '../shared/connectio
 import type { BriefingSchedule, SmtpUpdate } from '../shared/briefing-delivery.js'
 import { isIP } from 'node:net'
 
+const address = String.raw`[a-z0-9.!#$%&'*+/=?^_\`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*`
+const mailbox = new RegExp(`^${address}$`, 'i')
+// A display name for the From header, such as Paper <briefings@example.com>.
+const namedMailbox = new RegExp(`^[^<>@"\\\\]{1,100}\\s<${address}>$`, 'i')
+
 export class SettingsValidationError extends Error {}
 
 const aiKeys = ['enabled', 'codexEnabled', 'discussionEnabled', 'briefingsEnabled', 'headlinesEnabled', 'collectionsEnabled'] as const
@@ -35,7 +40,8 @@ function validateSmtp(raw: unknown): SmtpUpdate {
       if (typeof value !== 'string' || value.length > 254 || /[\x00-\x1f\x7f]/.test(value)) throw new SettingsValidationError('Enter SMTP fields on one line.')
       const field = value.trim()
       if (key === 'host' && field && !isIP(field) && !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(field)) throw new SettingsValidationError('Enter an SMTP hostname or IP address without a URL or port.')
-      if ((key === 'from' || key === 'to') && field && !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*$/i.test(field)) throw new SettingsValidationError('Enter a single email address for the sender and recipient.')
+      if (key === 'from' && field && !mailbox.test(field) && !namedMailbox.test(field)) throw new SettingsValidationError('Enter the sender as an email address or as Name <address>.')
+      if (key === 'to' && field && !mailbox.test(field)) throw new SettingsValidationError('Enter a single email address for the recipient.')
       checked[key] = field
       continue
     } else throw new SettingsValidationError('Unknown SMTP setting.')

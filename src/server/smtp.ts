@@ -7,6 +7,11 @@ export class SmtpError extends Error {
   constructor(message: string, readonly retryable = false, readonly unconfirmed = false) { super(message) }
 }
 
+// MAIL FROM takes the bare address. The From header keeps any display name.
+export function envelopeAddress(from: string): string {
+  return /<([^<>\s]+)>\s*$/.exec(from)?.[1] ?? from.trim()
+}
+
 export function checkSmtp(config: SmtpConfig) {
   if (!config.host || !config.from || !config.to) throw new SmtpError('Enter the SMTP host, sender, and recipient in Settings.')
   if (Boolean(config.user) !== Boolean(config.password)) throw new SmtpError('Enter both the SMTP username and password, or clear both for a relay without authentication.')
@@ -57,7 +62,7 @@ export async function sendSmtp(config: SmtpConfig, content: MailContent, beforeD
     return await new Promise<number>((resolve, reject) => {
       const timer = setTimeout(() => fail(Object.assign(new Error(), { code: 'ETIMEDOUT' })), 20_000)
       const fail = (error: unknown) => { clearTimeout(timer); reject(smtpError(error, startedData)) }
-      const deliver = () => smtp.send({ from: config.from, to: [config.to] }, body, (error, info) => {
+      const deliver = () => smtp.send({ from: envelopeAddress(config.from), to: [config.to] }, body, (error, info) => {
         if (error || !info?.accepted.length) return fail(error)
         clearTimeout(timer)
         resolve(Number(info.response.slice(0, 3)))
