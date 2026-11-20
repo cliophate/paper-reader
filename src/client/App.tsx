@@ -1008,34 +1008,41 @@ export default function App() {
   const markTopicRead = useCallback(async (ids: string[], expectedRevisions?: Record<string, number>): Promise<boolean> => {
     if (!ids.length) return true
     const idSet = new Set(ids)
-    try {
-      const result = await api.editState(ids, 'read', 'pulse', { undo: true, expectedRevisions: status.backend === 'standalone' ? expectedRevisions : undefined })
-      setEntries(current => current.map(entry => idSet.has(entry.id) ? { ...entry, read: true } : entry))
+    const generation = readerGeneration.current
+    const refreshAfterFailure = () => {
       setTopicsRefreshKey(current => current + 1)
-      void loadNavigation().catch(() => notify('The articles were marked read. Counts will refresh shortly.'))
-      notify(`${ids.length} ${ids.length === 1 ? 'article' : 'articles'} marked read`, {
+      void loadNavigation().catch(() => {})
+      if (generation === readerGeneration.current) void loadEntries(undefined, 'keep', 'replace-in-place')
+    }
+    try {
+      const standalone = status.backend === 'standalone'
+      const result = await api.editState(ids, 'read', 'pulse', { undo: true, expectedRevisions: standalone ? expectedRevisions : undefined })
+      setEntries(current => current.map(entry => idSet.has(entry.id) ? { ...entry, read: true, stateRevision: result.revisions[entry.id] ?? entry.stateRevision } : entry))
+      setTopicsRefreshKey(current => current + 1)
+      void loadNavigation().catch(() => {})
+      const { undoToken } = result
+      notify(`${idSet.size.toLocaleString()} ${idSet.size === 1 ? 'article' : 'articles'} marked read`, standalone && !undoToken ? undefined : {
         label: 'Undo',
         run: () => void (async () => {
           try {
-            if (status.backend === 'standalone') {
-              if (!result.undoToken) return
-              await api.undo(result.undoToken)
-            } else await api.editState(ids, 'unread', 'pulse')
+            if (undoToken) await api.undo(undoToken)
+            else await api.editState(ids, 'unread', 'pulse')
             setEntries(current => current.map(entry => idSet.has(entry.id) ? { ...entry, read: false } : entry))
             setTopicsRefreshKey(current => current + 1)
-            await loadNavigation()
+            void loadNavigation().catch(() => {})
           } catch (error) {
+            refreshAfterFailure()
             notify(error instanceof Error ? error.message : 'Paper could not restore the articles')
           }
         })(),
       })
       return true
     } catch (error) {
-      if (error instanceof ApiError && error.code === 'state-conflict') setTopicsRefreshKey(current => current + 1)
+      refreshAfterFailure()
       notify(error instanceof Error ? error.message : 'Paper could not mark this coverage read')
       return false
     }
-  }, [loadNavigation, notify, status.backend])
+  }, [loadEntries, loadNavigation, notify, status.backend])
 
   const fetchFullText = useCallback(async (target: Entry | null = selected, quiet = false, force = false) => {
     if (!target?.url || target.kind !== 'article' || (target.fullText && !force) || fetchingFullTextId) return
