@@ -8,7 +8,9 @@ export async function startOpenaiFixture() {
   const server = http.createServer(async (request, response) => {
     const chunks = []
     for await (const chunk of request) chunks.push(chunk)
-    const body = JSON.parse(Buffer.concat(chunks).toString())
+    let body
+    // A client that aborts mid-request sends an incomplete body.
+    try { body = JSON.parse(Buffer.concat(chunks).toString()) } catch { response.writeHead(400); response.end(); return }
     requests.push({ body, authorization: request.headers.authorization, path: request.url })
     response.on('close', () => closed.push(body.model))
     const json = (value, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(value)) }

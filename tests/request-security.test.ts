@@ -35,23 +35,28 @@ async function start(publicUrl: string) {
   fs.mkdirSync(path.join(directory, 'dist'))
   fs.mkdirSync(path.join(directory, 'dist/assets'))
   fs.writeFileSync(path.join(directory, 'dist/index.html'), '<!doctype html><title>Synthetic Paper</title>')
-  const listener = http.createServer().listen(0, '127.0.0.1'); await once(listener, 'listening')
-  const port = (listener.address() as { port: number }).port
-  await new Promise<void>(resolve => listener.close(() => resolve()))
-  child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), path.resolve('src/server/index.ts')], {
-    cwd: directory, stdio: ['ignore', 'pipe', 'pipe'], env: {
-      PATH: process.env.PATH, HOME: directory, NODE_NO_WARNINGS: '1', STATE_DIR: directory,
-      PAPER_BACKEND: 'standalone', HOST: '127.0.0.1', PORT: String(port),
-      ...(publicUrl ? { PUBLIC_URL: publicUrl } : {}),
-      PAPER_SYNC_ENABLED: 'false', CODEX_ENABLED: 'false',
-    },
-  })
+  // Another test can take the free port before Paper binds it. Retry on a new port.
   let output = ''
-  child.stdout!.on('data', chunk => { output += chunk }); child.stderr!.on('data', chunk => { output += chunk })
-  for (let i = 0; i < 200; i++) {
-    try { if ((await request(port, '/health', '127.0.0.1:8080')).status === 200) return port } catch {}
-    if (child.exitCode !== null) break
-    await delay(50)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const listener = http.createServer().listen(0, '127.0.0.1'); await once(listener, 'listening')
+    const port = (listener.address() as { port: number }).port
+    await new Promise<void>(resolve => listener.close(() => resolve()))
+    child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), path.resolve('src/server/index.ts')], {
+      cwd: directory, stdio: ['ignore', 'pipe', 'pipe'], env: {
+        PATH: process.env.PATH, HOME: directory, NODE_NO_WARNINGS: '1', STATE_DIR: directory,
+        PAPER_BACKEND: 'standalone', HOST: '127.0.0.1', PORT: String(port),
+        ...(publicUrl ? { PUBLIC_URL: publicUrl } : {}),
+        PAPER_SYNC_ENABLED: 'false', CODEX_ENABLED: 'false',
+      },
+    })
+    output = ''
+    child.stdout!.on('data', chunk => { output += chunk }); child.stderr!.on('data', chunk => { output += chunk })
+    for (let i = 0; i < 200; i++) {
+      try { if ((await request(port, '/health', '127.0.0.1:8080')).status === 200) return port } catch {}
+      if (child.exitCode !== null) break
+      await delay(50)
+    }
+    if (child.exitCode === null) break
   }
   throw new Error(`Synthetic server did not start: ${output}`)
 }
