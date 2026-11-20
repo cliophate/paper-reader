@@ -54,18 +54,21 @@ jobs:
       - run: npm run test:smoke
       - run: npm run licenses && git diff --exit-code -- THIRD_PARTY_NOTICES.md licenses
       - name: Scan public source for secrets
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$RUNNER_TEMP/gitleaks"
-          gh release download v8.30.1 --repo gitleaks/gitleaks --pattern 'gitleaks_8.30.1_linux_x64.tar.gz' --pattern 'gitleaks_8.30.1_checksums.txt' --dir "$RUNNER_TEMP/gitleaks"
           cd "$RUNNER_TEMP/gitleaks"
+          # Plain downloads work on runners without the GitHub CLI.
+          for file in gitleaks_8.30.1_linux_x64.tar.gz gitleaks_8.30.1_checksums.txt; do
+            curl -fsSLO "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$file"
+          done
           sha256sum --check --ignore-missing gitleaks_8.30.1_checksums.txt
           tar -xzf gitleaks_8.30.1_linux_x64.tar.gz gitleaks
           cd "$GITHUB_WORKSPACE"
           "$RUNNER_TEMP/gitleaks/gitleaks" dir . --redact --no-banner
   image:
     needs: application
+    # Image builds need a Docker daemon. Self-hosted runners may not provide one.
+    if: github.server_url == 'https://github.com'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -89,6 +92,8 @@ jobs:
           MINIFLUX_TEST_VERSION: "2.3.3"
   ai-image:
     needs: application
+    # Image builds need a Docker daemon. Self-hosted runners may not provide one.
+    if: github.server_url == 'https://github.com'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
