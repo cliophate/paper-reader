@@ -116,6 +116,60 @@ describe('Pulse visit and update interface', () => {
     expect(container.textContent).toContain('0 unread')
   })
 
+  it('marks hidden rows from a collapsed collection and moves focus when it leaves Unread', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    const lead = collection('lead', [source('1', 1), source('2', 2), source('3', 3), source('4', 4)])
+    const items = [{ ...source('older', 1), stateRevision: 3 }, source('read', 2, true), { ...source('latest', 3), stateRevision: 8 }]
+    vi.spyOn(api, 'pulse').mockResolvedValue(payload([lead, collection('compact', items)]))
+    const markRead = vi.fn().mockResolvedValue(true)
+    const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={() => {}} />))
+    await act(async () => button(container, 'Unread 2').click())
+    const compact = [...container.querySelectorAll<HTMLElement>('.pulse-card')][1]
+    const mark = button(compact, 'Mark read')
+    expect(mark.getAttribute('aria-label')).toBe('Mark all 2 unread articles in Collection compact as read')
+    expect(mark.previousElementSibling?.textContent).toBe('1 earlier article')
+    expect(compact.querySelectorAll('.pulse-source')).toHaveLength(1)
+    await act(async () => { mark.focus(); mark.click() })
+    expect(markRead).toHaveBeenCalledExactlyOnceWith(['older', 'latest'], { older: 3, latest: 8 })
+    expect(compact.isConnected).toBe(false)
+    expect(document.activeElement).toBe(container.querySelector('h1'))
+    expect(button(container, 'Unread 1')).toBeDefined()
+  })
+
+  it('confirms and deduplicates only unread articles in the active section', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    const shared = { ...source('shared', 1), stateRevision: 2 }
+    const second = { ...source('second', 2), stateRevision: 5 }
+    const read = [source('a', 3, true), source('b', 4, true), source('c', 5, true)]
+    vi.spyOn(api, 'pulse').mockResolvedValue(payload([
+      collection('one', [shared, ...read.slice(1)]), collection('two', [shared, second, read[0]]), collection('finished', read),
+      { ...collection('quiet', [source('quiet', 2), ...read.slice(1)]), quiet: true }, collection('small', [source('small', 1)]),
+    ]))
+    const markRead = vi.fn().mockResolvedValue(true)
+    const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
+    await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={markRead} notify={() => {}} />))
+    const toolbar = container.querySelector<HTMLElement>('.pulse-toolbar')!
+    const opener = button(toolbar, 'Mark all read')
+    await act(async () => opener.click())
+    const dialog = () => container.querySelector<HTMLElement>('[role="dialog"]')!
+    expect(dialog().textContent).toContain('Mark 2 articles in 2 collections as read?')
+    expect(markRead).not.toHaveBeenCalled()
+    await act(async () => button(dialog(), 'Cancel').click())
+    expect(dialog()).toBeNull()
+    expect(document.activeElement).toBe(opener)
+    expect(markRead).not.toHaveBeenCalled()
+    await act(async () => opener.click())
+    await act(async () => { const confirm = button(dialog(), 'Mark all read'); confirm.focus(); confirm.click() })
+    expect(markRead).toHaveBeenCalledExactlyOnceWith(['shared', 'second'], { shared: 2, second: 5 })
+    expect(dialog()).toBeNull()
+    expect(opener.isConnected).toBe(false)
+    expect(container.querySelector('.pulse-mark-read')).toBeNull()
+    expect(document.activeElement).toBe(container.querySelector('h1'))
+    await act(async () => button(toolbar, 'Quiet 1').click())
+    expect(button(toolbar, 'Mark all read')).toBeDefined()
+  })
+
   it('switches article filters in the expanded thread without changing read state', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
     vi.spyOn(api, 'pulse').mockResolvedValue(payload([collection('mixed', [source('1', 1), source('2', 2, true), source('3', 3)])]))

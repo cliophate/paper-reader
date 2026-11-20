@@ -672,11 +672,11 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .feed-editor-note { color: var(--faint); font-size: 11px; line-height: 1.45; }
 .copy-feed-url { border: 0; background: transparent; color: var(--muted); padding: 5px 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; font-size: 11px; }
 .feed-editor-actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 28px; }
-.feed-editor-actions button { min-height: 38px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 0 13px; cursor: pointer; font-size: 12px; font-weight: 650; }
-.feed-editor-actions button.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+.feed-editor-actions button, .pulse-mark-dialog-actions button { min-height: 38px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 0 13px; cursor: pointer; font-size: 12px; font-weight: 650; }
+.feed-editor-actions button.primary, .pulse-mark-dialog-actions button.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
 .feed-editor-actions button.danger { color: var(--danger); }
 .feed-editor-actions button.danger.confirming { border-color: var(--danger); background: var(--danger); color: white; }
-.feed-editor-actions button:disabled, .feed-add-form button:disabled { cursor: wait; opacity: .5; }
+.feed-editor-actions button:disabled, .feed-add-form button:disabled, .pulse-mark-dialog-actions button:disabled { cursor: wait; opacity: .5; }
 .feed-bulk-bar { flex: 0 0 44px; display: flex; align-items: center; gap: 8px; padding: 0 15px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .feed-bulk-bar span { flex: 1; color: var(--muted); font-size: 11px; font-weight: 650; }
 .feed-bulk-bar button { height: 29px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-strong); color: var(--muted); padding: 0 10px; cursor: pointer; font-size: 10px; font-weight: 650; }
@@ -953,14 +953,17 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 }
 
 /* Continuing Pulse collections */
+.pulse-toolbar { flex-wrap: wrap; justify-content: flex-end; }
 .pulse-tabs, .pulse-card-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
-.pulse-tabs button, .pulse-card-actions button, .pulse-updates button, .pulse-notice button, .topics-merge-notice button { padding: 6px 10px; border: 0; border-radius: 99px; background: var(--soft); color: var(--muted); font: 600 12px/1.4 var(--ui); cursor: pointer; }
+.pulse-tabs button, .pulse-card-actions button, .pulse-mark-all, .pulse-updates button, .pulse-notice button, .topics-merge-notice button { padding: 6px 10px; border: 0; border-radius: 99px; background: var(--soft); color: var(--muted); font: 600 12px/1.4 var(--ui); cursor: pointer; }
 .pulse-tabs button { background: transparent; }
-.pulse-tabs button:hover, .pulse-card-actions button:hover { background: var(--hover); color: var(--ink); }
+.pulse-tabs button:hover, .pulse-card-actions button:hover, .pulse-mark-all:hover { background: var(--hover); color: var(--ink); }
 .pulse-tabs button[aria-pressed='true'] { color: var(--bg); background: var(--ink); }
 .pulse-tabs button span { margin-inline-start: 2px; font-variant-numeric: tabular-nums; }
 .pulse-card-actions { margin-top: 18px; gap: 6px; }
-.pulse-card-actions button:disabled { cursor: default; opacity: .6; }
+.pulse-card-actions button:disabled, .pulse-card-actions [aria-disabled='true'], .pulse-mark-read[aria-disabled='true'], .pulse-mark-all[aria-disabled='true'] { cursor: default; opacity: .6; }
+.pulse-mark-dialog > p { color: var(--muted); font-size: 14px; line-height: 1.5; }
+.pulse-mark-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 .pulse-status, .pulse-notice, .pulse-empty { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .pulse-updates { position: sticky; top: 8px; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; padding: 12px 14px; background: var(--panel-strong); border: 1px solid var(--line); border-radius: 10px; font-size: 12px; }
 .pulse-updates button { flex-shrink: 0; }
@@ -990,13 +993,15 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .pulse-source.is-read .pulse-story-title { color: var(--muted); font-weight: 400; }
 .pulse-story q { color: var(--muted); font: 400 14px/1.5 var(--reader-font); }
 .pulse-story q { display: block; margin-top: 5px; quotes: none; }
-.pulse-earlier { display: inline-block; margin-inline-start: calc(var(--thread-time) + var(--thread-track)); color: var(--ink); font-size: 12.5px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.pulse-preview-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; margin-inline-start: calc(var(--thread-time) + var(--thread-track)); }
+.pulse-earlier, .pulse-mark-read { display: inline-flex; align-items: center; color: var(--ink); font: 600 12.5px/1.4 var(--ui); text-decoration: underline; text-underline-offset: 3px; }
+.pulse-mark-read { padding: 0; border: 0; background: none; cursor: pointer; }
 .pulse-source-actions { display: flex; gap: 2px; }
 .pulse-source-actions :is(button, a) { width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 50%; color: var(--muted); background: transparent; cursor: pointer; }
 .pulse-source-actions :is(button, a):hover { background: var(--hover); color: var(--ink); }
 .pulse-source-actions svg { width: 14px; height: 14px; }
 .pulse-article-tabs { position: sticky; top: 0; z-index: 1; margin-top: 16px; padding: 6px 0; background: var(--bg); }
-.pulse-card :is(button, a):focus-visible, .pulse-tabs button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.pulse-card :is(button, a):focus-visible, .pulse-tabs button:focus-visible, .pulse-mark-all:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 @media (max-width: 700px) {
   .topics-column { padding-bottom: 80px; }
   .topics-scroll { scroll-padding-bottom: 72px; }
@@ -1005,7 +1010,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
   .pulse-section-tabs button:focus-visible { outline-offset: -3px; outline-color: currentColor; }
   .pulse-card-header { gap: 12px; }
   .pulse-card { --thread-time: 44px; }
-  .pulse-card-actions button, .pulse-article-tabs button { min-height: 36px; }
+  .pulse-card-actions button, .pulse-article-tabs button, .pulse-mark-all, .pulse-preview-actions > * { min-height: 36px; }
 }
 
 .collection-questions { display: grid; gap: 8px; margin-block-start: 12px; font-family: var(--ui); }

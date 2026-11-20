@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { acknowledgePulseVisit, refreshPulseState } from '../pulse'
 import type { PulseCollection, PulsePayload, PulseSource } from '../../shared/pulse'
 import { CollectionQuestions } from './CollectionQuestions'
 import { Icon } from './Icon'
+import { Modal } from './Modal'
 import { PulseCatchUp, PulseCollectionOptions } from './PulseCatchUp'
 
 type ArticleFilter = 'new' | 'unread' | 'read' | 'all'
@@ -46,18 +47,31 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
   const [filter, setFilter] = useState<ArticleFilter>(directLink ? directLink.filter || 'all' : returnToPulse?.filter || 'all')
   const [section, setSection] = useState<CollectionFilter>(returnToPulse?.section || 'active')
   const [mergeFrom, setMergeFrom] = useState<string | null>(null)
+  const [markPreview, setMarkPreview] = useState<{ ids: string[]; collectionCount: number } | null>(null)
+  const [marking, setMarking] = useState<{ collectionId?: string } | null>(null)
   const current = useRef<PulsePayload | null>(null)
   const open = useRef<string | null>(expanded)
   const visit = useRef<Visit | null>(null)
   const linked = useRef(directLink)
   const requestId = useRef(0)
   const scroll = useRef<HTMLDivElement>(null)
+  const heading = useRef<HTMLHeadingElement>(null)
+  const markFocus = useRef<{ button: HTMLButtonElement; title?: HTMLButtonElement | null } | null>(null)
   const mounted = useRef(true)
   const restoreScroll = useRef(initialFilter ? 0 : returnToPulse?.scroll || 0)
   const view = useRef({ expanded, filter, section })
   view.current = { expanded, filter, section }
 
   const install = useCallback((next: PulsePayload) => { current.current = next; setPayload(next) }, [])
+
+  useLayoutEffect(() => {
+    if (markPreview || !markFocus.current) return
+    const { button, title } = markFocus.current
+    if ((!button.isConnected || button.disabled) && (document.activeElement === document.body || document.activeElement === button)) {
+      (title?.isConnected ? title : heading.current)?.focus()
+      markFocus.current = null
+    } else if (!marking) markFocus.current = null
+  }, [markPreview, marking, payload])
 
   const finishVisit = useCallback(async () => {
     const leaving = visit.current
@@ -181,18 +195,26 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
     const ids = threadSources(collection, sourceFilter, id).map(source => source.id)
     onOpenEntry(id, { id: collection.id, title: collection.headline, ids, linkNumber: collection.linkNumber })
   }
-  const markRead = async (ids: string[]) => {
-    const displayed = new Map(current.current?.collections.flatMap(collection => collection.sources).map(source => [source.id, source.stateRevision]) || [])
-    const revisions = ids.every(id => displayed.get(id) !== undefined) ? Object.fromEntries(ids.map(id => [id, displayed.get(id)!])) : undefined
-    const saved = revisions ? await onMarkRead(ids, revisions) : await onMarkRead(ids)
-    if (saved && current.current) {
-      const marked = new Set(ids)
-      install({ ...current.current, collections: current.current.collections.map(collection => {
-        const sources = collection.sources.map(source => marked.has(source.id) ? { ...source, read: true } : source)
-        return { ...collection, sources, unreadCount: sources.filter(source => !source.read).length }
-      }) })
+  const markRead = async (ids: string[], collectionId?: string) => {
+    if (marking) return
+    const unread = new Map<string, number | undefined>()
+    for (const collection of current.current?.collections || []) {
+      for (const source of collection.sources) if (!source.read) unread.set(source.id, source.stateRevision)
     }
-    return saved
+    const marked = new Set(ids.filter(id => unread.has(id)))
+    if (!marked.size) return
+    const requested = [...marked]
+    const revisions = requested.every(id => unread.get(id) !== undefined) ? Object.fromEntries(requested.map(id => [id, unread.get(id)!])) : undefined
+    setMarking({ collectionId })
+    try {
+      const saved = revisions ? await onMarkRead(requested, revisions) : await onMarkRead(requested)
+      if (saved && mounted.current && current.current) {
+        install({ ...current.current, collections: current.current.collections.map(collection => {
+          const sources = collection.sources.map(source => marked.has(source.id) ? { ...source, read: true } : source)
+          return { ...collection, sources, unreadCount: sources.filter(source => !source.read).length }
+        }) })
+      }
+    } finally { setMarking(null) }
   }
   const saveFeedback = async (action: 'not_same' | 'not_useful' | 'merge', id: string, entryId = '', target = '') => {
     try {
@@ -208,6 +230,15 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
 
   const collections = payload?.collections.filter(collection => section === 'small' ? collection.articleCount < 3
     : collection.articleCount >= 3 && (section === 'unread' ? collection.unreadCount > 0 : collection.quiet === (section === 'quiet'))) || []
+  const unreadCollections = collections.filter(collection => collection.unreadCount > 0)
+  const openMarkPreview = (button: HTMLButtonElement) => {
+    if (marking) return
+    const ids = [...new Set(unreadCollections.flatMap(collection => collection.sources.filter(source => !source.read).map(source => source.id)))]
+    if (!ids.length) return
+    button.focus()
+    markFocus.current = { button }
+    setMarkPreview({ ids, collectionCount: unreadCollections.length })
+  }
   const lead = [...collections].sort((a, b) => b.newCount - a.newCount || Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || a.id.localeCompare(b.id))[0]
   const ordered = lead ? [lead, ...collections.filter(collection => collection !== lead)] : []
   const smallCount = payload?.collections.filter(collection => collection.articleCount < 3).length || 0
@@ -219,7 +250,7 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
     <div className="topics-scroll" ref={scroll}>
       <div className="topics-column">
         <header className="topics-header">
-          <div className="topics-heading"><button className="topics-back mobile-back icon-button" onClick={() => { rememberPulseReturn(null); onBack() }} aria-label="Back to sources"><Icon name="back" /></button><h1>Pulse</h1></div>
+          <div className="topics-heading"><button className="topics-back mobile-back icon-button" onClick={() => { rememberPulseReturn(null); onBack() }} aria-label="Back to sources"><Icon name="back" /></button><h1 ref={heading} tabIndex={-1}>Pulse</h1></div>
           <div className="pulse-toolbar">
             <div className="pulse-tabs pulse-section-tabs" role="group" aria-label="Collections">
               <button aria-pressed={section === 'unread'} onClick={() => void changeSection('unread')}>Unread <span>{unreadCount}</span></button>
@@ -227,6 +258,7 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
               <button aria-pressed={section === 'quiet'} onClick={() => void changeSection('quiet')}>Quiet <span>{quietCount}</span></button>
               {smallCount > 0 && <button aria-pressed={section === 'small'} onClick={() => void changeSection('small')}>Small <span>{smallCount}</span></button>}
             </div>
+            {unreadCollections.length > 0 && <button type="button" className="pulse-mark-all" aria-disabled={Boolean(marking)} onClick={event => openMarkPreview(event.currentTarget)}>Mark all read</button>}
             <button className={`icon-button ${refreshing ? 'spinning' : ''}`} disabled={refreshing} onClick={() => void refresh()} aria-label="Reload articles"><Icon name="refresh" /></button>
           </div>
         </header>
@@ -242,21 +274,33 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
         {ordered.map(collection => <CollectionCard key={collection.id} collection={collection}
           lead={collection === lead} now={now} unreadOnly={section === 'unread'} summariesEnabled={Boolean(payload?.status.enabled)} discussionConfigured={discussionConfigured}
           expanded={expanded === collection.id} filter={filter} onExpand={next => showCollection(collection, next)} onCollapse={() => void closeCollection()}
-          onOpenEntry={id => openArticle(id, collection)} onMarkRead={markRead} merging={Boolean(mergeFrom)} mergingThis={mergeFrom === collection.id}
+          onOpenEntry={id => openArticle(id, collection)} marking={marking?.collectionId === collection.id} markDisabled={Boolean(marking)}
+          onMarkRead={(ids, button) => {
+            if (marking) return
+            if (document.activeElement === button || document.activeElement === document.body) {
+              markFocus.current = { button, title: button.closest('article')?.querySelector<HTMLButtonElement>('.pulse-title') }
+            }
+            void markRead(ids, collection.id)
+          }} merging={Boolean(mergeFrom)} mergingThis={mergeFrom === collection.id}
           onMerge={() => mergeFrom && void saveFeedback('merge', mergeFrom, '', collection.id)} onStartMerge={() => setMergeFrom(collection.id)}
           onHide={() => void saveFeedback('not_useful', collection.id)} onRemove={id => void saveFeedback('not_same', collection.id, id)} />)}
       </div>
     </div>
+    {markPreview && <Modal title="Mark all read" className="pulse-mark-dialog" busy={Boolean(marking)} onClose={() => setMarkPreview(null)}>
+      <p>Mark {countLabel(markPreview.ids.length, 'article')} in {countLabel(markPreview.collectionCount, 'collection')} as read?</p>
+      <div className="pulse-mark-dialog-actions"><button type="button" disabled={Boolean(marking)} onClick={() => setMarkPreview(null)}>Cancel</button><button type="button" className="primary" disabled={Boolean(marking)} onClick={() => void markRead(markPreview.ids).finally(() => setMarkPreview(null))}>{marking ? 'Marking read…' : 'Mark all read'}</button></div>
+    </Modal>}
   </section>
 }
 
-function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, summariesEnabled, discussionConfigured, onExpand, onCollapse, onOpenEntry, onMarkRead, merging, mergingThis, onMerge, onStartMerge, onHide, onRemove }: {
+function countLabel(count: number, singular: string) { return `${count.toLocaleString()} ${singular}${count === 1 ? '' : 's'}` }
+
+function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, summariesEnabled, discussionConfigured, onExpand, onCollapse, onOpenEntry, onMarkRead, marking, markDisabled, merging, mergingThis, onMerge, onStartMerge, onHide, onRemove }: {
   collection: PulseCollection; lead: boolean; now: number; expanded: boolean; filter: ArticleFilter; unreadOnly: boolean; summariesEnabled: boolean; discussionConfigured?: boolean
   onExpand: (filter: ArticleFilter) => Promise<void>; onCollapse: () => void; onOpenEntry: (id: string) => void
-  onMarkRead: (ids: string[], expectedRevisions?: Record<string, number>) => Promise<boolean>; merging: boolean; mergingThis: boolean
+  onMarkRead: (ids: string[], button: HTMLButtonElement) => void; marking: boolean; markDisabled: boolean; merging: boolean; mergingThis: boolean
   onMerge: () => void; onStartMerge: () => void; onHide: () => void; onRemove: (id: string) => void
 }) {
-  const [marking, setMarking] = useState(false)
   const [failedImages, setFailedImages] = useState<string[]>([])
   const image = lead && collectionImage(collection.sources, failedImages)
   const rejectImage = () => { if (image) setFailedImages(failed => [...failed, image]) }
@@ -265,11 +309,6 @@ function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, s
   const sources = expanded ? filtered : filtered.slice(0, lead ? 3 : 1)
   const earlier = filtered.length - sources.length
   const unreadIds = collection.sources.filter(source => !source.read).map(source => source.id)
-  const markRead = async () => {
-    if (marking || !unreadIds.length) return
-    setMarking(true)
-    try { await onMarkRead(unreadIds) } finally { setMarking(false) }
-  }
   const listId = `pulse-${collection.id}`
   const catchUp = expanded && summariesEnabled ? collection.catchUp : undefined
   const newIds = new Set(catchUp ? collection.sources.filter(source => source.isNew).map(source => source.id) : [])
@@ -313,14 +352,17 @@ function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, s
       {!sources.length && <p className="pulse-empty">{filter === 'new' ? 'No new articles since your last visit.' : filter === 'read' ? 'You have not read any articles in this collection yet.' : 'You have read every article in this collection.'}</p>}
       <ol className="pulse-thread">{sources.map(source => <SourceRow key={source.id} source={source} now={now} onOpen={() => onOpenEntry(source.id)} showOriginal={expanded} />)}</ol>
     </div>
-    {!expanded && <a className="pulse-earlier" href={collection.linkNumber ? `/collection/${collection.linkNumber}` : `/?view=pulse&collection=${encodeURIComponent(collection.id)}`} aria-controls={listId} aria-describedby={`${listId}-count`} onClick={event => {
-      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
-      event.preventDefault()
-      void onExpand('all').then(() => requestAnimationFrame(() => { list.current?.focus(); list.current?.scrollIntoView({ block: 'start' }) }))
-    }}>{earlier ? `${earlier} earlier ${earlier === 1 ? 'article' : 'articles'}` : 'View collection'}</a>}
+    {!expanded && <div className="pulse-preview-actions">
+      <a className="pulse-earlier" href={collection.linkNumber ? `/collection/${collection.linkNumber}` : `/?view=pulse&collection=${encodeURIComponent(collection.id)}`} aria-controls={listId} aria-describedby={`${listId}-count`} onClick={event => {
+        if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+        event.preventDefault()
+        void onExpand('all').then(() => requestAnimationFrame(() => { list.current?.focus(); list.current?.scrollIntoView({ block: 'start' }) }))
+      }}>{earlier ? `${earlier} earlier ${earlier === 1 ? 'article' : 'articles'}` : 'View collection'}</a>
+      {unreadIds.length > 0 && <button type="button" className="pulse-mark-read" aria-disabled={markDisabled} aria-label={`Mark all ${countLabel(unreadIds.length, 'unread article')} in ${collection.headline} as read`} onClick={event => onMarkRead(unreadIds, event.currentTarget)}>{marking ? 'Marking read…' : 'Mark read'}</button>}
+    </div>}
     {expanded && discussionConfigured && collection.questionsRevision && <CollectionQuestions key={collection.questionsRevision} collection={collection} revision={collection.questionsRevision} onOpenEntry={onOpenEntry} />}
     {expanded && <div className="pulse-card-actions">
-      <button disabled={marking || !unreadIds.length} onClick={() => void markRead()}>{marking ? 'Marking read…' : `Mark ${unreadIds.length} unread as read`}</button><button onClick={onCollapse}>Close collection</button>
+      <button disabled={!unreadIds.length} aria-disabled={markDisabled} onClick={event => onMarkRead(unreadIds, event.currentTarget)}>{marking ? 'Marking read…' : `Mark ${unreadIds.length} unread as read`}</button><button onClick={onCollapse}>Close collection</button>
     </div>}
   </article>
 }
