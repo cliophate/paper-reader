@@ -2,7 +2,6 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { cleanArticleHtml, decodeHtmlText, emailText, excerpt, firstImage, plainText, readingMinutes } from '../src/server/text.js'
 
-const cleanupCpuLimitMs = 5_000
 // The child also needs wall time for Node startup, module loading and CPU contention.
 const childTimeoutMs = 30_000
 
@@ -140,16 +139,31 @@ describe('article text', () => {
     expect(result).not.toMatch(/evil|javascript|onerror|Hidden/)
   })
 
-  it.each(['enclosure', 'hero', 'footer', 'image', 'deep', 'nestedParagraphs'])('bounds repeated or deep %s markup in a killable subprocess', name => {
-    const child = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/article-cleanup-benchmark.mjs', 'src/server/text.ts', '--case', name, '10000'], {
+  it('keeps text and sanitizes markup across deeply nested fragments', () => {
+    const markup = '<p>Before</p>' + '<p>Outer<span>'.repeat(600)
+      + '<p><em onclick="bad()">Inner</em></p>' + '</span></p>'.repeat(600) + '<p>After</p>'
+    const result = cleanArticleHtml(markup)
+
+    expect(result.startsWith('<p>Before</p>')).toBe(true)
+    expect(result.match(/Outer/g)).toHaveLength(600)
+    expect(result).toContain('<p><em>Inner</em></p>')
+    expect(result.endsWith('<p>After</p>')).toBe(true)
+  })
+
+  it.each([
+    ...['enclosure', 'hero', 'footer', 'image', 'deep'].map(name => ({ name, count: 10_000, cpuLimitMs: 5_000 })),
+    // At this size the old parser takes far more CPU time than the fragment pass.
+    { name: 'nestedParagraphs', count: 80_000, cpuLimitMs: 10_000 },
+  ])('bounds repeated or deep $name markup in a killable subprocess', ({ name, count, cpuLimitMs }) => {
+    const child = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/article-cleanup-benchmark.mjs', 'src/server/text.ts', '--case', name, String(count)], {
       encoding: 'utf8', timeout: childTimeoutMs, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
       env: { PATH: process.env.PATH },
     })
     expect(child.error).toBeUndefined()
     expect(child.status, child.stderr).toBe(0)
-    const { count, cpuMs } = JSON.parse(child.stdout)
-    expect(count).toBe(10000)
-    expect(cpuMs).toBeLessThan(cleanupCpuLimitMs)
+    const { count: measuredCount, cpuMs } = JSON.parse(child.stdout)
+    expect(measuredCount).toBe(count)
+    expect(cpuMs).toBeLessThan(cpuLimitMs)
   }, childTimeoutMs + 10_000)
 
   it('separates block boundaries without splitting inline words', () => {

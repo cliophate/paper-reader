@@ -8,11 +8,19 @@ const allowedTags = [
   'ol', 'p', 'picture', 'pre', 's', 'small', 'source', 'span', 'strong', 'sub', 'summary',
   'sup', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul', 'video',
 ]
+const articleFragmentDepth = 512
 
 export function cleanArticleHtml(input: string): string {
-  const prepared = cleanArticleMarkup(decodeEscapedArticleMarkup(repairLinkedImageSources(input)))
+  const markup = decodeEscapedArticleMarkup(repairLinkedImageSources(input))
+  const parts: string[] = []
+  for (const fragment of prepareArticleFragments(markup)) {
+    parts.push(sanitizeArticleMarkup(cleanArticleMarkup(fragment)))
+  }
+  return parts.join('')
+}
 
-  return sanitizeHtml(prepared, {
+function sanitizeArticleMarkup(markup: string): string {
+  return sanitizeHtml(markup, {
     allowedTags,
     allowedAttributes: {
       a: ['href', 'title', 'rel', 'target'],
@@ -71,30 +79,44 @@ function applyMarkupEdits(input: string, edits: MarkupEdit[]): string {
   return parts.join('')
 }
 
-function removePostHeroes(input: string): string {
-  const stack: MarkupEdit[] = []
-  const edits: MarkupEdit[] = []
-  const parser = new Parser({
-    onopentag(name) {
-      if (name !== 'post-hero') return
-      const edit = { start: parser.startIndex, end: -1, replacement: '' }
-      edits.push(edit)
-      stack.push(edit)
-    },
-    onclosetag(name, implied) {
-      if (name !== 'post-hero') return
-      const edit = stack.pop()
-      if (edit && !implied) edit.end = parser.endIndex + 1
-    },
-  })
-  parser.end(input)
-  return applyMarkupEdits(input, edits)
+function* prepareArticleFragments(markup: string): Iterable<string> {
+  // Remove heroes before matching footer text.
+  let offset = 0
+  while (offset < markup.length) {
+    const input = markup.slice(offset)
+    const stack: MarkupEdit[] = []
+    const edits: MarkupEdit[] = []
+    let end = input.length
+    let depth = 0
+    const parser = new Parser({
+      onopentag(name) {
+        depth += 1
+        if (depth > articleFragmentDepth) {
+          // htmlparser2 shifts its open-tag array on each open and close.
+          // Let the sanitizer close this fragment and resume at this tag.
+          end = parser.startIndex
+          parser.pause()
+          return
+        }
+        if (name !== 'post-hero') return
+        const edit = { start: parser.startIndex, end: -1, replacement: '' }
+        edits.push(edit)
+        stack.push(edit)
+      },
+      onclosetag(name, implied) {
+        depth -= 1
+        if (name !== 'post-hero') return
+        const edit = stack.pop()
+        if (edit && !implied) edit.end = parser.endIndex + 1
+      },
+    })
+    parser.end(input)
+    yield applyMarkupEdits(input.slice(0, end), edits)
+    offset += end
+  }
 }
 
-function cleanArticleMarkup(markup: string): string {
-  // Hero removal precedes footer matching, as in the original cleanup order.
-  // Separate structural passes prevent discarded hero text from matching a footer.
-  const input = removePostHeroes(markup)
+function cleanArticleMarkup(input: string): string {
   interface Frame {
     name: string
     edit?: MarkupEdit
