@@ -4,7 +4,7 @@
 
 - Pulse ranks active collections by recent reporting and shows the first 25.
   New collections need three articles from at least two publications within a week.
-  Collections whose newest article is over 30 days old move to the archive under Quiet.
+  Collections whose newest article is over seven days old move to the archive under Quiet.
 
 ## 0.2.0-alpha.3
 

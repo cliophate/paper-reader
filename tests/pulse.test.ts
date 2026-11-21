@@ -116,7 +116,7 @@ describe('cited Pulse catch-up', () => {
     save(['1', '2', 'small-3'].map(id => article(id)), 'collection-small')
     db.createCoverageFeedback({ action: 'not_same', clusterId: 'collection-small', entryId: 'small-3' })
     const current = now
-    now -= 8 * DAY
+    now -= 4 * DAY
     save(['3', '4', '5'].map(id => article(id)), 'collection-quiet')
     now -= 30 * DAY
     save(['archived-1', 'archived-2', 'archived-3'].map(id => article(id)), 'collection-archived')
@@ -265,7 +265,7 @@ describe('continuing Pulse collections', () => {
 
   it('quiet collections retain all memberships and reactivate when two publications return', async () => {
     save([article('1'), article('2'), article('3')])
-    now += 8 * DAY
+    now += 4 * DAY
     const late = [article('4'), article('5')]
     db.upsertEntries(late)
     const model = vi.fn().mockResolvedValue(proposal(late, 'collection-one'))
@@ -287,7 +287,7 @@ describe('continuing Pulse collections', () => {
     const quiet = service.list()
     expect(quiet.collections[0]).toMatchObject({ active: false, quiet: true, archived: false, recentArticleCount: 0 })
     expect(quiet.revision).not.toBe(active.revision)
-    now = published + 30 * DAY
+    now = published + 7 * DAY
     expect(service.list().collections[0].quiet).toBe(true)
     now++
     const archived = service.list()

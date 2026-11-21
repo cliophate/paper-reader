@@ -21,8 +21,8 @@ const descriptions: Record<CollectionFilter, string> = {
   active: 'At least two publications covered the story in the last 72 hours.',
   unread: 'Active and quiet collections with articles you have yet to read.',
   small: 'Collections with fewer than three articles or fewer than two publications.',
-  quiet: 'These collections have coverage from the last 30 days, with fewer than two publications covering the story in the last 72 hours.',
-  archived: 'The newest article in each collection is more than 30 days old.',
+  quiet: 'These collections have coverage from the last seven days, with fewer than two publications covering the story in the last 72 hours.',
+  archived: 'The newest article in each collection is more than seven days old.',
 }
 
 const emptyHeadings: Record<CollectionFilter, string> = {
