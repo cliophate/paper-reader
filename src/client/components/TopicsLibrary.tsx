@@ -31,7 +31,7 @@ const emptyHeadings: Record<CollectionFilter, string> = {
 }
 interface Visit { id: string; sequence: number }
 // Remember the place when an article opens in Paper's reader, without persisting article content.
-type PulseReturn = { id: string | null; filter: ArticleFilter; section: CollectionFilter; scroll: number }
+type PulseReturn = { id: string | null; filter: ArticleFilter; section: CollectionFilter; scroll: number; allActive?: boolean }
 function readPulseReturn(): PulseReturn | null {
   try {
     const value = JSON.parse(sessionStorage.getItem('paper-pulse-return') || 'null')
@@ -66,7 +66,7 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
   const [expanded, setExpanded] = useState<string | null>(initialCollection || null)
   const [filter, setFilter] = useState<ArticleFilter>(directLink ? directLink.filter || 'all' : returnToPulse?.filter || 'all')
   const [section, setSection] = useState<CollectionFilter>(returnToPulse?.section || 'active')
-  const [allActive, setAllActive] = useState(false)
+  const [allActive, setAllActive] = useState(Boolean(!directLink && returnToPulse?.allActive))
   const [mergeFrom, setMergeFrom] = useState<string | null>(null)
   const [markPreview, setMarkPreview] = useState<{ ids: string[]; collectionCount: number } | null>(null)
   const [marking, setMarking] = useState<{ collectionId?: string } | null>(null)
@@ -80,8 +80,8 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
   const markFocus = useRef<{ button: HTMLButtonElement; title?: HTMLButtonElement | null } | null>(null)
   const mounted = useRef(true)
   const restoreScroll = useRef(directLink ? 0 : returnToPulse?.scroll || 0)
-  const view = useRef({ expanded, filter, section })
-  view.current = { expanded, filter, section }
+  const view = useRef({ expanded, filter, section, allActive })
+  view.current = { expanded, filter, section, allActive }
 
   const install = useCallback((next: PulsePayload) => { current.current = next; setPayload(next) }, [])
 
@@ -220,7 +220,7 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
   }
   const openArticle = (id: string, collection: PulseCollection) => {
     rememberPulseReturn({ id: collection.id, filter: view.current.filter === 'new' ? 'unread' : view.current.filter,
-      section: view.current.section, scroll: scroll.current?.scrollTop || 0 })
+      section: view.current.section, scroll: scroll.current?.scrollTop || 0, allActive: view.current.allActive })
     const sourceFilter = view.current.expanded === collection.id ? view.current.filter : view.current.section === 'unread' ? 'unread' : 'all'
     const ids = threadSources(collection, sourceFilter, id).map(source => source.id)
     onOpenEntry(id, { id: collection.id, title: collection.headline, ids, linkNumber: collection.linkNumber })
@@ -266,7 +266,7 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
   }
   const collections = sections[section]
   const visible = section === 'active' && !allActive ? collections.slice(0, ACTIVE_VISIBLE) : collections
-  const unreadCollections = collections.filter(collection => collection.unreadCount > 0)
+  const unreadCollections = visible.filter(collection => collection.unreadCount > 0)
   const openMarkPreview = (button: HTMLButtonElement) => {
     if (marking) return
     const ids = [...new Set(unreadCollections.flatMap(collection => collection.sources.filter(source => !source.read).map(source => source.id)))]
@@ -299,7 +299,7 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
         {error && <div className="pulse-notice" role="alert">{error} <button onClick={() => void load()}>Try again</button></div>}
         {payload?.status.failed && <p className="pulse-notice" role="status">Grouping is delayed. Your saved collections are available; Paper will retry automatically.</p>}
         {payload && !payload.status.enabled && <p className="pulse-notice">Automatic grouping is paused. Saved collections are still available.</p>}
-        {section === 'archived' && <h2>Archived collections</h2>}
+        {section === 'archived' && <h2 id="pulse-archived-heading" tabIndex={-1}>Archived collections</h2>}
         {collections.length > 0 && <p className="visually-hidden">{descriptions[section]}</p>}
         {merging && <div className="topics-merge-notice"><span>Open the collection that belongs with "{merging.headline}", then choose Merge into this collection.</span><button onClick={() => setMergeFrom(null)}>Cancel</button></div>}
         {!payload && !error && <div className="topics-state"><h2>Loading Pulse</h2></div>}
@@ -317,8 +317,13 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
           }} merging={Boolean(mergeFrom)} mergingThis={mergeFrom === collection.id}
           onMerge={() => mergeFrom && void saveFeedback('merge', mergeFrom, '', collection.id)} onStartMerge={() => setMergeFrom(collection.id)}
           onHide={() => void saveFeedback('not_useful', collection.id)} onRemove={id => void saveFeedback('not_same', collection.id, id)} />)}
-        {visible.length < collections.length && <button className="pulse-list-more" onClick={() => setAllActive(true)}>Show {collections.length - visible.length} more active collections</button>}
-        {section === 'quiet' && sections.archived.length > 0 && <button className="pulse-list-more" onClick={() => void changeSection('archived')}>{countLabel(sections.archived.length, 'archived collection')}</button>}
+        {visible.length < collections.length && <button className="pulse-list-more" onClick={() => {
+          const first = collections[visible.length].id
+          setAllActive(true)
+          requestAnimationFrame(() => scroll.current?.querySelector<HTMLButtonElement>(`.pulse-title[aria-controls="pulse-${CSS.escape(first)}"]`)?.focus())
+        }}>Show {collections.length - visible.length} more active collections</button>}
+        {section === 'quiet' && sections.archived.length > 0 && <button className="pulse-list-more" onClick={() => void changeSection('archived')
+          .then(() => requestAnimationFrame(() => document.getElementById('pulse-archived-heading')?.focus()))}>{countLabel(sections.archived.length, 'archived collection')}</button>}
       </div>
     </div>
     {markPreview && <Modal title="Mark all read" className="pulse-mark-dialog" busy={Boolean(marking)} onClose={() => setMarkPreview(null)}>

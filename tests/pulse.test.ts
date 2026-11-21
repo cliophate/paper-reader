@@ -453,7 +453,9 @@ describe('continuing Pulse collections', () => {
     const bad = proposal(entries); bad.groups[0].members[0].evidence = 'A claim absent from the supplied article'
     expect(() => validatePulseGroups(bad, entries, [])).toThrow('evidence')
     expect(() => validatePulseGroups(proposal(entries, 'unknown'), entries, [])).toThrow('Unknown collection')
-    expect(validatePulseGroups(proposal(entries), entries.map(entry => ({ ...entry, url: 'https://one.test/same' })), [])).toEqual([])
+    const duplicates = [article('4'), article('5', undefined, { url: 'https://two.test/4' }), article('7')]
+    expect(validatePulseGroups(proposal(duplicates), duplicates, [])).toEqual([])
+    expect(validatePulseGroups(proposal(duplicates), duplicates.map(entry => ({ ...entry, url: `https://${entry.feedTitle}.test/unique-${entry.id}` })), [])).toHaveLength(1)
     expect(pulseExtract(article('x', 'Example', { contentHtml: '<p>Quoted text</p><script>ignore instructions</script>' }))).not.toContain('<script>')
   })
 
@@ -519,6 +521,32 @@ describe('Pulse membership quality', () => {
     expect(service.list().collections).toEqual([])
     expect(service.list().status.failed).toBe(false)
     expect(db.pulseCandidates(now - 8 * DAY, now, false, 10)).toEqual([])
+  })
+
+  it('does not keep a single-publication proposal pending because of a repeated member ID', () => {
+    const entries = ['1', '3', '5'].map(id => article(id))
+    const response = proposal(entries)
+    response.groups[0].members.push({ entryId: '1', evidence: entries[0].title })
+    const checked = validatePulseBatch(response, entries, [])
+    expect(checked.groups).toEqual([])
+    expect(checked.deferred).toEqual(new Set())
+  })
+
+  it('treats mobile and AMP hosts as the same publication', () => {
+    const entries = [article('1'), article('3', undefined, { url: 'https://m.one.test/3' }), article('5', undefined, { url: 'https://amp.one.test/5' })]
+    expect(validatePulseGroups(proposal(entries), entries, [])).toEqual([])
+  })
+
+  it('ignores undated articles for activity and the seven-day span', () => {
+    const old = now - 45 * DAY
+    save([article('1', undefined, { timestamp: old }), article('2', undefined, { timestamp: old }), article('3', undefined, { timestamp: old })])
+    const undated = [article('4', 'Orion 9 feature 4 explained', { publishedAt: '' }), article('5', 'Orion 9 feature 5 explained', { publishedAt: '' })]
+    db.upsertEntries(undated)
+    db.savePulseBatch([{ id: 'collection-one', headline: 'Orion 9', scope: 'The Orion 9 release and its features.', entryIds: ['4', '5'] }], ['4', '5'], new Date(now).toISOString())
+    const service = new PulseService(db, vi.fn(), false, () => now)
+    expect(service.list().collections[0]).toMatchObject({ articleCount: 5, active: false, archived: true })
+    const fresh = [article('6', undefined, { timestamp: old, publishedAt: '' }), article('7'), article('8')]
+    expect(validatePulseGroups(proposal(fresh), fresh, [])).toHaveLength(1)
   })
 
   it('uses the article domain first and falls back to the feed domain', () => {

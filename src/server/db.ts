@@ -1064,7 +1064,7 @@ export class PaperDatabase {
       SELECT ?, id, ?, ? FROM entries WHERE id = ?
       AND NOT EXISTS (SELECT 1 FROM pulse_memberships WHERE entry_id = entries.id)
       AND NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = entries.id)`)
-    const eligible = this.db.prepare(`SELECT id, canonical_url, url, feed_url AS feedUrl, timestamp FROM entries WHERE id = ?
+    const eligible = this.db.prepare(`SELECT id, canonical_url, url, feed_url AS feedUrl, timestamp, published_at AS publishedAt FROM entries WHERE id = ?
       AND NOT EXISTS (SELECT 1 FROM pulse_memberships WHERE entry_id = entries.id)
       AND NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = entries.id)`)
     const exists = this.db.prepare('SELECT 1 FROM pulse_collections WHERE id = ?')
@@ -1075,7 +1075,7 @@ export class PaperDatabase {
       for (const group of groups) {
         const urls = new Set<string>()
         const members = group.entryIds.flatMap(id => {
-          const row = eligible.get(id) as { id: string; canonical_url: string; url: string; feedUrl: string; timestamp: number } | undefined
+          const row = eligible.get(id) as { id: string; canonical_url: string; url: string; feedUrl: string; timestamp: number; publishedAt: string } | undefined
           if (!row || urls.has(row.canonical_url || id)) return []
           urls.add(row.canonical_url || id)
           return [row]

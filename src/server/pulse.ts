@@ -6,7 +6,7 @@ import { canonicalTopicUrl } from './topics.js'
 import { decodeHtmlText, plainText } from './text.js'
 import { generatePulseCatchUps, pulseCatchUpRevision, validatePulseCatchUp } from './pulse-catch-up.js'
 
-import { ACTIVE_WINDOW, ACTIVE_MIN_ARTICLES, ACTIVE_MIN_PUBLICATIONS, ARCHIVE_AFTER, publicationDomain, qualifiesForNewCollection } from './pulse-rules.js'
+import { ACTIVE_WINDOW, ACTIVE_MIN_ARTICLES, ACTIVE_MIN_PUBLICATIONS, ARCHIVE_AFTER, publicationDomain, publishedTime, qualifiesForNewCollection } from './pulse-rules.js'
 
 const FUTURE_TOLERANCE = 60_000
 const DAY = 86_400_000
@@ -190,6 +190,7 @@ export function validatePulseBatch(raw: unknown, entries: Entry[], existing: Pul
       const members = (proposal as { members?: unknown } | null)?.members
       if (Array.isArray(members)) {
         const seen = new Set<string>()
+        const rejected: Entry[] = []
         const validMembers = members.filter(member => {
           const entry = allowed.get(member?.entryId)
           if (!entry) { reasons.add('Unknown or repeated article ID'); return false }
@@ -198,15 +199,17 @@ export function validatePulseBatch(raw: unknown, entries: Entry[], existing: Pul
           const quote = typeof member.evidence === 'string' ? normalize(member.evidence) : ''
           if (quote.length < 6 || quote.length > 240 || !normalize(`${entry.title}\n${pulseExtract(entry)}`).includes(quote)) {
             deferred.add(entry.id)
+            rejected.push(entry)
             reasons.add('Collection evidence is not in the article')
             return false
           }
           return true
         })
         candidate = { ...proposal as Record<string, unknown>, members: validMembers }
-        // Keep the remaining articles pending if rejecting a member leaves a new group too small.
-        if (!(proposal as { collectionId?: string }).collectionId && validMembers.length !== members.length
-          && !qualifiesForNewCollection(validMembers.map(member => allowed.get(member.entryId)!))) {
+        // Keep the remaining articles pending if an evidence rejection leaves an otherwise qualifying new group too small.
+        const survivors = validMembers.map(member => allowed.get(member.entryId)!)
+        if (!(proposal as { collectionId?: string }).collectionId && rejected.length
+          && !qualifiesForNewCollection(survivors) && qualifiesForNewCollection([...survivors, ...rejected])) {
           validMembers.forEach(member => deferred.add(member.entryId))
         }
       }
@@ -234,8 +237,10 @@ export function comparePulseCollections(a: PulseCollection, b: PulseCollection) 
 export function summarizeCollection(collection: StoredCollection, now = Date.now()): PulseCollection {
   const sources = [...collection.sources].sort((a, b) => b.addedAt.localeCompare(a.addedAt) || b.timestamp - a.timestamp || b.sequence - a.sequence)
   const updatedAt = sources[0]?.addedAt || collection.createdAt
-  const latest = sources.reduce((latest, source) => Math.max(latest, source.timestamp), -Infinity)
-  const recent = sources.filter(source => source.timestamp >= now - ACTIVE_WINDOW && source.timestamp <= now + FUTURE_TOLERANCE)
+  const dated = sources.flatMap(source => publishedTime(source) === undefined ? [] : [source])
+  // A collection with no dated articles ages by crawl time but never counts as active.
+  const latest = (dated.length ? dated : sources).reduce((latest, source) => Math.max(latest, source.timestamp), -Infinity)
+  const recent = dated.filter(source => source.timestamp >= now - ACTIVE_WINDOW && source.timestamp <= now + FUTURE_TOLERANCE)
   const recentPublicationCount = new Set(recent.map(source => source.domain).filter(Boolean)).size
   const active = recent.length >= ACTIVE_MIN_ARTICLES && recentPublicationCount >= ACTIVE_MIN_PUBLICATIONS
   const archived = latest < now - ARCHIVE_AFTER
@@ -319,7 +324,7 @@ export class PulseService {
       if (summary) collection.catchUp = validatePulseCatchUp(summary, new Map(collection.sources.map(source => [source.id, source])))
     }
     const revision = crypto.createHash('sha1').update(JSON.stringify(collections.map(collection =>
-      [collection.id, collection.questionsRevision, collection.active, collection.archived, collection.recentPublicationCount, collection.recentArticleCount, collection.latestPublishedAt, saved?.get(collection.id)?.revision]))).digest('hex')
+      [collection.id, collection.questionsRevision, collection.active, collection.archived, collection.publicationCount, collection.recentPublicationCount, collection.recentArticleCount, collection.latestPublishedAt, saved?.get(collection.id)?.revision]))).digest('hex')
     return { collections, ...(collectionAliases.length ? { collectionAliases } : {}), revision, status: { enabled: this.enabled, running: Boolean(this.running),
       lastCompletedAt: this.db.getSyncValue('pulse_completed_at') || null, failed: this.failed } }
   }

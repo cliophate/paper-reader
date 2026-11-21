@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { sourceDomain } from './pulse-rules.js'
 import { abortable } from './abort.js'
 import { decodeHtmlText, plainText } from './text.js'
 import type { EntrySource } from './repository.js'
@@ -402,11 +403,7 @@ function publicationDomain(entry: Entry): string {
 }
 
 function hostname(input: string): string {
-  try {
-    return new URL(input).hostname.toLowerCase().replace(/^(?:www|m|amp)\./, '')
-  } catch {
-    return ''
-  }
+  return sourceDomain(input)
 }
 
 function outboundLinks(entry: Entry): Set<string> {

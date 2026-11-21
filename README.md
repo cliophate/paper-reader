@@ -169,7 +169,7 @@ three visible articles or fewer than two publications.
 When the newest article is more than 30 days old, the collection moves to the
 archive. Open it from the bottom of Quiet or follow a saved link. Adding an old
 article counts as new since your visit, but only its publication date counts
-toward activity.
+toward activity. Articles without a publication date never count toward activity.
 
 ## Your data
 
