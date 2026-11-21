@@ -1091,7 +1091,6 @@ export class PaperDatabase {
       for (const id of scannedIds) if (!deferred.has(id)) scan.run(now, id)
       this.setSyncValueInTransaction('pulse_completed_at', now)
       this.db.exec('COMMIT')
-      return deferred
     } catch (error) { this.db.exec('ROLLBACK'); throw error }
   }
 

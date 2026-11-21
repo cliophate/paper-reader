@@ -502,7 +502,7 @@ describe('continuing Pulse collections', () => {
 })
 
 describe('Pulse membership quality', () => {
-  it('defers new proposals from one publication or spanning more than seven days', async () => {
+  it('scans new proposals from one publication or spanning more than seven days without retrying them', async () => {
     const one = ['1', '3', '5'].map(id => article(id))
     const week = [article('6', undefined, { timestamp: now - 7 * DAY }), article('7'), article('8')]
     expect(validatePulseGroups(proposal(week), week, [])).toHaveLength(1)
@@ -511,12 +511,14 @@ describe('Pulse membership quality', () => {
     const proposals = { groups: [...proposal(one).groups, ...proposal(week, '', 'Another release').groups] }
     const checked = validatePulseBatch(proposals, entries, [])
     expect(checked.groups).toEqual([])
-    expect(checked.deferred).toEqual(new Set(entries.map(entry => entry.id)))
+    expect(checked.deferred).toEqual(new Set())
+    expect(checked.reasons).toEqual(new Set())
     db.upsertEntries(entries)
     const service = new PulseService(db, vi.fn().mockResolvedValue(proposals), true, () => now)
     await service.refresh()
     expect(service.list().collections).toEqual([])
-    expect(db.pulseCandidates(now - 8 * DAY, now, false, 10)).toHaveLength(6)
+    expect(service.list().status.failed).toBe(false)
+    expect(db.pulseCandidates(now - 8 * DAY, now, false, 10)).toEqual([])
   })
 
   it('uses the article domain first and falls back to the feed domain', () => {
@@ -527,7 +529,7 @@ describe('Pulse membership quality', () => {
     expect(validatePulseGroups(proposal(entries), entries, [])).toEqual([])
   })
 
-  it('defers survivors when review or a concurrent mute removes the second publication', async () => {
+  it('scans survivors when review removes the second publication', async () => {
     const entries = ['1', '3', '5', '2'].map(id => article(id))
     db.upsertEntries(entries)
     const review = vi.fn(async () => ({ decisions: entries.map((_, i) => ({
@@ -535,14 +537,20 @@ describe('Pulse membership quality', () => {
     })) }))
     const service = new RealPulseService(db, vi.fn().mockResolvedValue(proposal(entries)), true, () => now, review)
     await service.refresh()
-    const pending = () => db.pulseCandidates(now - DAY, now, false, 10).map(entry => entry.id).sort()
-    expect(pending()).toEqual(['1', '3', '5'])
+    expect(db.pulseCollections()).toEqual([])
+    expect(service.list().status.failed).toBe(false)
+    expect(db.pulseCandidates(now - DAY, now, false, 10)).toEqual([])
+  })
+
+  it('leaves survivors pending when a concurrent mute removes the second publication', async () => {
+    const entries = ['1', '3', '5', '2'].map(id => article(id))
+    db.upsertEntries(entries)
     await db.createMuteFilter('feature 2', 'title')
     await db.backfillMuteFilters()
     const ids = entries.map(entry => entry.id)
     db.savePulseBatch([{ id: 'new', headline: 'Orion 9', scope: 'The Orion 9 release.', entryIds: ids }], ids, new Date(now).toISOString())
     expect(db.pulseCollections()).toEqual([])
-    expect(pending()).toEqual(['1', '3', '5'])
+    expect(db.pulseCandidates(now - DAY, now, false, 10).map(entry => entry.id).sort()).toEqual(['1', '3', '5'])
   })
 
   it('checks the minimum again when members were muted before saving and leaves survivors pending', async () => {

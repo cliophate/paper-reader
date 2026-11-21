@@ -53,7 +53,7 @@ function validationState(entries: Entry[], existing: PulseCollection[]) {
   return { allowed: new Map(entries.map(entry => [entry.id, entry])), existing, claimed: new Set<string>(), groups: [] as PulseGroup[], deferred: new Set<string>() }
 }
 
-function validateProposal(value: unknown, { allowed, existing, claimed, groups, deferred }: ReturnType<typeof validationState>) {
+function validateProposal(value: unknown, { allowed, existing, claimed, groups }: ReturnType<typeof validationState>) {
   if (!value || typeof value !== 'object') throw new Error('Invalid collection proposal')
   const group = value as Record<string, unknown>
   if (typeof group.collectionId !== 'string' || typeof group.title !== 'string' || typeof group.scope !== 'string' || !Array.isArray(group.members)) throw new Error('Invalid collection fields')
@@ -80,18 +80,13 @@ function validateProposal(value: unknown, { allowed, existing, claimed, groups, 
     urls.add(url)
     ids.push(entry.id)
   }
-  if (!current && !qualifiesForNewCollection(accepted)) {
-    memberIds.forEach(id => deferred.add(id))
-    return
-  }
+  // Articles that fail the new-collection rule are still scanned. Related-article context brings them back when other publications report.
+  if (!current && !qualifiesForNewCollection(accepted)) return
   if (!ids.length) return
 
   // A second proposal with the same name in one response also reuses the first ID.
   const prior = groups.find(item => current ? item.id === current.id : normalize(item.headline) === normalize(headline))
-  if (!current && prior && !qualifiesForNewCollection([...prior.entryIds.map(id => allowed.get(id)!), ...accepted])) {
-    ids.forEach(id => deferred.add(id))
-    return
-  }
+  if (!current && prior && !qualifiesForNewCollection([...prior.entryIds.map(id => allowed.get(id)!), ...accepted])) return
   ids.forEach(id => claimed.add(id))
   if (prior) prior.entryIds.push(...ids)
   else groups.push({ id: current?.id || `collection-${crypto.randomUUID()}`, headline, scope, entryIds: ids })
@@ -121,7 +116,7 @@ export const PULSE_REVIEW_PROMPT = `Review proposed RSS collection memberships i
 Judge each article's own reporting against the collection's specific scope, product generation and version. Shared keywords, a company name or incidental mentions do not make it relevant. Reject uncertain matches. Identify syndicated or substantially duplicate reporting, even across different URLs. Set duplicateOf to a supplied article ID only when it adds no distinct reporting; otherwise use an empty string. A follow-up, review or different angle is not a duplicate merely because it shares a subject.
 For each accepted article, copy one contiguous passage of 12-300 characters from that article's extract that explains the development or angle. Copy it exactly, including punctuation; do not paraphrase, combine passages, add quotation marks, or insert ellipses. This passage will be shown as a quoted catch-up excerpt with a link, never as an independently verified fact. Use an empty string if no passage fits these requirements or only the title is informative. For rejected or duplicate articles, use an empty string. Return a decision for every proposed member.`
 
-export async function reviewPulseGroups(model: PulseModel, groups: PulseGroup[], entries: Entry[], existing: PulseCollection[], deferred = new Set<string>()): Promise<PulseGroup[]> {
+export async function reviewPulseGroups(model: PulseModel, groups: PulseGroup[], entries: Entry[], existing: PulseCollection[]): Promise<PulseGroup[]> {
   if (!groups.length) return []
   const byId = new Map(entries.map(entry => [entry.id, entry]))
   const articles = [...new Set(groups.flatMap(group => group.entryIds))].map(id => byId.get(id)!).filter(Boolean)
@@ -151,11 +146,7 @@ export async function reviewPulseGroups(model: PulseModel, groups: PulseGroup[],
   }
   return groups.flatMap(group => {
     const ids = group.entryIds.filter(id => decisions.get(id)?.relevant && !decisions.get(id)?.duplicateOf)
-    if (!ids.length) return []
-    if (!existing.some(item => item.id === group.id) && !qualifiesForNewCollection(ids.map(id => byId.get(id)!))) {
-      ids.forEach(id => deferred.add(id))
-      return []
-    }
+    if (!ids.length || (!existing.some(item => item.id === group.id) && !qualifiesForNewCollection(ids.map(id => byId.get(id)!)))) return []
     return [{ ...group, entryIds: ids, developments: Object.fromEntries(ids.map(id => [id, decisions.get(id)!.excerpt])) }]
   })
 }
@@ -213,6 +204,11 @@ export function validatePulseBatch(raw: unknown, entries: Entry[], existing: Pul
           return true
         })
         candidate = { ...proposal as Record<string, unknown>, members: validMembers }
+        // Keep the remaining articles pending if rejecting a member leaves a new group too small.
+        if (!(proposal as { collectionId?: string }).collectionId && validMembers.length !== members.length
+          && !qualifiesForNewCollection(validMembers.map(member => allowed.get(member.entryId)!))) {
+          validMembers.forEach(member => deferred.add(member.entryId))
+        }
       }
       validateProposal(candidate, state)
     } catch (error) {
@@ -429,14 +425,13 @@ export class PulseService {
       const groups = await reviewPulseGroups((...args) => {
         if (!this.enabled) throw new Error('Pulse is disabled')
         return this.reviewModel(...args)
-      }, checked.groups, articles, existing, checked.deferred)
+      }, checked.groups, articles, existing)
       if (!this.enabled) return
       // Corrections may have arrived while the model was running. Do not recreate a hidden or merged collection.
       const current = new Set(correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now(), true).collections.map(collection => collection.id))
       const valid = groups.filter(group => !all.some(collection => collection.id === group.id) || current.has(group.id))
       const deferred = new Set([...checked.deferred, ...groups.filter(group => !valid.includes(group)).flatMap(group => group.entryIds)])
-      const unsaved = this.db.savePulseBatch(valid, fresh.filter(entry => !deferred.has(entry.id)).map(entry => entry.id), new Date(this.now()).toISOString())
-      if ((deferred.size || unsaved.size) && !checked.reasons.size) checked.reasons.add('Collection needs more qualifying articles')
+      this.db.savePulseBatch(valid, fresh.filter(entry => !deferred.has(entry.id)).map(entry => entry.id), new Date(this.now()).toISOString())
       this.failed = checked.reasons.size > 0
       this.retryAfter = this.failed ? this.now() + 15 * 60_000 : 0
       this.notify()
