@@ -8,11 +8,13 @@ import { refreshPulseState, acknowledgePulseVisit } from '../src/client/pulse'
 import type { PulseCollection, PulsePayload, PulseSource } from '../src/shared/pulse'
 
 const source = (id: string, sequence: number, read = false): PulseSource => ({ id, sequence, read, isNew: true, addedAt: '2026-09-16T10:00:00Z',
-  feedId: 'feed/one', publication: 'Daily Gazette', domain: 'example.test', title: `Feature report ${id}`, url: `https://example.test/${id}`,
+  feedId: 'feed/one', publication: 'Daily Gazette', domain: `paper-${sequence % 2}.test`, title: `Feature report ${id}`, url: `https://example.test/${id}`,
   author: '', publishedAt: '2026-09-16T10:00:00Z', timestamp: 1, thumbnailUrl: '' })
 const collection = (id: string, sources: PulseSource[]): PulseCollection => ({ id, headline: `Collection ${id}`, scope: 'Reporting on a developing release.',
   createdAt: '2026-09-16T10:00:00Z', updatedAt: '2026-09-16T10:00:00Z', revision: Math.max(...sources.map(s => s.sequence)), seenThrough: 0,
-  newCount: sources.filter(s => s.isNew).length, unreadCount: sources.filter(s => !s.read).length, publicationCount: 1, articleCount: sources.length, quiet: false, sources })
+  newCount: sources.filter(s => s.isNew).length, unreadCount: sources.filter(s => !s.read).length, publicationCount: new Set(sources.map(s => s.domain)).size, articleCount: sources.length,
+  latestPublishedAt: sources[0].publishedAt, recentArticleCount: sources.length, recentPublicationCount: new Set(sources.map(s => s.domain)).size,
+  active: true, archived: false, quiet: false, sources })
 const payload = (collections: PulseCollection[], revision = 'one'): PulsePayload => ({ collections, revision, status: { enabled: true, running: false, lastCompletedAt: null, failed: false } })
 let root: Root | undefined
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; vi.restoreAllMocks(); document.body.innerHTML = '' })
@@ -87,7 +89,7 @@ describe('Pulse visit and update interface', () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
     vi.spyOn(api, 'pulse').mockResolvedValue(payload([
       collection('active', [source('1', 1), source('2', 2, true), source('a', 1, true)]),
-      { ...collection('quiet', [source('3', 3, true), { ...source('4', 4), stateRevision: 7 }, source('q', 3, true)]), quiet: true },
+      { ...collection('quiet', [source('3', 3, true), { ...source('4', 4), stateRevision: 7 }, source('q', 3, true)]), active: false, quiet: true },
       collection('finished', [source('5', 5, true)]),
     ]))
     const visit = vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
@@ -144,7 +146,7 @@ describe('Pulse visit and update interface', () => {
     const read = [source('a', 3, true), source('b', 4, true), source('c', 5, true)]
     vi.spyOn(api, 'pulse').mockResolvedValue(payload([
       collection('one', [shared, ...read.slice(1)]), collection('two', [shared, second, read[0]]), collection('finished', read),
-      { ...collection('quiet', [source('quiet', 2), ...read.slice(1)]), quiet: true }, collection('small', [source('small', 1)]),
+      { ...collection('quiet', [source('quiet', 2), ...read.slice(1)]), active: false, quiet: true }, collection('small', [source('small', 1)]),
     ]))
     const markRead = vi.fn().mockResolvedValue(true)
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
@@ -227,6 +229,57 @@ describe('Pulse collection size and catch-up', () => {
     expect(container.querySelector('.pulse-earlier')?.textContent).toBe('View collection')
   })
 
+  it('shows the first 25 active collections and picks the lead from the visible cards', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    const members = [source('one', 1), source('two', 2), source('three', 3)]
+    const ranked = Array.from({ length: 27 }, (_, i) => collection(String(i).padStart(2, '0'), members))
+    ranked[26] = collection('26', [...members, source('four', 4)])
+    vi.spyOn(api, 'pulse').mockResolvedValue(payload(ranked))
+    vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
+    const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
+    const render = (initialCollection?: string) => act(async () => root!.render(<TopicsLibrary initialCollection={initialCollection}
+      onCollectionChange={() => {}} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
+    await render()
+    expect(button(container, 'Active 27')).toBeDefined()
+    expect([...container.querySelectorAll('.pulse-title')].map(node => node.textContent)).toEqual(ranked.slice(0, 25).map(item => item.headline))
+    await act(async () => button(container, 'Mark all read').click())
+    const dialog = () => container.querySelector<HTMLElement>('[role="dialog"]')!
+    expect(dialog().textContent).toContain('Mark 3 articles in 25 collections as read?')
+    await act(async () => button(dialog(), 'Cancel').click())
+    await act(async () => { button(container, 'Show 2 more active collections').click(); await new Promise(requestAnimationFrame) })
+    expect(container.querySelectorAll('.pulse-card')).toHaveLength(27)
+    expect(document.activeElement?.textContent).toBe('Collection 25')
+    expect(container.querySelector('.pulse-lead .pulse-title')?.textContent).toBe('Collection 26')
+    await act(async () => button(container, 'Unread 27').click())
+    await act(async () => button(container, 'Active 27').click())
+    expect(container.querySelectorAll('.pulse-card')).toHaveLength(25)
+    await render('25')
+    expect(button(container, 'Collection 25').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('files a single-publication burst in Small and opens archived collections from Quiet or a link', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    const burst = { ...collection('burst', [source('1', 1), source('3', 3), source('5', 5)]), active: false, quiet: true }
+    const archived = { ...burst, id: 'archive', headline: 'Archived thread', archived: true, quiet: false }
+    vi.spyOn(api, 'pulse').mockResolvedValue(payload([burst, archived]))
+    vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
+    const container = document.createElement('div'); root = createRoot(container)
+    const render = (initialCollection?: string) => act(async () => root!.render(<TopicsLibrary initialCollection={initialCollection}
+      onCollectionChange={() => {}} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
+    await render()
+    for (const label of ['Active 0', 'Unread 0', 'Quiet 0', 'Small 1']) expect(button(container, label)).toBeDefined()
+    await act(async () => button(container, 'Small 1').click())
+    expect(container.querySelector('.pulse-title')?.textContent).toBe('Collection burst')
+    await act(async () => button(container, 'Quiet 0').click())
+    expect(container.querySelectorAll('.pulse-card')).toHaveLength(0)
+    await act(async () => button(container, '1 archived collection').click())
+    expect(button(container, 'Archived thread').getAttribute('aria-expanded')).toBe('false')
+    await act(async () => button(container, 'Active 0').click())
+    await render('archive')
+    expect(button(container, 'Archived thread').getAttribute('aria-expanded')).toBe('true')
+    expect(container.querySelector('.pulse-lead')).toBeNull()
+  })
+
   it('updates thread times even while the background request is pending', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
     vi.useFakeTimers()
@@ -287,7 +340,7 @@ describe('Pulse collection size and catch-up', () => {
   it('opens a digest link to its collection and shows supported excerpts and clear filtered counts', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
     const items = [{ ...source('1', 1), development: 'The new release adds offline maps.' }, source('2', 2, true), source('3', 3, true)]
-    vi.spyOn(api, 'pulse').mockResolvedValue(payload([{ ...collection('linked', items), quiet: true }]))
+    vi.spyOn(api, 'pulse').mockResolvedValue(payload([{ ...collection('linked', items), active: false, quiet: true }]))
     vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
     const open = vi.fn()
     const container = document.createElement('div'); document.body.append(container); root = createRoot(container)

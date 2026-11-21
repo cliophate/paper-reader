@@ -152,6 +152,25 @@ workflow before turning on **Send scheduled briefings**.
 
 See the [integration guide](docs/integrations.md) for full setup instructions.
 
+## Pulse collections
+
+Pulse starts a collection when at least three articles from two or more publication
+domains cover the same story within seven days. Later reporting can join an existing
+collection at any time.
+
+**Active** shows stories that at least two publications covered in the past 72 hours.
+It shows 25 collections first, ranked by recent publications and articles, then by
+unread count and publication time. The lead card goes to the visible collection
+with the most articles added since your last visit. **Quiet** holds stories with
+less recent coverage. **Unread** shows active and quiet collections that contain
+unread articles. **Small** lists collections with fewer than
+three visible articles or fewer than two publications.
+
+When the newest article is more than seven days old, the collection moves to the
+archive. Open it from the bottom of Quiet or follow a saved link. Adding an old
+article counts as new since your visit, but only its publication date counts
+toward activity. Articles without a publication date never count toward activity.
+
 ## Your data
 
 Back up `./data` and your private `.env`. The data directory holds reading

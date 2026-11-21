@@ -89,7 +89,7 @@ describe('repeatable feed ingestion', () => {
   it('preserves state and references through updates, redirects, disappearance, repair and restart', () => {
     const id = resolvedId(ingest())
     const related = resolvedId(ingest(rss(item('related', '/related'))))
-    const third = resolvedId(ingest(rss(item('third', '/third'))))
+    const third = resolvedId(ingest(rss(item('third', 'https://other.test/third'))))
     const initialArrivals = arrivals()
     const firstSeen = sql(c => c.prepare('SELECT first_seen_at FROM entries WHERE id = ?').get(id)?.first_seen_at)
     db.commitLocalEntryState(backend.id, [id], 'read')

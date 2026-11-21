@@ -43,8 +43,9 @@ written in new links.
 
 Briefing links use `/pulse?collection=<id>&filter=new`. Paper opens the
 collection on New and replaces the URL with `/collection/<number>?filter=new`.
-Links follow collection merges. If a briefing's collection is unavailable,
-Paper shows a notice in Pulse.
+Links follow collection merges and open archived collections in the archive. A link
+to an active collection outside the first 25 opens the full list. If a briefing's
+collection is unavailable, Paper shows a notice in Pulse.
 
 Other unknown feed, folder or collection numbers show a short notice and return
 to All articles. An unknown article leaves its stream open with a notice. If an

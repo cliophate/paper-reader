@@ -24,7 +24,7 @@ beforeEach(() => {
   file = path.join(directory, 'paper.sqlite')
   db = new PaperDatabase(file)
   db.replaceNavigation(navigation)
-  db.upsertEntries([article, ...['two', 'three'].map(id => ({ ...article, id, url: `https://example.test/${id}` }))])
+  db.upsertEntries([article, ...['two', 'three'].map(id => ({ ...article, id, url: `https://other.test/${id}` }))])
   db.savePulseBatch([{ id: 'collection-fixture', headline: 'Synthetic collection', scope: 'Synthetic scope', entryIds: [article.id, 'two', 'three'] }], [article.id, 'two', 'three'], '2026-01-01T00:00:00Z')
 })
 afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })

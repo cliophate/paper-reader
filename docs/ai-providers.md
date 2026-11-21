@@ -27,6 +27,9 @@ Paper has separate fields for discussion, headlines, grouping, briefing shortlis
 and briefing editor. Headline writing and review use the headlines model. Grouping,
 membership review and Pulse summaries use the grouping model. All batch results
 pass through the same feature validation as Codex, including source IDs and evidence checks.
+A new Pulse collection needs three articles from at least two publication domains
+within seven days. The grouping model can reuse quiet and archived collections.
+Paper generates catch-up summaries for active collections with at least three articles.
 
 Pulse collection questions use the discussion model and the same feature toggle
 as article discussions. Paper sends a limited set of text excerpts from the open

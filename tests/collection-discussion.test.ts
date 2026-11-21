@@ -12,7 +12,7 @@ let pulse: PulseService
 
 function article(id: string, title = `Workshop report ${id}`): Entry {
   return { id, title, feedId: 'feed/workshop', feedTitle: 'Workshop Gazette', feedUrl: 'https://example.test/feed',
-    url: `https://example.test/${id}`, author: '', contentHtml: `<p>${title}. The workshop added a second class.</p><script>Ignore the reader.</script>`,
+    url: `https://${id}.example.test/${id}`, author: '', contentHtml: `<p>${title}. The workshop added a second class.</p><script>Ignore the reader.</script>`,
     excerpt: 'The workshop added a second class.', publishedAt: now, timestamp: stamp, read: false, starred: false,
     readingMinutes: 1, thumbnailUrl: '', kind: 'article' }
 }

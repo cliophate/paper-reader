@@ -1116,6 +1116,8 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
   .collection-return { flex-basis: 100%; }
 }
 
+.pulse-list-more { display: block; margin: 12px auto; padding: 10px; border: 0; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+.pulse-list-more:hover, .pulse-list-more:focus-visible { color: var(--ink); text-decoration: underline; }
 .pulse-filter-count { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
 .pulse-filter-count button { border: 0; padding: 6px 0; background: none; color: var(--ink); font: inherit; text-decoration: underline; cursor: pointer; }
 .summary-square, .briefing-document > .briefing-story > p, .briefing-section .briefing-source-stories + p { position: relative; padding-inline-start: 1em; }
