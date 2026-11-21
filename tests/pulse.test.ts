@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db'
 import { DATABASE_VERSION } from '../src/server/auth-schema'
-import { PulseService as RealPulseService, type PulseModel, reviewPulseGroups, duplicatePulseArticle, pulseExtract, validatePulseGroups, validatePulseBatch, shortPulseReferences } from '../src/server/pulse'
+import { PulseService as RealPulseService, type PulseModel, reviewPulseGroups, duplicatePulseArticle, pulseExtract, validatePulseGroups, validatePulseBatch, shortPulseReferences, comparePulseCollections } from '../src/server/pulse'
 import { PULSE_CATCH_UP_PROMPT, validatePulseCatchUp } from '../src/server/pulse-catch-up'
 import { TopicService } from '../src/server/topics'
 import { PaperRepository } from '../src/server/repository'
@@ -24,7 +24,8 @@ let db: PaperDatabase
 beforeEach(() => { now = Date.now(); directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-pulse-test-')); db = new PaperDatabase(path.join(directory, 'paper.sqlite')) })
 afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
 function article(id: string, title = `Orion 9 feature ${id} explained`, overrides: Partial<Entry> = {}): Entry {
-  return { id, title, feedId: 'feed/one', feedTitle: 'One', feedUrl: 'https://one.test/feed', author: '', url: `https://one.test/${id}`,
+  const publisher = /[02468]$/.test(id) ? 'two' : 'one'
+  return { id, title, feedId: `feed/${publisher}`, feedTitle: publisher, feedUrl: `https://${publisher}.test/feed`, author: '', url: `https://${publisher}.test/${id}`,
     contentHtml: `<p>${title}. The release introduces this change.</p>`, excerpt: title, publishedAt: new Date(now).toISOString(), timestamp: now,
     read: false, starred: false, readingMinutes: 2, thumbnailUrl: '', kind: 'article', ...overrides }
 }
@@ -112,16 +113,22 @@ describe('cited Pulse catch-up', () => {
   })
 
   it('summarizes only active collections with at least three articles', async () => {
-    save(['1', '2'].map(id => article(id)), 'collection-small')
+    save(['1', '2', 'small-3'].map(id => article(id)), 'collection-small')
+    db.createCoverageFeedback({ action: 'not_same', clusterId: 'collection-small', entryId: 'small-3' })
     const current = now
     now -= 8 * DAY
     save(['3', '4', '5'].map(id => article(id)), 'collection-quiet')
+    now -= 30 * DAY
+    save(['archived-1', 'archived-2', 'archived-3'].map(id => article(id)), 'collection-archived')
     now = current
     const model = vi.fn(async (_prompt: string, input: unknown) => catchUpResponse(input as CatchUpInput))
     const service = new PulseService(db, vi.fn(), true, () => now, model)
     await service.refresh()
     expect(model).not.toHaveBeenCalled()
-    save(['3', '4', '5', '6'].map(id => article(id)), 'collection-quiet')
+    save([article('6')], 'collection-quiet')
+    await service.refresh()
+    expect(model).not.toHaveBeenCalled()
+    save([article('7')], 'collection-quiet')
     await service.refresh()
     expect(model).toHaveBeenCalledOnce()
     expect((model.mock.calls[0][1] as CatchUpInput).collections).toHaveLength(1)
@@ -228,14 +235,14 @@ describe('continuing Pulse collections', () => {
     expect(review).not.toHaveBeenCalled()
     expect(service.list()).toMatchObject({ collections: [], status: { enabled: false, failed: false } })
   })
-  it('discovers collections from one publisher, retains identity, and never changes article read state', async () => {
+  it('discovers collections across publishers, retains identity, and never changes article read state', async () => {
     const first = [article('1'), article('2', undefined, { read: true }), article('3')]
     db.upsertEntries(first)
     const model = vi.fn().mockResolvedValueOnce(proposal(first))
     const service = new PulseService(db, model, true, () => now)
     await service.refresh()
     const original = service.list().collections[0]
-    expect(original).toMatchObject({ headline: 'Orion 9', articleCount: 3, publicationCount: 1, unreadCount: 2, newCount: 3 })
+    expect(original).toMatchObject({ headline: 'Orion 9', articleCount: 3, publicationCount: 2, unreadCount: 2, newCount: 3 })
     service.visit(original.id, original.revision)
     const late = article('4', 'Orion 9 offline maps explained', { timestamp: now - DAY, publishedAt: new Date(now - DAY).toISOString() })
     now += 1000
@@ -256,17 +263,81 @@ describe('continuing Pulse collections', () => {
     expect(new PulseService(db, model).list().collections[0]).toMatchObject({ id: original.id, newCount: 1, unreadCount: 3 })
   })
 
-  it('quiet collections retain all memberships and reactivate on a new addition', async () => {
+  it('quiet collections retain all memberships and reactivate when two publications return', async () => {
     save([article('1'), article('2'), article('3')])
     now += 8 * DAY
-    const late = article('4')
-    db.upsertEntries([late])
-    const model = vi.fn().mockResolvedValue(proposal([late], 'collection-one'))
+    const late = [article('4'), article('5')]
+    db.upsertEntries(late)
+    const model = vi.fn().mockResolvedValue(proposal(late, 'collection-one'))
     const service = new PulseService(db, model, true, () => now)
     expect(service.list().collections[0]).toMatchObject({ quiet: true, articleCount: 3 })
     await service.refresh()
     expect(model.mock.calls[0][1].collections[0].quiet).toBe(true)
-    expect(service.list().collections[0]).toMatchObject({ quiet: false, articleCount: 4 })
+    expect(service.list().collections[0]).toMatchObject({ quiet: false, active: true, articleCount: 5 })
+  })
+
+  it('ages from active to quiet to archived at publication boundaries and changes the payload revision', () => {
+    save(['1', '2', '3'].map(id => article(id)))
+    const service = new PulseService(db, vi.fn(), false, () => now)
+    const published = now
+    now += 3 * DAY
+    const active = service.list()
+    expect(active.collections[0]).toMatchObject({ active: true, quiet: false, archived: false, recentArticleCount: 3, recentPublicationCount: 2 })
+    now++
+    const quiet = service.list()
+    expect(quiet.collections[0]).toMatchObject({ active: false, quiet: true, archived: false, recentArticleCount: 0 })
+    expect(quiet.revision).not.toBe(active.revision)
+    now = published + 30 * DAY
+    expect(service.list().collections[0].quiet).toBe(true)
+    now++
+    const archived = service.list()
+    expect(archived.collections[0]).toMatchObject({ active: false, quiet: false, archived: true })
+    expect(archived.revision).not.toBe(quiet.revision)
+  })
+
+  it('counts articles up to one minute ahead of the clock', () => {
+    save([article('1'), article('2', undefined, { timestamp: now + 60_000 }), article('3', undefined, { timestamp: now + 60_001 })])
+    expect(new PulseService(db, vi.fn(), false, () => now).list().collections[0]).toMatchObject({
+      recentArticleCount: 2, recentPublicationCount: 2, active: true, latestPublishedAt: new Date(now + 60_001).toISOString(),
+    })
+  })
+
+  it('keeps a backfilled collection archived and offers it to the model for follow-up reporting', async () => {
+    now -= 31 * DAY
+    const old = now
+    save(['1', '2', '3'].map(id => article(id)))
+    now += 31 * DAY
+    const late = article('4', undefined, { timestamp: old, publishedAt: new Date(old).toISOString() })
+    db.upsertEntries([late])
+    const model = vi.fn().mockResolvedValue(proposal([late], 'collection-one'))
+    const service = new PulseService(db, model, true, () => now)
+    await service.refresh()
+    expect(model.mock.calls[0][1].collections[0].archived).toBe(true)
+    expect(service.list().collections[0]).toMatchObject({ articleCount: 4, archived: true, active: false,
+      recentArticleCount: 0, latestPublishedAt: new Date(old).toISOString(), updatedAt: new Date(now).toISOString() })
+  })
+
+  it('counts distinct publication domains in a recent burst', () => {
+    save(['1', '2', '3'].map(id => article(id)))
+    now += 4 * DAY
+    save([article('5'), article('7'), article('9')])
+    const service = new PulseService(db, vi.fn(), false, () => now)
+    expect(service.list().collections[0]).toMatchObject({ recentArticleCount: 3, recentPublicationCount: 1, quiet: true, active: false })
+  })
+
+  it('ranks by activity, recent publications, recent articles, unread, newest publication, then ID', () => {
+    save(['1', '2', '3'].map(id => article(id)))
+    const [base] = new PulseService(db, vi.fn(), false, () => now).list().collections
+    const tied = { ...base, latestPublishedAt: new Date(now - DAY).toISOString() }
+    const ranked = [
+      { ...base, id: 'publications', recentPublicationCount: 3 },
+      { ...base, id: 'articles', recentArticleCount: 4 },
+      { ...base, id: 'unread', unreadCount: 4 },
+      { ...base, id: 'newer' },
+      { ...tied, id: 'a' }, { ...tied, id: 'b' },
+      { ...base, id: 'inactive', active: false, recentArticleCount: 20 },
+    ]
+    expect([...ranked].reverse().sort(comparePulseCollections).map(c => c.id)).toEqual(ranked.map(c => c.id))
   })
 
   it('reconsiders previously ungrouped articles when related new reporting arrives', async () => {
@@ -431,6 +502,49 @@ describe('continuing Pulse collections', () => {
 })
 
 describe('Pulse membership quality', () => {
+  it('defers new proposals from one publication or spanning more than seven days', async () => {
+    const one = ['1', '3', '5'].map(id => article(id))
+    const week = [article('6', undefined, { timestamp: now - 7 * DAY }), article('7'), article('8')]
+    expect(validatePulseGroups(proposal(week), week, [])).toHaveLength(1)
+    week[0].timestamp--
+    const entries = [...one, ...week]
+    const proposals = { groups: [...proposal(one).groups, ...proposal(week, '', 'Another release').groups] }
+    const checked = validatePulseBatch(proposals, entries, [])
+    expect(checked.groups).toEqual([])
+    expect(checked.deferred).toEqual(new Set(entries.map(entry => entry.id)))
+    db.upsertEntries(entries)
+    const service = new PulseService(db, vi.fn().mockResolvedValue(proposals), true, () => now)
+    await service.refresh()
+    expect(service.list().collections).toEqual([])
+    expect(db.pulseCandidates(now - 8 * DAY, now, false, 10)).toHaveLength(6)
+  })
+
+  it('uses the article domain first and falls back to the feed domain', () => {
+    const entries = [article('1'), article('3', undefined, { url: 'https://www.one.test/3' }),
+      article('5', undefined, { url: '', feedUrl: 'https://two.test/feed' })]
+    expect(validatePulseGroups(proposal(entries), entries, [])).toHaveLength(1)
+    entries[2].url = 'https://one.test/5'
+    expect(validatePulseGroups(proposal(entries), entries, [])).toEqual([])
+  })
+
+  it('defers survivors when review or a concurrent mute removes the second publication', async () => {
+    const entries = ['1', '3', '5', '2'].map(id => article(id))
+    db.upsertEntries(entries)
+    const review = vi.fn(async () => ({ decisions: entries.map((_, i) => ({
+      entryId: `a${i + 1}`, relevant: i < 3, duplicateOf: '', excerpt: '',
+    })) }))
+    const service = new RealPulseService(db, vi.fn().mockResolvedValue(proposal(entries)), true, () => now, review)
+    await service.refresh()
+    const pending = () => db.pulseCandidates(now - DAY, now, false, 10).map(entry => entry.id).sort()
+    expect(pending()).toEqual(['1', '3', '5'])
+    await db.createMuteFilter('feature 2', 'title')
+    await db.backfillMuteFilters()
+    const ids = entries.map(entry => entry.id)
+    db.savePulseBatch([{ id: 'new', headline: 'Orion 9', scope: 'The Orion 9 release.', entryIds: ids }], ids, new Date(now).toISOString())
+    expect(db.pulseCollections()).toEqual([])
+    expect(pending()).toEqual(['1', '3', '5'])
+  })
+
   it('checks the minimum again when members were muted before saving and leaves survivors pending', async () => {
     const entries = [article('1'), article('2'), article('3')]
     db.upsertEntries(entries)

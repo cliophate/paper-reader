@@ -26,7 +26,8 @@ import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
 import type { BriefingSelection, Entry, Feed, Folder, NavigationPayload, StreamRef } from './types.js'
 import type { Topic } from './topics.js'
-import type { PulseCatchUp, PulseCollection, PulseSource } from '../shared/pulse.js'
+import { publicationDomain, qualifiesForNewCollection, sourceDomain } from './pulse-rules.js'
+import type { PulseCatchUp, PulseSource } from '../shared/pulse.js'
 import type { Discussion } from '../shared/discussion.js'
 
 export interface BriefingRecord {
@@ -1063,7 +1064,7 @@ export class PaperDatabase {
       SELECT ?, id, ?, ? FROM entries WHERE id = ?
       AND NOT EXISTS (SELECT 1 FROM pulse_memberships WHERE entry_id = entries.id)
       AND NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = entries.id)`)
-    const eligible = this.db.prepare(`SELECT id, canonical_url FROM entries WHERE id = ?
+    const eligible = this.db.prepare(`SELECT id, canonical_url, url, feed_url AS feedUrl, timestamp FROM entries WHERE id = ?
       AND NOT EXISTS (SELECT 1 FROM pulse_memberships WHERE entry_id = entries.id)
       AND NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = entries.id)`)
     const exists = this.db.prepare('SELECT 1 FROM pulse_collections WHERE id = ?')
@@ -1073,23 +1074,28 @@ export class PaperDatabase {
       const deferred = new Set<string>()
       for (const group of groups) {
         const urls = new Set<string>()
-        const ids = group.entryIds.filter(id => {
-          const row = eligible.get(id) as { id: string; canonical_url: string } | undefined
-          if (!row || urls.has(row.canonical_url || id)) return false
+        const members = group.entryIds.flatMap(id => {
+          const row = eligible.get(id) as { id: string; canonical_url: string; url: string; feedUrl: string; timestamp: number } | undefined
+          if (!row || urls.has(row.canonical_url || id)) return []
           urls.add(row.canonical_url || id)
-          return true
+          return [row]
         })
-        if (!exists.get(group.id) && ids.length < 3) { ids.forEach(id => deferred.add(id)); continue }
+        const ids = members.map(member => member.id)
+        if (!exists.get(group.id) && !qualifiesForNewCollection(members)) {
+          ids.forEach(id => deferred.add(id))
+          continue
+        }
         create.run(group.id, group.headline, group.scope, now)
         for (const id of ids) attach.run(group.id, now, group.developments?.[id] || '', id)
       }
       for (const id of scannedIds) if (!deferred.has(id)) scan.run(now, id)
       this.setSyncValueInTransaction('pulse_completed_at', now)
       this.db.exec('COMMIT')
+      return deferred
     } catch (error) { this.db.exec('ROLLBACK'); throw error }
   }
 
-  pulseCollections(): PulseCollection[] {
+  pulseCollections() {
     const rows = this.db.prepare(`SELECT pulse_memberships.collection_id, pulse_memberships.sequence,
       pulse_memberships.added_at, pulse_memberships.development, article_arrivals.sequence AS link_number, entries.id, entries.feed_id,
       entries.read, entries.state_revision, entries.feed_title, entries.title, entries.url, entries.feed_url, entries.author,
@@ -1104,7 +1110,7 @@ export class PaperDatabase {
       const members = sources.get(id) || []
       members.push({ id: String(row.id), linkNumber: row.link_number === null ? undefined : Number(row.link_number),
         feedId: String(row.feed_id), read: Boolean(row.read), stateRevision: Number(row.state_revision), publication: decodeHtmlText(String(row.feed_title)),
-        domain: sourceDomain(String(row.url)) || sourceDomain(String(row.feed_url)), title: decodeHtmlText(String(row.title)), url: String(row.url),
+        domain: publicationDomain(String(row.url), String(row.feed_url)), title: decodeHtmlText(String(row.title)), url: String(row.url),
         author: decodeHtmlText(String(row.author)), publishedAt: String(row.published_at), timestamp: Number(row.timestamp),
         thumbnailUrl: normalizeFeedThumbnail({ url: String(row.url), thumbnailUrl: String(row.thumbnail_url) }),
         isNew: false, sequence: Number(row.sequence), addedAt: String(row.added_at), development: String(row.development || '') })
@@ -1116,8 +1122,8 @@ export class PaperDatabase {
       const members = sources.get(String(row.id)) || []
       return { id: String(row.id), linkNumber: this.linkNumber('collection', String(row.id)), headline: String(row.headline), scope: String(row.scope), createdAt: String(row.created_at),
         updatedAt: members[0]?.addedAt || String(row.created_at), revision: members[0]?.sequence || 0,
-        seenThrough: Number(row.seen_through), newCount: 0, unreadCount: 0, publicationCount: 0,
-        articleCount: members.length, quiet: false, sources: members.map(source => ({ ...source, isNew: source.sequence > Number(row.seen_through) })) }
+        seenThrough: Number(row.seen_through),
+        articleCount: members.length, sources: members.map(source => ({ ...source, isNew: source.sequence > Number(row.seen_through) })) }
     })
   }
 
@@ -2275,10 +2281,6 @@ function normalizeUrl(value: string): string {
   } catch {
     return value
   }
-}
-
-function sourceDomain(value: string): string {
-  try { return new URL(value).hostname.toLowerCase().replace(/^www\./, '') } catch { return '' }
 }
 
 function visibleEntryClause(alias: string): string {

@@ -145,7 +145,7 @@ describe('stable article identity', () => {
   it('preserves state and references when content, GUIDs and URLs change', () => {
     const feed = local()
     const id = ingest(feed, { externalId: 'old' })
-    const ids = [id, ingest(feed, { externalId: 'two' }, { url: 'https://example.test/two' }), ingest(feed, { externalId: 'three' }, { url: 'https://example.test/three' })]
+    const ids = [id, ingest(feed, { externalId: 'two' }, { url: 'https://example.test/two' }), ingest(feed, { externalId: 'three' }, { url: 'https://other.test/three' })]
     db.commitLocalEntryState(backend.id, [id], 'read')
     db.commitLocalEntryState(backend.id, [id], 'star')
     db.saveReadingProgress(id, 0.42)

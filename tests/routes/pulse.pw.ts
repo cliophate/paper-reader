@@ -80,6 +80,28 @@ test('shows cited summaries and feedback only in an expanded Pulse thread', asyn
   await expect(page.getByText('Article removed from collection')).toBeVisible()
 })
 
+test('opens archived collections from numbered, legacy, briefing and merged links', async ({ page }) => {
+  const payload: PulsePayload = await (await page.request.get('/api/pulse')).json()
+  const collection = payload.collections[0]
+  Object.assign(collection, { active: false, quiet: false, archived: true, recentPublicationCount: 0, recentArticleCount: 0 })
+  payload.collectionAliases = [{ id: 'original', linkNumber: 9999, targetId: collection.id }]
+  await page.route('**/api/pulse', route => route.fulfill({ json: payload }))
+  for (const path of [`/collection/${collection.linkNumber}`, `/pulse?collection=${collection.id}`, '/collection/9999', '/pulse?collection=original&filter=new']) {
+    await page.goto(path)
+    await expect(page.getByRole('heading', { name: 'Archived collections' })).toBeVisible()
+    await expect(page.getByRole('button', { name: collection.headline, exact: true })).toHaveAttribute('aria-expanded', 'true')
+    const filter = path.endsWith('filter=new') ? '?filter=new' : ''
+    await expect(page).toHaveURL(`/collection/${collection.linkNumber}${filter}`)
+  }
+  await page.getByRole('button', { name: `All ${collection.articleCount}`, exact: true }).click()
+  await page.locator('.pulse-card .pulse-story').first().click()
+  await expect(page.locator('.article-header h1')).toBeVisible()
+  await page.reload()
+  await page.getByRole('button', { name: collection.headline, exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Archived collections' })).toBeVisible()
+  await expect(page.getByRole('button', { name: collection.headline, exact: true })).toHaveAttribute('aria-expanded', 'true')
+})
+
 for (const scenario of ['standalone', 'freshrss', 'partial failure'] as const) {
   test(`marks a large Pulse section read with ${scenario}`, async ({ page }) => {
     const standalone = scenario === 'standalone'

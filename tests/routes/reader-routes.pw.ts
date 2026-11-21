@@ -269,5 +269,5 @@ test('Pulse sections move above mobile navigation and keep their keyboard contro
   await expect(page).toHaveURL(new RegExp(href! + '$'))
   await expect(card.getByRole('button', { name: 'All 4' })).toHaveAttribute('aria-pressed', 'true')
   await expect(card.locator('[tabindex="-1"]')).toBeFocused()
-  await expect(card.locator('.pulse-filter-count')).toContainText('1 publication')
+  await expect(card.locator('.pulse-filter-count')).toContainText('2 publications')
 })

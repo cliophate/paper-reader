@@ -42,6 +42,11 @@ export interface PulseCollection {
   unreadCount: number
   publicationCount: number
   articleCount: number
+  latestPublishedAt: string
+  recentArticleCount: number
+  recentPublicationCount: number
+  active: boolean
+  archived: boolean
   quiet: boolean
   sources: PulseSource[]
   catchUp?: PulseCatchUp

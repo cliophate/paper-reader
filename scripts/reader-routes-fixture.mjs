@@ -39,15 +39,16 @@ const reports = [
   'Crews moved the landing uphill after they found soft ground near the creek. The route through the park is about the same length.',
   'The footbridge is three metres wide, with room for people on foot and on bikes to pass each other.',
 ]
+const storyUrl = index => `https://${index === 2 ? 'gazette' : 'example'}.test/story-${index}`
 for (const [index, subscriptionId] of [[1, feedId], [2, feedId], [3, feedId], [4, otherFeed]]) {
   db.importSourceEntries(backend.id, subscriptionId, [{ identity: { externalId: `synthetic-${index}` }, entry: {
     feedTitle: subscriptionId === feedId ? 'Synthetic feed' : '中文', feedUrl: 'https://example.test/feed', title: `Synthetic article ${index}`, author: 'Fixture writer',
-    url: `https://example.test/story-${index}`, contentHtml: '<p>This article belongs to a disposable route test. No account or live installation is involved.</p>'.repeat(12),
+    url: storyUrl(index), contentHtml: '<p>This article belongs to a disposable route test. No account or live installation is involved.</p>'.repeat(12),
     excerpt: 'Disposable route fixture', publishedAt: now, timestamp: Date.now() - index, readingMinutes: 2, thumbnailUrl: '', kind: 'article',
   } }])
 }
 // The reader tests use feed text for scroll restoration. Put the reporting in the full-text cache.
-for (const [index, report] of reports.entries()) db.cacheArticle({ url: `https://example.test/story-${index + 1}`,
+for (const [index, report] of reports.entries()) db.cacheArticle({ url: storyUrl(index + 1),
   title: `Synthetic article ${index + 1}`, byline: 'Fixture writer', excerpt: report, contentHtml: `<p>${report}</p>`, readingMinutes: 1, fetchedAt: now })
 const articles = db.localEntriesPage({ kind: 'all', id: 'all', title: 'All articles' }, { unreadOnly: false }).items
 const members = articles.filter(article => article.feedId === feedId)

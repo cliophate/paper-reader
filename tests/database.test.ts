@@ -49,7 +49,7 @@ describe('Paper read model', () => {
   })
 
   it('returns collection metadata without parsing member article bodies', () => {
-    const entries = [1, 2, 3].map(n => entry({ id: String(n), url: `https://example.test/${n}`, title: `Article &amp; ${n}` }))
+    const entries = [1, 2, 3].map(n => entry({ id: String(n), url: `https://${n === 2 ? 'other' : 'example'}.test/${n}`, title: `Article &amp; ${n}` }))
     database.upsertEntries(entries)
     database.savePulseBatch([{ id: 'collection-one', headline: 'A collection', scope: 'Related reporting', entryIds: entries.map(e => e.id) }], entries.map(e => e.id), '2026-10-05T10:00:00Z')
     const parse = vi.spyOn(feedContent, 'normalizeFeedContent')

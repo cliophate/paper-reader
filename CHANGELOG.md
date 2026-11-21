@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Pulse ranks active collections by recent reporting and shows the first 25.
+  New collections need three articles from at least two publications within a week.
+  Collections whose newest article is over 30 days old move to the archive under Quiet.
+
 ## 0.2.0-alpha.3
 
 An alpha release with changes since [0.2.0-alpha.2](https://github.com/cliophate/paper-reader/releases/tag/v0.2.0-alpha.2).

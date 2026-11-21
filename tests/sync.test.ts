@@ -262,7 +262,7 @@ describe('Backend synchronization', () => {
 
   it('preserves article references when navigation and imported content change', async () => {
     database.replaceNavigation(navigation)
-    database.upsertEntries(['one', 'two', 'three'].map(id => entry({ id, url: `https://example.test/${id}` })))
+    database.upsertEntries(['one', 'two', 'three'].map(id => entry({ id, url: `https://${id}.test/${id}` })))
     database.saveReadingProgress('one', 0.42)
     database.saveDiscussion({
       entryId: 'one', revision: 1, messages: [],
