@@ -1,5 +1,6 @@
 import type { FeedOverrideView, FeedOverrideUpdate } from '../shared/feed-overrides'
 import { PlaybackQueue, type PlaybackPosition } from './playback'
+import { checkSearchSize, SEARCH_SIZE_HINT } from '../server/search-query'
 import type { RetentionPolicy, RetentionPreview, RetentionView } from '../shared/retention'
 import type { FeedMaintenance, StaleDays, FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarget } from '../shared/feed-checks'
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
@@ -104,14 +105,22 @@ export const api = {
   }>('/api/status', { signal: sourceRequestSignal(signal) }),
   reload: () => request<{ ok: boolean }>('/api/reload', { method: 'POST' }),
   setStreamOrder: (stream: StreamRef, order: 'newest' | 'oldest') => request<{ ok: boolean; order: 'newest' | 'oldest' }>('/api/streams/order', { method: 'POST', body: JSON.stringify({ stream, order }) }),
-  entries: (stream: StreamRef, unread: boolean, query = '', continuation = '', signal?: AbortSignal, dates: { after?: string; before?: string } = {}, reverse = false) => {
+  entries: async (stream: StreamRef, unread: boolean, query = '', continuation = '', signal?: AbortSignal, dates: { after?: string; before?: string } = {}, reverse = false) => {
     const params = new URLSearchParams({ kind: stream.kind, id: stream.id, title: stream.title, unread: unread ? '1' : '0' })
     if (reverse) params.set('reverse', '1')
-    if (query) params.set('q', query)
+    if (query) {
+      checkSearchSize(query)
+      params.set('q', query)
+    }
     if (dates.after) params.set('after', dates.after)
     if (dates.before) params.set('before', dates.before)
     if (continuation) params.set('continuation', continuation)
-    return request<EntryPage>(`/api/entries?${params}`, { signal })
+    try {
+      return await request<EntryPage>(`/api/entries?${params}`, { signal })
+    } catch (error) {
+      if (query && error instanceof ApiError && error.status === 431) throw new ApiError(SEARCH_SIZE_HINT, 431)
+      throw error
+    }
   },
   entryByNumber: (number: number) => request<{ entry: Entry }>(`/api/entries/number/${number}`),
   entry: async (id: string) => {
@@ -149,7 +158,7 @@ export const api = {
   },
   markStreamRead: (stream: StreamRef) =>
     request<{ ok: boolean; count: number; undoToken?: string }>('/api/streams/mark-read', { method: 'POST', body: JSON.stringify(stream) }),
-  markRelativeRead: (stream: StreamRef, anchorId: string, direction: 'above' | 'below', unreadOnly: boolean, query: string, order?: 'newest' | 'oldest', dates: { after?: string; before?: string } = {}) =>
+  markRelativeRead: (stream: StreamRef, anchorId: string, direction: 'above' | 'below', unreadOnly: boolean, query: string, order?: 'newest' | 'oldest', dates: { after?: string; before?: string; snapshot?: string; displayedIds?: string[] } = {}) =>
     request<{ ok: boolean; count: number; ids: string[]; undoToken?: string }>('/api/streams/mark-relative-read', {
       method: 'POST',
       body: JSON.stringify({ stream, anchorId, direction, unreadOnly, query, order, ...dates }),

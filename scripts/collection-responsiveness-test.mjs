@@ -92,7 +92,9 @@ try {
   await until(() => requested)
   async function probe() {
     const start = performance.now()
-    const response = await fetch(base + '/health', { signal: AbortSignal.timeout(latencyBudget) })
+    const response = await fetch(base + '/health', { signal: AbortSignal.timeout(latencyBudget) }).catch(cause => {
+      throw new Error(`Health request failed after ${(performance.now() - start).toFixed(0)}ms (budget ${latencyBudget}ms)`, { cause })
+    })
     await response.text(); assert.equal(response.status, 200)
     const elapsed = performance.now() - start
     maxLatency = Math.max(maxLatency, elapsed); probes++
@@ -123,6 +125,26 @@ try {
     const searchMs = performance.now() - searchStart
     console.log(`Common-term search ${searchMs.toFixed(0)}ms; max health ${maxLatency.toFixed(0)}ms.`)
     await probe(); if (healthFailure) throw healthFailure
+    for (const query of ['"synthetic article"', 'collectionneedle OR is:read', 'NOT collectionneedle', 'title:synthetic', 'after:7d is:unread']) {
+      const started = performance.now()
+      const response = await fetch(base + '/api/entries?kind=all&id=all&unread=0&q=' + encodeURIComponent(query), { signal: AbortSignal.timeout(60_000) })
+      assert.equal(response.status, 200)
+      const page = await response.json()
+      assert.equal(page.items.length, 80)
+      assert(page.continuation)
+      await probe(); if (healthFailure) throw healthFailure
+      console.log(`Search ${query} ${(performance.now() - started).toFixed(0)}ms; max health ${maxLatency.toFixed(0)}ms.`)
+    }
+    // Two absent fragments require 400,000 URL comparisons on this archive.
+    const broadUrl = 'url:missing-one OR url:missing-two'
+    const urlScan = await fetch(base + '/api/entries?q=' + encodeURIComponent(broadUrl))
+    assert.equal(urlScan.status, 400)
+    assert.match((await urlScan.json()).error, /URL scan limit reached/)
+    const urlPreview = await fetch(base + '/api/streams/preview-read', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: broadUrl }),
+    })
+    assert.equal(urlPreview.status, 400)
+    assert.match((await urlPreview.json()).error, /URL scan limit reached/)
     // Repeated common terms remain a permitted query and force substantial native
     // SQLite work even on a warm synthetic corpus. Health retains its 2s budget.
     const slowUrl = base + '/api/entries?kind=all&id=all&unread=0&q=' + encodeURIComponent('the '.repeat(64))

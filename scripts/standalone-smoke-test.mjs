@@ -71,6 +71,20 @@ try {
     assert.match(await response.text(), /<div id="root">/)
   }
   assert(!(await (await fetch(base + '/.private-fixture')).text()).includes('Synthetic hidden file'))
+  const encodedSearch = '界'.repeat(455) + 'x'
+  assert.equal((await request('/api/entries?q=' + encodeURIComponent(encodedSearch))).status, 200)
+  const tooLong = await request('/api/entries?q=' + encodeURIComponent(encodedSearch + 'x'))
+  assert.equal(tooLong.status, 400)
+  assert.match(tooLong.data.error, /4096 URL-encoded bytes/)
+  const overBudget = 'word '.repeat(257)
+  for (const result of [
+    await request('/api/entries?q=' + encodeURIComponent(overBudget)),
+    await request('/api/streams/preview-read', { query: overBudget }),
+    await request('/api/streams/mark-relative-read', { query: overBudget, anchorId: 'a', direction: 'below' }),
+  ]) {
+    assert.equal(result.status, 400)
+    assert.match(result.data.error, /256 search terms/)
+  }
   const initial = (await request('/api/status')).data
   assert.equal(initial.backend, 'standalone'); assert(initial.localReadsActive)
   assert(!initial.readwiseConfigured && !initial.kirbyConfigured && !initial.briefingConfigured && !initial.discussionConfigured)
@@ -122,8 +136,17 @@ try {
   const entry = page.items[0]
   const oversized = await request('/api/entries/state', { ids: Array.from({ length: 1001 }, () => entry.id), operation: 'read' })
   assert.equal(oversized.status, 400, 'Oversize state requests must be rejected without truncation')
+  const unread = (await request('/api/entries?kind=all&id=all&q=is:unread')).data.items
+  assert.equal(unread.length, 2)
+  assert.equal(unread[0].id, entry.id)
   const changed = await request('/api/entries/state', { ids: [entry.id], operation: 'read', expectedRevisions: { [entry.id]: 0 }, undo: true })
   assert.equal(changed.status, 200); assert(changed.data.undoToken)
+  const below = await request('/api/streams/mark-relative-read', {
+    query: 'is:unread', snapshot: unread[0].searchSnapshot, anchorId: entry.id, direction: 'below',
+  })
+  assert.equal(below.status, 200)
+  assert.deepEqual(below.data.ids, [unread[1].id])
+  assert.equal((await request('/api/undo', { token: below.data.undoToken })).status, 200)
   assert.equal((await request('/api/entries/state', { ids: [entry.id], operation: 'star', expectedRevisions: { [entry.id]: 0 } })).status, 409)
   assert.equal((await request('/api/undo', { token: changed.data.undoToken })).status, 200)
   await request('/api/entries/state', { ids: [entry.id], operation: 'star' })

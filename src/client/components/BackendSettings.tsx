@@ -9,6 +9,7 @@ export function BackendSettings({ backend }: { backend: 'standalone' | 'freshrss
       ? 'Paper fetches feeds and saves articles, feed icons, reading state and folders in its data directory.'
       : `${name} manages subscriptions and reading state. Paper keeps local history, discussions, briefings and collections.`}</p>
     <p>Paper saves playback positions for audio and video. Offline copies include article text and images.</p>
+    {backend !== 'standalone' && <p>With local reads enabled, Paper searches its index after import. Until then it searches articles as it pages through {name}.</p>}
     {backend === 'miniflux' && <div className="backend-notes">
       <p>Set PAPER_BACKEND=miniflux, MINIFLUX_BASE_URL and MINIFLUX_API_KEY in your private configuration. Create a dedicated key in Miniflux Settings &gt; API Keys. Paper uses the native API and requires Miniflux 2.3.2 or newer.</p>
       <p>Use a new Paper data directory for each server or account. Miniflux must be reachable when Paper or a briefing command starts. Local articles stay readable during later outages. Rotating the key keeps the same account.</p>

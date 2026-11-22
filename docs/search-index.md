@@ -1,5 +1,36 @@
 # Search indexing and collection responsiveness
 
+## Search syntax
+
+Press `/` to search. Separate words match prefixes in any order across the
+title, author, feed name and article text. Quotes match consecutive whole words.
+
+- `"night sky" OR telescope` finds either expression. Use uppercase `OR` and `NOT`.
+- `(moon OR mars) -landing` excludes articles containing a word starting with
+  `landing`. `NOT landing` does the same. Exclusions bind first, then adjacent
+  terms, then `OR`.
+- `title:"night sky" author:ada feed:science` limits each term to its field.
+  `folder:"reading room"` and `url:example.test` match literal parts of folder names
+  and article URLs. Quote fragments with parentheses, as in `url:"example.org/wiki/Paper_(reader)"`. Both ignore ASCII letter case.
+- `is:unread`, `is:read` and `is:starred` filter reading state and stars.
+- `after:2026-01-31 before:2026-02-10` includes January 31 and ends at the
+  start of February 10, UTC. Relative dates count back from the time of search.
+  Use `7d`, `2w`, `3m` or `1y` for days, weeks, calendar months or calendar years.
+
+The scope and date controls still apply. An incomplete expression shows a hint
+and searches its words as plain terms. Paper rejects searches over 4096 URL-encoded bytes,
+256 terms or tokens, or 32 levels of nesting. The info button beside the search box
+and **Keyboard shortcuts** both open the syntax guide.
+
+FreshRSS and Miniflux use Paper's index when local reads are active. Otherwise
+Paper applies the same operators to pages from the backend, in the backend's
+order. Each request scans up to ten pages. This path searches feed content only.
+Bare words on remote pages match substrings across the title, author, feed name and body.
+Saved full text, date-picker filters and bulk actions on search results need
+the local index.
+
+## Index storage
+
 Schema 11 replaces full-text trigger scans with a durable row mapping. FTS5's
 `entry_id UNINDEXED` column does not support an indexed equality lookup. The old
 update and delete triggers scanned it for each changed article, so reimporting
@@ -19,7 +50,9 @@ Search ranking and eligibility join FTS rowids through this mapping. A covering
 index contains the article ID, timestamps, read/star flags and feed ID, so these
 queries do not load article bodies merely to filter or rank results. Snippet
 queries constrain the FTS rowid as well as `MATCH`. Results still use the full
-matching set, BM25 ranking and frozen pagination snapshots. Broad search remains
+matching set and frozen pagination snapshots. Mandatory full-text terms supply
+the BM25 score. When a field or an exclusion can match by itself in an alternative,
+articles matching positive text rank first. Metadata-only results follow the stream order. Broad search remains
 proportional to its result count; this is not a hard latency guarantee for every
 archive size or storage device.
 
@@ -38,7 +71,20 @@ The main connection keeps its existing zero busy timeout. No database transactio
 spans the snapshot RPC. After persistence, a read transaction supplies fresh page
 eligibility, article revisions and decorations. Later edits still use the usual
 revision checks. Every continuation refreshes eligibility while retaining the
-original complete BM25 ordering.
+original complete BM25 ordering. Relative read actions use the selected article's
+snapshot to locate it even after auto-read. For loaded rows the client sends
+their display order, so marking below skips any result that a refresh moved
+above the anchor. The snapshot supplies the remaining unseen results. With
+more than 4096 rows loaded, Paper asks the reader to narrow the search first.
+The worker checks current eligibility for bulk actions and reads revisions for
+standalone previews.
+
+URL fragments can occur anywhere in a URL, including its path or query string.
+The worker filters by stream, read state, visibility and date before comparing
+URLs. It uses the covering URL index for archive-wide scans. Each statement
+allows 250,000 URL comparisons. At each comparison, the worker checks whether
+one second has elapsed since the first. Hitting either limit returns
+an error before Paper displays a partial page or changes any articles.
 
 One search runs at a time and up to eight requests can wait. Further requests
 receive HTTP 503 and can retry. Disconnecting a queued request removes it.
@@ -86,7 +132,7 @@ exclusive bootstrap, no-op updates, deletions and `VACUUM INTO`.
 The built-server collection regression uses 200,000 articles with multi-KiB
 bodies, 1,266 feeds and a permitted 1,000-item feed that changes existing articles.
 It keeps the two-second health budget during collection, completion callbacks,
-common-term search and a permitted repeated-term search that performs more than
+phrase, alternative, exclusion and field searches, and a repeated-term search that performs more than
 five seconds of native SQLite work. Status requests and revision-checked state
 writes must succeed during that search. It also checks queue saturation, actual
 HTTP disconnect recovery and shutdown with a busy worker, including coordination

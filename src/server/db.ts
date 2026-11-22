@@ -19,6 +19,8 @@ import { IdentityStore, migrateIdentity, type BackendIdentity, type SourceItemId
 import { transaction } from './transaction.js'
 import { FeedFetchStore, migrateFeedFetchState } from './feed-fetch-state.js'
 import { migrateStandaloneSetup } from './migration-schema.js'
+import { parseSearch, SearchLimitError } from './search-query.js'
+import { compileSearch } from './search-sql.js'
 import { migrateSearchRows } from './search-schema.js'
 import { migrateLinkNumbers } from './link-numbers.js'
 import { migrateBackendKinds } from './backend-schema.js'
@@ -28,7 +30,7 @@ import { BriefingDeliveryStore, migrateBriefingDelivery } from './briefing-deliv
 import { FRESHRSS_ORGANIZATION_CAPABILITIES, MINIFLUX_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
-import type { BriefingSelection, Entry, Feed, Folder, NavigationPayload, StreamRef } from './types.js'
+import { indexedSearchText, type BriefingSelection, type Entry, type Feed, type Folder, type NavigationPayload, type StreamRef } from './types.js'
 import type { Topic } from './topics.js'
 import { publicationDomain, qualifiesForNewCollection, sourceDomain } from './pulse-rules.js'
 import type { PulseCatchUp, PulseSource } from '../shared/pulse.js'
@@ -200,6 +202,8 @@ export class PaperDatabase {
   private closed = false
   private checkpointHandler?: () => void
   private muteBackfill: Promise<void> | undefined
+  private urlComparisons = 0
+  private urlScanStart = 0
 
   constructor(databasePath: string, options: { readOnly?: boolean } = {}) {
     this.databasePath = databasePath
@@ -250,6 +254,14 @@ export class PaperDatabase {
           migrateEnclosures(this.db)
         }
       }
+      this.db.function('checked_url_match', { directOnly: true }, matched => {
+        const now = performance.now()
+        if (++this.urlComparisons === 1) this.urlScanStart = now
+        if (this.urlComparisons > 250_000 || now - this.urlScanStart >= 1000) {
+          throw new SearchLimitError('URL scan limit reached. Use fewer URL terms or search by title or feed.')
+        }
+        return matched
+      })
       this.retention = new RetentionStore(this.db, ids => { this.commitLocalEntryState(this.activeBackendId, ids, 'read', { origin: 'retention' }) })
       this.auth = new AuthStore(this.db)
       this.identities = new IdentityStore(this.db)
@@ -1332,17 +1344,17 @@ export class PaperDatabase {
     return this.numberNavigation({ unread: Number(counts.unread || 0), starred: Number(counts.starred || 0), folders, uncategorized })
   }
 
-  private pageScope(stream: StreamRef, options: PageOptions) {
+  private pageScope(stream: StreamRef, options: PageOptions, ranked = false, now = Date.now()) {
+    this.urlComparisons = 0
     const clauses: string[] = []
     const parameters: Array<string | number> = []
     if (stream.kind === 'starred') clauses.push('entries.starred = 1')
     if (stream.kind === 'feed') { clauses.push('entries.feed_id = ?'); parameters.push(stream.id) }
     if (stream.kind === 'category') {
-      clauses.push('EXISTS (SELECT 1 FROM feed_folders WHERE feed_folders.feed_id = entries.feed_id AND feed_folders.folder_id = ?)')
+      clauses.push('entries.feed_id IN (SELECT feed_id FROM feed_folders WHERE folder_id = ?)')
       parameters.push(stream.id)
     }
     if (options.unreadOnly) clauses.push('entries.read = 0')
-    if (!options.includeMuted && stream.kind !== 'starred') clauses.push(visibleEntryClause('entries'))
     for (const [value, comparison] of [[options.after, '>='], [options.before, '<']] as const) {
       if (value) {
         const timestamp = Date.parse(value)
@@ -1350,20 +1362,56 @@ export class PaperDatabase {
         clauses.push(`entries.timestamp ${comparison} ?`); parameters.push(timestamp)
       }
     }
-    const search = ftsQuery(options.query || '')
-    // Ranking and eligibility need only scope metadata. Avoid reading each
-    // article body or the FTS content row merely to recover its entry ID.
-    const join = search ? `INDEXED BY entries_search_scope_idx
-      JOIN entry_search_rows search ON search.entry_id = entries.id
-      JOIN entries_fts ON entries_fts.rowid = search.id` : ''
-    if (search) { clauses.push('entries_fts MATCH ?'); parameters.push(search) }
-    return { clauses, parameters, search, join }
+    const excludeMuted = !options.includeMuted && stream.kind !== 'starred'
+    let search: ReturnType<typeof compileSearch> | undefined
+    if (options.query?.trim()) {
+      const index = stream.kind === 'feed' || stream.kind === 'category' ? 'entries_feed_published_idx'
+        : stream.kind === 'starred' ? 'entries_starred_published_idx'
+        : options.unreadOnly ? 'entries_read_published_idx'
+        : options.after || options.before ? 'entries_published_idx' : 'entries_url_idx'
+      const urlClauses = [...clauses]
+      if (excludeMuted) {
+        // The URL index covers rowid and URL. Look up only the muted article IDs.
+        urlClauses.push(index === 'entries_url_idx'
+          ? 'entries.rowid NOT IN (SELECT e.rowid FROM muted_entries JOIN entries e ON e.id = muted_entries.entry_id)'
+          : visibleEntryClause('entries'))
+      }
+      const where = urlClauses.length ? ' WHERE ' + urlClauses.join(' AND ') : ''
+      // Keep SQLite from flattening the subquery and testing URLs before scope filters.
+      const sql = `SELECT rowid, url FROM entries INDEXED BY ${index}${where} LIMIT -1 OFFSET 0`
+      search = compileSearch(parseSearch(options.query).root, ranked, now, { sql, parameters })
+    }
+    if (excludeMuted) clauses.push(visibleEntryClause('entries'))
+    if (search) {
+      clauses.push(...search.clauses)
+      parameters.unshift(...search.joinParameters)
+      parameters.push(...search.parameters)
+    }
+    return { clauses, parameters, search, join: search?.join || '' }
   }
 
-  matchingEntryIds(stream: StreamRef, options: PageOptions = {}): string[] {
-    const { clauses, parameters, join } = this.pageScope(stream, options)
-    return this.db.prepare(`SELECT entries.id FROM entries ${join} ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}`)
-      .all(...parameters).map(row => String(row.id))
+  private matchingRows(stream: StreamRef, options: PageOptions, now: number, withRevisions: boolean, candidates?: string[]) {
+    const { clauses, parameters, join } = this.pageScope(stream, options, false, now)
+    if (candidates) {
+      clauses.push('entries.id IN (SELECT value FROM json_each(?))')
+      parameters.push(JSON.stringify(candidates))
+    }
+    const revision = withRevisions ? ', entries.state_revision' : ''
+    const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''
+    return this.db.prepare(`SELECT entries.id${revision} FROM entries ${join} ${where}`).all(...parameters)
+  }
+
+  matchingEntryIds(stream: StreamRef, options: PageOptions = {}, now = Date.now()): string[] {
+    return this.matchingRows(stream, options, now, false).map(row => String(row.id))
+  }
+
+  previewUnread(stream: StreamRef, options: PageOptions, withRevisions: boolean, candidates?: string[], now = Date.now()) {
+    const rows = this.matchingRows(stream, { ...options, unreadOnly: true }, now, withRevisions, candidates)
+    const ids = rows.map(row => String(row.id))
+    const revisions = withRevisions ? Object.fromEntries(rows.map(row => [row.id, Number(row.state_revision)])) : undefined
+    if (!candidates) return { ids, revisions }
+    const eligible = new Set(ids)
+    return { ids: candidates.filter(id => eligible.has(id)), revisions }
   }
 
   syncEntryIds(stream: StreamRef, unreadOnly = false, limit = 80): string[] {
@@ -1387,6 +1435,12 @@ export class PaperDatabase {
     return { ascending, direction, scope, cursor, encode }
   }
 
+  private snapshotIds(id: string, scope: string, now: number): string[] {
+    const row = this.db.prepare('SELECT ids_json FROM search_pages WHERE id = ? AND scope = ? AND created_at >= ?').get(id, scope, now - 3600000)
+    if (!row) throw new Error('Search expired. Search again to continue.')
+    return JSON.parse(String(row.ids_json))
+  }
+
   saveSearchSnapshot(snapshot?: SearchSnapshot) {
     this.db.prepare('DELETE FROM search_pages WHERE created_at < ?').run(Date.now() - 3600000)
     if (snapshot) this.db.prepare('INSERT INTO search_pages VALUES (?, ?, ?, ?)')
@@ -1397,19 +1451,18 @@ export class PaperDatabase {
   // spans this yield. HTTP search runs this same iterator in its read-only worker.
   *searchEntriesPage(stream: StreamRef, options: PageOptions): Generator<SearchSnapshot | undefined, LocalEntryPage, void> {
     const limit = Math.min(Math.max(options.limit || 80, 1), 250)
-    const { clauses, parameters, search, join } = this.pageScope(stream, options)
+    const now = Date.now()
+    const { clauses, parameters, search, join } = this.pageScope(stream, options, true, now)
     const { direction, scope, cursor, encode } = this.pageCursor(stream, options)
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
     let snapshot = cursor.snapshot
     let ids: string[]
     if (snapshot) {
-      const row = this.db.prepare('SELECT ids_json FROM search_pages WHERE id = ? AND scope = ? AND created_at >= ?').get(snapshot, scope, Date.now() - 3600000)
-      if (!row) throw new Error('Search expired. Search again to continue.')
-      ids = JSON.parse(String(row.ids_json))
+      ids = this.snapshotIds(snapshot, scope, now)
       yield undefined
     } else {
       // Freeze all matches in BM25 order, including matches beyond this page.
-      ids = this.db.prepare(`SELECT entries.id FROM entries ${join} ${where} ORDER BY bm25(entries_fts), entries.timestamp ${direction}, entries.crawled_at ${direction}, entries.id ${direction}`).all(...parameters).map(row => String(row.id))
+      ids = this.db.prepare(`SELECT entries.id FROM entries ${join} ${where} ORDER BY ${search?.rank || ''}entries.timestamp ${direction}, entries.crawled_at ${direction}, entries.id ${direction}`).all(...parameters).map(row => String(row.id))
       snapshot = crypto.randomUUID()
       yield { id: snapshot, scope, idsJson: JSON.stringify(ids), createdAt: Date.now() }
     }
@@ -1418,16 +1471,23 @@ export class PaperDatabase {
     this.db.exec('BEGIN')
     try {
       if (this.pageCursor(stream, options).scope !== scope) throw new Error('This list changed. Refresh to continue.')
-      const eligible = new Set(this.matchingEntryIds(stream, options))
+      const eligible = new Set(this.matchingEntryIds(stream, options, now))
       let offset = Math.max(0, cursor.offset || 0)
       const items: Entry[] = []
+      const article = this.db.prepare('SELECT * FROM entries WHERE id = ?')
+      const match = search?.match || ''
+      const snippet = match && this.db.prepare(`SELECT snippet(entries_fts, 4, '', '', '…', 32) AS excerpt
+        FROM entries_fts WHERE rowid = (SELECT id FROM entry_search_rows WHERE entry_id = ?) AND entries_fts MATCH ?`)
       while (offset < ids.length && items.length < limit) {
         const id = ids[offset++]
         if (!eligible.has(id)) continue
-        const row = this.db.prepare(`SELECT entries.*, snippet(entries_fts, 4, '', '', '…', 32) AS search_excerpt
-          FROM entries JOIN entries_fts ON entries_fts.rowid = (SELECT id FROM entry_search_rows WHERE entry_id = ?)
-          WHERE entries.id = ? AND entries_fts MATCH ?`).get(id, id, search)
-        if (row) items.push({ ...this.decorateEntry(entryFromRow(row as Record<string, string | number>)), searchExcerpt: String(row.search_excerpt) })
+        const row = article.get(id)
+        if (row) {
+          const entry = this.decorateEntry(entryFromRow(row as Record<string, string | number>))
+          entry.searchSnapshot = snapshot
+          entry.searchExcerpt = String((snippet && snippet.get(id, match)?.excerpt) || entry.excerpt)
+          items.push(entry)
+        }
       }
       return { items, continuation: ids.slice(offset).some(id => eligible.has(id)) ? encode({ snapshot, offset }) : '' }
     } finally { this.db.exec('ROLLBACK') }
@@ -1435,15 +1495,15 @@ export class PaperDatabase {
 
   localEntriesPage(stream: StreamRef, options: PageOptions = {}): LocalEntryPage {
     const limit = Math.min(Math.max(options.limit || 80, 1), 250)
-    const { clauses, parameters, search } = this.pageScope(stream, options)
-    const { ascending, direction, cursor, encode } = this.pageCursor(stream, options)
-    const where = () => clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
-    if (search) {
+    if (options.query?.trim()) {
       const page = this.searchEntriesPage(stream, options)
       let step = page.next()
       while (!step.done) { this.saveSearchSnapshot(step.value); step = page.next() }
       return step.value
     }
+    const { clauses, parameters } = this.pageScope(stream, options)
+    const { ascending, direction, cursor, encode } = this.pageCursor(stream, options)
+    const where = () => clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
     if (cursor.boundary) {
       if (!Array.isArray(cursor.boundary) || cursor.boundary.length !== 3 || !Number.isFinite(cursor.boundary[0]) || !Number.isFinite(cursor.boundary[1]) || typeof cursor.boundary[2] !== 'string') throw new Error('Invalid article cursor')
       clauses.push(`(entries.timestamp, entries.crawled_at, entries.id) ${ascending ? '>' : '<'} (?, ?, ?)`)
@@ -1697,50 +1757,50 @@ export class PaperDatabase {
     stream: StreamRef,
     anchorId: string,
     direction: 'above' | 'below',
-    options: { unreadOnly?: boolean; query?: string; after?: string; before?: string } = {},
+    options: PageOptions & { snapshot?: string } = {},
   ): string[] {
-    const clauses: string[] = []
-    const parameters: Array<string | number> = []
-    if (stream.kind === 'starred') clauses.push('entries.starred = 1')
-    if (stream.kind === 'feed') {
-      clauses.push('entries.feed_id = ?')
-      parameters.push(stream.id)
+    return this.relativeUnreadSelection(stream, anchorId, direction, options, false).ids
+  }
+
+  relativeUnreadSelection(stream: StreamRef, anchorId: string, direction: 'above' | 'below',
+    options: PageOptions & { snapshot?: string; displayedIds?: string[] }, withRevisions: boolean) {
+    if (options.query && options.snapshot) {
+      const now = Date.now()
+      const ids = this.snapshotIds(options.snapshot, this.pageCursor(stream, options).scope, now)
+      const index = ids.indexOf(anchorId)
+      if (index < 0) return { ids: [] }
+      const displayed = options.displayedIds
+      let candidates = direction === 'above' ? ids.slice(0, index) : ids.slice(index + 1)
+      if (displayed) {
+        // A refresh can prepend a result from the unseen tail of this snapshot.
+        // The displayed order decides both sides. Only the tail is still unseen.
+        const anchor = displayed.indexOf(anchorId)
+        if (anchor < 0) throw new Error('This list changed. Refresh to continue.')
+        const visible = new Set(displayed)
+        candidates = direction === 'above' ? displayed.slice(0, anchor)
+          : [...displayed.slice(anchor + 1), ...candidates.filter(id => !visible.has(id))]
+      }
+      return this.previewUnread(stream, options, withRevisions, candidates, now)
     }
-    if (stream.kind === 'category') {
-      clauses.push('EXISTS (SELECT 1 FROM feed_folders WHERE feed_folders.feed_id = entries.feed_id AND feed_folders.folder_id = ?)')
-      parameters.push(stream.id)
-    }
-    // The clicked row may already be read but still visible in the client.
-    // Keep it as the boundary; only unread candidates are changed below.
+    const { clauses, parameters, search, join } = this.pageScope(stream, { ...options, unreadOnly: false }, true)
+    // A reader may already have opened the anchor in an unread-only list.
     if (options.unreadOnly) {
       clauses.push('(entries.read = 0 OR entries.id = ?)')
       parameters.push(anchorId)
     }
-    if (stream.kind !== 'starred') clauses.push(visibleEntryClause('entries'))
-
-    for (const [value, comparison] of [[options.after, '>='], [options.before, '<']] as const) {
-      if (value) { const timestamp = Date.parse(value); if (!Number.isFinite(timestamp)) throw new Error('Invalid date'); clauses.push(`entries.timestamp ${comparison} ?`); parameters.push(timestamp) }
-    }
-    const search = ftsQuery(options.query || '')
-    let join = ''
     const directionOrder = this.streamOrder(stream) === 'oldest' ? 'ASC' : 'DESC'
-    let order = `entries.timestamp ${directionOrder}, entries.crawled_at ${directionOrder}, entries.id ${directionOrder}`
-    if (search) {
-      join = 'JOIN entries_fts ON entries_fts.entry_id = entries.id'
-      clauses.push('entries_fts MATCH ?')
-      parameters.push(search)
-      order = `bm25(entries_fts), ${order}`
-    }
+    const order = `${search?.rank || ''}entries.timestamp ${directionOrder}, entries.crawled_at ${directionOrder}, entries.id ${directionOrder}`
 
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
     const rows = this.db.prepare(`
-      SELECT entries.id, entries.read FROM entries ${join} ${where}
+      SELECT entries.id, entries.read${withRevisions ? ', entries.state_revision' : ''} FROM entries ${join} ${where}
       ORDER BY ${order}
-    `).all(...parameters) as Array<{ id: string; read: number }>
+    `).all(...parameters) as Array<{ id: string; read: number; state_revision?: number }>
     const anchorIndex = rows.findIndex(row => row.id === anchorId)
-    if (anchorIndex < 0) return []
+    if (anchorIndex < 0) return { ids: [] }
     const candidates = direction === 'above' ? rows.slice(0, anchorIndex) : rows.slice(anchorIndex + 1)
-    return candidates.filter(row => !row.read).map(row => row.id)
+    const unread = candidates.filter(row => !row.read)
+    return { ids: unread.map(row => row.id), revisions: withRevisions ? Object.fromEntries(unread.map(row => [row.id, row.state_revision!])) : undefined }
   }
 
   streamOrder(stream: StreamRef): 'newest' | 'oldest' {
@@ -2282,7 +2342,7 @@ export class PaperDatabase {
   }
 }
 
-function uniqueFeeds(navigation: NavigationPayload): Map<string, Feed> {
+export function uniqueFeeds(navigation: NavigationPayload): Map<string, Feed> {
   const feeds = new Map<string, Feed>()
   for (const folder of navigation.folders) {
     for (const feed of folder.feeds) feeds.set(feed.id, feed)
@@ -2319,6 +2379,10 @@ function entryFromRow(row: Record<string, string | number>): Entry {
     id: String(row.id),
     feedId: String(row.feed_id),
     feedTitle,
+    [indexedSearchText]: {
+      title: String(row.title), author: String(row.author), feedTitle: String(row.feed_title),
+      contentText: String(row.content_text), fullContentText: String(row.full_content_text),
+    },
     feedUrl: displayFeedUrl(String(row.feed_url)),
     title: normalizeFeedTitle({ title: decodeHtmlText(String(row.title)), contentHtml, url, feedTitle }),
     author: decodeHtmlText(String(row.author)),
@@ -2382,12 +2446,6 @@ function parseObject(value: string): Record<string, unknown> {
   } catch {
     return {}
   }
-}
-
-function ftsQuery(value: string): string {
-  return value.trim().split(/\s+/).filter(Boolean)
-    .map(term => `"${term.replace(/"/g, '""')}"*`)
-    .join(' AND ')
 }
 
 function encodeOffset(offset: number): string {

@@ -37,7 +37,7 @@ const fixture = http.createServer(async (req, res) => {
   if (url.pathname.endsWith('/accounts/ClientLogin')) return send('Auth=fixture/synthetic-token\n')
   if (req.headers.authorization !== 'GoogleLogin auth=fixture/synthetic-token') { res.statusCode = 401; return send('Unauthorized') }
   const selected = () => rows.filter(row => (!url.searchParams.get('xt') || !row.categories.includes(readTag)) && (!`${url.pathname} ${url.searchParams.get('s')}`.includes('starred') || row.categories.includes(starTag)))
-  if (url.pathname.endsWith('/subscription/list')) return send({ subscriptions: [{ id: 'feed/1', title: 'Synthetic feed', url: 'https://example.test/feed.xml', htmlUrl: 'https://example.test/', categories: [] }] })
+  if (url.pathname.endsWith('/subscription/list')) return send({ subscriptions: [{ id: 'feed/1', title: 'Synthetic feed', url: 'https://example.test/feed.xml', htmlUrl: 'https://example.test/', categories: [{ id: 'user/-/label/Fixture', label: 'Fixture' }] }] })
   if (url.pathname.endsWith('/unread-count')) return send({ unreadcounts: ['feed/1', 'user/-/state/com.google/reading-list'].map(id => ({ id, count: rows.filter(row => !row.categories.includes(readTag)).length })) })
   if (url.pathname.includes('/stream/items/ids')) return send({ itemRefs: selected().map(row => ({ id: String(parseInt(row.id.split('/').at(-1), 16)) })) })
   if (url.pathname.includes('/stream/contents/')) return send({ items: selected() })
@@ -264,6 +264,10 @@ try {
   assert.deepEqual(remoteNavigation.folders.map(folder => folder.linkNumber), numberedNavigation.folders.map(folder => folder.linkNumber))
   const remoteSearch = (await request('/api/entries?kind=all&id=all&unread=0&q=compositor')).data
   assert.equal(remoteSearch.items.length, 2)
+  const substring = await request('/api/entries?kind=all&id=all&unread=0&q=mposi%20thetic')
+  assert.deepEqual(substring.data.items.map(item => item.id), remoteSearch.items.map(item => item.id))
+  const operators = encodeURIComponent('is:starred folder:fixture (title:"synthetic compositor" OR author:absent) NOT absent')
+  assert.deepEqual((await request('/api/entries?kind=all&id=all&unread=0&q=' + operators)).data.items.map(item => item.id), [id])
   assert.equal((await request('/api/entries/item', { id })).data.entry.id, id)
   const preview = await request('/api/streams/preview-read', { stream: { kind: 'all', id: 'all' } })
   assert.equal(preview.data.count, rows.filter(row => !row.categories.includes(readTag)).length)

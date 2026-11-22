@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import fs from 'node:fs/promises'
 import http from 'node:http'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -65,6 +66,24 @@ try {
   assert.equal(status.backend, 'miniflux'); assert.equal(status.localReadsActive, true)
   for (const key of ['discussionConfigured', 'readwiseConfigured', 'kirbyConfigured', 'briefingConfigured']) assert.equal(status[key], false)
   assert.equal((await request('/api/sync/parity')).data.ready, true)
+  const { token, count } = (await request('/api/streams/preview-read', { query: 'is:unread' })).data
+  assert(token && count > 0)
+  // Deliver nine searches and the confirm together, before the event loop can
+  // handle the worker's first reply. The last request must see a full queue.
+  const socket = net.createConnection(port, '127.0.0.1')
+  socket.setEncoding('utf8')
+  const headers = `Host: 127.0.0.1:${port}\r\n`
+  const body = JSON.stringify({ token })
+  const searches = `GET /api/entries?q=absent HTTP/1.1\r\n${headers}\r\n`.repeat(9)
+  socket.write(searches + `POST /api/streams/confirm-read HTTP/1.1\r\n${headers}Content-Type: application/json\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`)
+  const last = (await Array.fromAsync(socket)).join('').split('HTTP/1.1 ').at(-1)
+  assert.match(last, /^503 /)
+  assert.match(last, /Search is busy/)
+  const retries = await Promise.all([1, 2].map(() => request('/api/streams/confirm-read', { token })))
+  assert.deepEqual(retries.map(reply => reply.status).sort(), [200, 409])
+  const confirmed = retries.find(reply => reply.status === 200).data
+  assert.equal(confirmed.count, count)
+  assert.equal((await request('/api/undo', { token: confirmed.undoToken })).status, 200)
   const page = (await request('/api/entries?kind=all&id=all&unread=0')).data
   assert.equal(page.items.length, 3)
   const id = page.items[0].id

@@ -46,6 +46,7 @@ export interface NavigationPayload {
 export interface Entry {
   linkNumber?: number
   stateRevision?: number
+  searchSnapshot?: string
   searchExcerpt?: string
   enclosures?: Enclosure[]
   enclosuresUnchecked?: boolean
