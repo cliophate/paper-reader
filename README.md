@@ -204,8 +204,8 @@ HTML still has a processing cost.
 
 The reader and optional Codex worker support Linux amd64 and arm64.
 For a library around 200,000 articles, budget 1 GiB of RAM for Paper plus
-memory for the OS and any other containers. The Reader API scale test uses a
-1 GiB limit for Paper and its child processes.
+memory for the OS and any other containers. The Reader API scale test checks
+that the peak RSS of Paper and its child processes stays below 1 GiB.
 
 Clone the repository at the tag or commit you want to build, then run
 `sh scripts/setup.sh` if you do not already have private configuration. From

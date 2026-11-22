@@ -23,6 +23,8 @@ jobs:
       - run: npm run licenses && git diff --exit-code -- THIRD_PARTY_NOTICES.md licenses
       - name: Match tag to package version
         run: test "$GITHUB_REF_NAME" = "v$(node -p 'require("./package.json").version')"
+      - name: Reserve the worker tag suffix
+        run: test "${GITHUB_REF_NAME%-ai}" = "$GITHUB_REF_NAME"
   build:
     if: github.repository == 'cliophate/paper-reader'
     needs: verify
@@ -104,6 +106,9 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-24.04
+    concurrency:
+      group: release-${{ github.ref_name }}
+      cancel-in-progress: false
     timeout-minutes: 15
     permissions:
       contents: write
@@ -119,20 +124,30 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to overwrite a published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; its image tags stay as they are." >&2
+            exit 1
+          fi
       - name: Publish both architectures under the release tags
         shell: bash
         env:
           IMAGE: ghcr.io/cliophate/paper-reader
         run: |
           version=${GITHUB_REF_NAME#v}
-          docker buildx imagetools create --tag "$IMAGE:$version" \
-            "$IMAGE@$(cat release-amd64/reader.digest)" "$IMAGE@$(cat release-arm64/reader.digest)"
-          docker buildx imagetools create --tag "$IMAGE:$version-ai" \
-            "$IMAGE@$(cat release-amd64/worker.digest)" "$IMAGE@$(cat release-arm64/worker.digest)"
-          for tag in "$version" "$version-ai"; do
-            docker buildx imagetools inspect --raw "$IMAGE:$tag" |
+          sources() {
+            echo "$IMAGE@$(cat "release-amd64/$1.digest")" "$IMAGE@$(cat "release-arm64/$1.digest")"
+          }
+          # Check both indexes before either public tag moves.
+          for image in reader worker; do
+            docker buildx imagetools create --dry-run $(sources "$image") |
               jq -e '[.manifests[].platform | select(.os == "linux").architecture] | sort == ["amd64", "arm64"]'
           done
+          docker buildx imagetools create --tag "$IMAGE:$version" $(sources reader)
+          docker buildx imagetools create --tag "$IMAGE:$version-ai" $(sources worker)
       - name: Publish public release archives
         env:
           GH_TOKEN: ${{ github.token }}
