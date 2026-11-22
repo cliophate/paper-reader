@@ -3,10 +3,11 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { api } from '../src/client/api'
+import { FeedRepair } from '../src/client/components/FeedRepair'
 import { FeedChecks, FeedCheckDetails } from '../src/client/components/FeedChecks'
 import type { FeedChecksView } from '../src/shared/feed-checks'
 
-vi.mock('../src/client/api', () => ({ api: { feedChecks: vi.fn(), checkFeeds: vi.fn(), setCheckInterval: vi.fn() } }))
+vi.mock('../src/client/api', () => ({ api: { feedChecks: vi.fn(), repairFeed: vi.fn(), checkFeeds: vi.fn(), setCheckInterval: vi.fn() } }))
 let root: Root, container: HTMLDivElement, view: FeedChecksView
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -100,4 +101,22 @@ it('explains disabled collection and prevents manual checks', async () => {
   expect(container.textContent).toContain('Feed collection is disabled by the server')
   expect(button('Check now').disabled).toBe(true)
   expect(button('Check folder now').disabled).toBe(true)
+})
+
+it('offers one-click repair for the suggested address and only displays a temporary redirect', async () => {
+  const original = 'https://example.test/old'
+  const next = 'https://example.test/new'
+  const feed = { id: 'feed-1', title: 'Synthetic', url: original, siteUrl: '', iconUrl: '', categories: [], unread: 0,
+    lastPublishedAt: null, lastCheckedAt: null, lastErrorAt: null, broken: false }
+  const changed = vi.fn(async () => {})
+  const temporary = { redirects: [{ status: 307, url: next }], declaredUrl: '', suggestedUrl: '' }
+  await act(async () => root.render(<FeedRepair feed={feed} move={temporary} onChanged={changed} />))
+  expect(container.textContent).toContain('Temporary redirect (HTTP 307)')
+  expect(button('Use new address')).toBeUndefined()
+  const declared = { redirects: [], declaredUrl: next, suggestedUrl: next, repairRef: 'fixture-reference' }
+  await act(async () => root.render(<FeedRepair feed={feed} move={declared} onChanged={changed} />))
+  expect(api.repairFeed).not.toHaveBeenCalled()
+  await click('Use new address')
+  expect(api.repairFeed).toHaveBeenCalledExactlyOnceWith('feed-1', { repairRef: declared.repairRef }, original)
+  expect(changed).toHaveBeenCalledOnce()
 })

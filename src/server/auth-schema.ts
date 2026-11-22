@@ -1,7 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { transaction } from './transaction.js'
 
-export const DATABASE_VERSION = 20
+export const FEED_MAINTENANCE_VERSION = 21
+export const DATABASE_VERSION = FEED_MAINTENANCE_VERSION
 
 export function migrateAuth(db: DatabaseSync) {
   transaction(db, () => db.exec(`

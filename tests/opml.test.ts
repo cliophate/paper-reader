@@ -1,5 +1,6 @@
+import { displayFeedUrl } from '../src/server/feed-url-display'
 import { describe, expect, it } from 'vitest'
-import { exportOpml, OPML_LIMITS, opmlIdentity, parseOpml, previewOpml } from '../src/server/opml'
+import { exportOpml, portableUrl, OPML_LIMITS, opmlIdentity, parseOpml, previewOpml } from '../src/server/opml'
 import type { Feed, NavigationPayload } from '../src/server/types'
 
 export const feed = (id: string, url = 'https://example.test/rss'): Feed => ({ id, title: id, url, siteUrl: 'https://example.test/', iconUrl: '', categories: [], unread: 0, lastPublishedAt: null, lastCheckedAt: null, lastErrorAt: null, broken: false })
@@ -62,13 +63,29 @@ describe('OPML parsing and portability', () => {
   })
 
   it('rejects embedded credentials and omits credential query parameters from export', () => {
-    const privateNav = { ...navigation, folders: [], uncategorized: [feed('feed/https://user:password@example.test/rss', 'https://user:password@example.test/rss'), feed('secret', 'https://example.test/rss?token=private-value')] }
+    const privateNav = { ...navigation, folders: [], uncategorized: [feed('feed/https://user:password@example.test/rss', 'https://user:password@example.test/rss'), feed('secret', 'https://example.test/rss?token=private-value'), feed('signed', 'https://example.test/rss?sig=private-value')] }
     const exported = exportOpml(privateNav, 'private-backend')
-    expect(exported.omitted).toBe(2)
+    expect(exported.omitted).toBe(3)
     expect(exported.xml).not.toMatch(/password|private-value|private-backend/)
     const rows = parseOpml(wrap('<outline xmlUrl="https://user:password@example.test/rss"/>')).subscriptions
     expect(rows[0].url).toBe('')
     expect(rows[0].problem).toBeTruthy()
+  })
+
+  it('redacts credential-bearing URLs for display and excludes them from transfers', () => {
+    const base = 'https://example.test/rss'
+    const privateUrls = ['SIG', '%68ash', 'signATUReVersion', 'readerAccessToken', 'mySECRETid',
+      'accountPasswordCheck', 'key', 'api-key', 'auth', 'X-Amz-Date', 'x-Goog-Algorithm', 'Key-Pair-Id']
+      .map(key => `${base}?${key}=synthetic&extra=private`)
+    for (const url of [...privateUrls, 'https://alice:synthetic@example.test/rss']) {
+      expect(displayFeedUrl(url)).toBe(base)
+      expect(portableUrl(url)).toBe('')
+    }
+    expect(displayFeedUrl(base + '?topic=a%20b')).toBe(base + '?topic=a%20b')
+    const redacted = { ...feed('one', base), urlRef: 'opaque-reference' }
+    const snapshot = { ...navigation, folders: [], uncategorized: [redacted] }
+    expect(exportOpml(snapshot, 'backend').omitted).toBe(1)
+    expect(previewOpml(parseOpml(wrap(`<outline xmlUrl="${base}"/>`)), snapshot, 'backend')[0].matches).toEqual([])
   })
 
   it('uses namespace URI for the identity extension and supports predefined/numeric entities', () => {

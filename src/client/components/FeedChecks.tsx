@@ -91,6 +91,10 @@ function IntervalInput({ value, disabled, onSave, feed = false }: { value: numbe
   </form>
 }
 
+export function useFeedChecksView() {
+  return useContext(FeedChecksContext)?.view
+}
+
 export function FeedCheckDetails({ feedId }: { feedId: string }) {
   const context = useContext(FeedChecksContext)
   if (!context || context.view?.backend !== 'standalone') return null

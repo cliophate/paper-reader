@@ -33,6 +33,17 @@ Schema v20 adds briefing delivery jobs. The migration saves
 `paper.sqlite.before-briefing-delivery-v20` before upgrading. Delivery tests use
 a loopback SMTP relay with synthetic messages and credentials.
 
+Schema v21 records standalone redirect chains and publisher-declared addresses
+alongside the fetch lease. It also stores Miniflux parsing errors with cached
+feed metadata. The migration saves `paper.sqlite.before-feed-maintenance-v21`
+before upgrading. The previous Paper binary rejects the v21 database.
+
+To roll back, stop Paper. Copy the current database and any `paper.sqlite-wal`
+and `paper.sqlite-shm` files to a separate directory. Remove those sidecars
+from the data directory, then copy `paper.sqlite.before-feed-maintenance-v21`
+over `paper.sqlite`. Start the previous binary with the restored database.
+It contains the data from before the upgrade.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh

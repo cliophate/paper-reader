@@ -1,3 +1,5 @@
+import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
+import { portableUrl } from './opml.js'
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite'
 import { ReaderError } from './greader-auth.js'
 import sanitizeHtml from 'sanitize-html'
@@ -93,7 +95,7 @@ export function item(db: DatabaseSync, row: Row) {
   else { content = sanitizeHtml(body); if (Buffer.byteLength(content) > 65536) content = `<p>${escape(String(row.content_text).slice(0, 7000))}</p><p><a href="${escape(url)}">Read the article</a></p>` }
   return { id: longId(BigInt(row.sequence as bigint)), title: String(row.title), author: String(row.author), published: Math.floor((Date.parse(String(row.published_at)) || Number(row.first_seen_at)) / 1000),
     crawlTimeMsec: String(row.first_seen_at), timestampUsec: String(BigInt(row.first_seen_at as bigint) * 1000n), canonical: [{ href: url }], alternate: [{ href: url, type: 'text/html' }], summary: { content },
-    origin: { streamId: `feed/${row.feed_number}`, title: String(row.origin_title), htmlUrl: safeUrl(row.site_url) },
+    origin: { streamId: `feed/${row.feed_number}`, title: displayFeedTitle(String(row.origin_title)), htmlUrl: safeUrl(displayFeedUrl(String(row.site_url))) },
     categories: [READING, ...categories(db, String(row.feed_id)), ...(Number(row.read) ? [`${STATE}read`] : []), ...(Number(row.starred) ? [`${STATE}starred`] : [])] }
 }
 const CONTENT = 'e.id, e.feed_id, e.title, e.author, e.url, e.canonical_url, e.published_at, e.first_seen_at, e.read, e.starred, CAST(substr(CAST(e.content_html AS BLOB),1,65537) AS TEXT) AS content_html, substr(e.content_text,1,7000) AS content_text, a.sequence, f.title AS origin_title, f.site_url, (SELECT number FROM link_numbers WHERE kind = \'feed\' AND target_id = e.feed_id) AS feed_number'
@@ -149,7 +151,7 @@ export function metadata(db: DatabaseSync, kind: string, backend: string) {
   if (kind === 'subscription/list') {
     let bytes = 0
     const subscriptions = feeds.map(f => {
-      const value = { id: `feed/${f.number}`, title: String(f.title), url: safeUrl(f.url), htmlUrl: safeUrl(f.site_url), iconUrl: safeUrl(f.icon_url), categories: categories(db, String(f.id)).map(id => ({ id, label: id.slice(LABEL.length) })) }
+      const value = { id: `feed/${f.number}`, title: displayFeedTitle(String(f.title)), url: portableUrl(safeUrl(f.url)), htmlUrl: safeUrl(displayFeedUrl(String(f.site_url))), iconUrl: safeUrl(f.icon_url), categories: categories(db, String(f.id)).map(id => ({ id, label: id.slice(LABEL.length) })) }
       bytes += Buffer.byteLength(JSON.stringify(value)) + 1
       if (bytes > 4 * 1024 * 1024) throw new ReaderError('Response is too large.', 413)
       return value

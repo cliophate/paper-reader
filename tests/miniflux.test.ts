@@ -329,3 +329,14 @@ describe('native change synchronization', () => {
     expect(database!.localEntry(id('entry', 1))?.read).toBe(previous)
   })
 })
+
+it('exposes the check time and safe parsing errors without inventing a failure timestamp', async () => {
+  Object.assign(fixture.feeds[0], { parsing_error_count: 2, parsing_error_message: 'Invalid XML at line 4' })
+  const getFeed = async () => (await client.navigation()).folders[0].feeds[0]
+  expect(await getFeed()).toMatchObject({ broken: true, parsingErrorCount: 2, parsingErrorMessage: 'Invalid XML at line 4',
+    lastCheckedAt: '2026-01-01T00:00:00.000Z', lastErrorAt: null })
+  Object.assign(fixture.feeds[0], { parsing_error_message: 'Bad response at https://example.test/private?code=synthetic' })
+  expect((await getFeed()).parsingErrorMessage).toBe('Bad response at [URL]')
+  Object.assign(fixture.feeds[0], { parsing_error_message: fixture.feeds[0].password })
+  expect((await getFeed()).parsingErrorMessage).toBe('')
+})

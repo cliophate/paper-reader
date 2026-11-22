@@ -1,5 +1,5 @@
 import type { RetentionPolicy, RetentionPreview, RetentionView } from '../shared/retention'
-import type { FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarget } from '../shared/feed-checks'
+import type { FeedMaintenance, StaleDays, FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarget } from '../shared/feed-checks'
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
 import type { PulsePayload } from '../shared/pulse'
 import type { CollectionAnswer } from '../shared/discussion'
@@ -32,6 +32,8 @@ export const api = {
   retention: () => request<RetentionView>('/api/retention'),
   previewRetention: (policy: RetentionPolicy) => request<RetentionPreview>('/api/retention/preview', { method: 'POST', body: JSON.stringify({ policy }) }),
   saveRetention: (policy: RetentionPolicy, revision: number, token?: string) => request<RetentionView>('/api/retention', { method: 'POST', body: JSON.stringify({ policy, revision, token }) }),
+  feedMaintenance: () => request<FeedMaintenance>('/api/feed-checks/maintenance'),
+  saveStaleDays: (staleDays: number[]) => request<{ staleDays: StaleDays }>('/api/feed-checks/maintenance', { method: 'PATCH', body: JSON.stringify({ staleDays }) }),
   feedChecks: () => request<FeedChecksView>('/api/feed-checks'),
   checkFeeds: (body: FeedCheckRevision & FeedCheckTarget) => request<{ results: FeedCheckResult[]; snapshot: FeedChecksView }>('/api/feed-checks/now', { method: 'POST', body: JSON.stringify(body) }),
   setCheckInterval: (body: FeedCheckRevision & { feedId?: string; intervalMinutes: number | null }) => request<{ snapshot: FeedChecksView }>('/api/feed-checks/interval', { method: 'POST', body: JSON.stringify(body) }),
@@ -50,7 +52,7 @@ export const api = {
   saveProgress: (id: string, position: number) => request<{ ok: boolean }>('/api/reading', { method: 'POST', body: JSON.stringify({ id, position }), keepalive: true }),
   previewFilter: (phrase: string, scope: string, feedId: string) => request<{ count: number; items: Entry[]; truncated: boolean }>('/api/filters/preview', { method: 'POST', body: JSON.stringify({ phrase, scope, feedId }) }),
   previewFeed: (url: string) => request<{ url: string; title: string; items: Array<{ title: string; date: string }> }>('/api/feeds/preview', { method: 'POST', body: JSON.stringify({ url }) }),
-  repairFeed: (id: string, url: string, expectedUrl: string) => request<{ ok: boolean }>('/api/feeds/repair', { method: 'POST', body: JSON.stringify({ id, url, expectedUrl }) }),
+  repairFeed: (id: string, target: { url: string } | { repairRef: string }, expectedUrl: string) => request<{ ok: boolean }>('/api/feeds/repair', { method: 'POST', body: JSON.stringify({ id, ...target, expectedUrl }) }),
   previewRead: (stream: StreamRef, query: string, after: string, before: string) => request<{ token: string; count: number }>('/api/streams/preview-read', { method: 'POST', body: JSON.stringify({ stream, query, after, before }) }),
   confirmRead: (token: string) => request<{ count: number; undoToken: string }>('/api/streams/confirm-read', { method: 'POST', body: JSON.stringify({ token }) }),
   navigation: () => request<NavigationPayload>('/api/navigation'),

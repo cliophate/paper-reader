@@ -37,6 +37,21 @@ describe('subscription tools HTTP routes', () => {
     expect(store.create).not.toHaveBeenCalled()
     expect((await request('apply', { token: preview.data.token, choices: [] })).status).toBe(409)
   })
+  it('discovers signed redirect targets and subscribes through the public URL', async () => {
+    const { request, store, transport } = await fixture()
+    const url = 'https://publisher.test/latest'
+    transport.mockResolvedValueOnce({ responseUrl: 'https://cdn.test/rss?sig=synthetic-private',
+      contentType: 'application/rss+xml', body: '<rss version="2.0"><channel><title>https://cdn.test/rss?sig=synthetic-private</title></channel></rss>' })
+    const result = await request('discover', { url })
+    expect(result.status).toBe(200)
+    expect(result.data).toEqual({ responseUrl: 'https://cdn.test/rss',
+      candidates: [{ url, title: 'https://cdn.test/rss', format: 'rss' }] })
+    const preview = await request('preview-feed', result.data.candidates[0])
+    const applied = await request('apply', { token: preview.data.token, choices: [{ key: '1', action: 'create', folders: [] }] })
+    expect(applied.data.results[0].status).toBe('created')
+    expect(store.create).toHaveBeenCalledWith(expect.objectContaining({ url }), [], null)
+  })
+
   it('returns conflict metadata on stale navigation and validates candidate preview input', async () => {
     const { request, navigation } = await fixture()
     const preview = await request('preview-feed', { url: 'https://example.test/rss', title: 'A & B' })

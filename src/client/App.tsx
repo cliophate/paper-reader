@@ -23,7 +23,10 @@ import { ActivitySettings, FiltersSettings, ReportsSettings } from './components
 import { TopicsLibrary } from './components/TopicsLibrary'
 import { BriefingLibrary } from './components/BriefingLibrary'
 import { Modal } from './components/Modal'
-import { feedMatchesFilter, type FeedFilter } from './feedFilters'
+import { StaleThresholds } from './components/StaleThresholds'
+import { useFeedChecksView } from './components/FeedChecks'
+import type { FeedMaintenance } from '../shared/feed-checks'
+import { duplicateFeedGroups, feedMatchesAge, type FeedFilter } from './feedFilters'
 import { automaticFullTextFeeds, recordFullTextSuccess } from './fullTextPreferences'
 import { movementDirection } from './keyboard'
 import { readReaderLocation, readerLocationUrl, resolveReaderLocation, type ReaderLinks, type MobilePane, type ReaderLocation } from './location'
@@ -2395,16 +2398,49 @@ function FeedManager({ backend, initialFeedId, navigation, onChanged, notify }: 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmRemove, setConfirmRemove] = useState(false)
-  const [confirmBulkRemove, setConfirmBulkRemove] = useState(false)
+  const [confirmedIds, setConfirmedIds] = useState<Set<string> | null>(null)
   const [bulkFolder, setBulkFolder] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const confirmBulkRemove = confirmedIds === selectedIds
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
-  const visibleFeeds = feeds.filter(feed => `${feed.title} ${feed.url} ${feed.categories.join(' ')}`.toLowerCase().includes(query.toLowerCase()) && feedMatchesFilter(feed, filter))
-  const attentionFeeds = visibleFeeds.filter(feed => feed.broken)
-  const normalGroups = groupFeeds(visibleFeeds.filter(feed => !feed.broken), folders)
+  const [maintenance, setMaintenance] = useState<FeedMaintenance | null>(null)
+  const [maintenanceError, setMaintenanceError] = useState('')
+  useEffect(() => {
+    let active = true
+    async function load() {
+      try {
+        const next = await api.feedMaintenance()
+        if (active) { setMaintenance(next); setMaintenanceError('') }
+      } catch { if (active) setMaintenanceError('Could not load last post filters and article counts.') }
+    }
+    void load()
+    return () => { active = false }
+  }, [navigation])
+  const checks = useFeedChecksView()
+  const feedChecks = useMemo(() => new Map(checks?.feeds.map(check => [check.feedId, check])), [checks])
+  const duplicates = useMemo(() => duplicateFeedGroups(feeds, feedChecks), [feeds, feedChecks])
+  const matchesSearch = (feed: Feed) => `${feed.title} ${feed.url} ${feed.categories.join(' ')}`.toLowerCase().includes(query.toLowerCase())
+  const visibleFeeds = feeds.filter(feed => matchesSearch(feed) && feedMatchesAge(feed, filter, maintenance?.staleDays)
+    && (filter !== 'attention' || feed.broken) && (filter !== 'moved' || feedChecks.get(feed.id)?.move))
+  const attentionFeeds = filter === 'duplicates' ? [] : visibleFeeds.filter(feed => feed.broken)
+  const normalGroups = filter === 'duplicates'
+    ? duplicates.filter(group => group.feeds.some(matchesSearch)).map(({ feeds, label }) => ({
+      title: label + ' · ' + feeds[0].title, feeds, key: label + ':' + feeds[0].id,
+    }))
+    : groupFeeds(visibleFeeds.filter(feed => !feed.broken), folders).map(group => ({ ...group, key: group.title }))
   const displayFeeds = [...attentionFeeds, ...normalGroups.flatMap(group => group.feeds)]
   const selected = displayFeeds.find(feed => feed.id === selectedId) || displayFeeds[0] || null
+
+  // React retries this render before showing controls for a changed list.
+  if (selectedIds.size) {
+    const visibleIds = new Set(displayFeeds.map(feed => feed.id))
+    const remaining = [...selectedIds].filter(id => visibleIds.has(id))
+    if (remaining.length !== selectedIds.size) {
+      setSelectedIds(new Set(remaining))
+      setConfirmedIds(null)
+    }
+  }
 
   useEffect(() => {
     if (!initialFeedId) return
@@ -2413,8 +2449,15 @@ function FeedManager({ backend, initialFeedId, navigation, onChanged, notify }: 
   }, [initialFeedId])
 
   useEffect(() => {
+    if (!navigation) return
+    if (selectedId !== (selected?.id ?? '')) {
+      setMobileDetailOpen(false)
+      setSelectedId(selected?.id ?? '')
+    }
+  }, [navigation, selectedId, selected?.id])
+
+  useEffect(() => {
     if (!selected) return
-    if (selectedId !== selected.id) setSelectedId(selected.id)
     setTitle(selected.title)
     setFolder(selected.categories[0] || '')
     setConfirmRemove(false)
@@ -2423,7 +2466,6 @@ function FeedManager({ backend, initialFeedId, navigation, onChanged, notify }: 
 
   useEffect(() => {
     setSelectedIds(new Set())
-    setConfirmBulkRemove(false)
   }, [filter, query])
 
   const add = async (event: React.FormEvent) => {
@@ -2474,7 +2516,6 @@ function FeedManager({ backend, initialFeedId, navigation, onChanged, notify }: 
       else next.add(id)
       return next
     })
-    setConfirmBulkRemove(false)
   }
 
   const toggleGroupSelection = (groupFeeds: Feed[]) => {
@@ -2484,7 +2525,6 @@ function FeedManager({ backend, initialFeedId, navigation, onChanged, notify }: 
       for (const feed of groupFeeds) allSelected ? next.delete(feed.id) : next.add(feed.id)
       return next
     })
-    setConfirmBulkRemove(false)
   }
 
   const toggleGroup = (title: string) => setCollapsedGroups(current => {
@@ -2515,16 +2555,16 @@ function FeedManager({ backend, initialFeedId, navigation, onChanged, notify }: 
   }
 
   const bulkRemove = async () => {
-    if (!selectedIds.size) return
-    if (!confirmBulkRemove) return setConfirmBulkRemove(true)
+    if (!selectedIds.size || busy) return
+    if (!confirmBulkRemove) return setConfirmedIds(selectedIds)
+    setConfirmedIds(null)
     setBusy(true); setError('')
     try {
-      for (const id of selectedIds) { await api.removeFeed(id); setSelectedIds(current => new Set([...current].filter(item => item !== id))) }
-      const count = selectedIds.size
+      for (const id of confirmedIds) { await api.removeFeed(id); setSelectedIds(current => new Set([...current].filter(item => item !== id))) }
+      const count = confirmedIds.size
       setSelectedIds(new Set())
       setSelectedId('')
       setMobileDetailOpen(false)
-      setConfirmBulkRemove(false)
       await onChanged()
       notify(`${count} ${count === 1 ? 'feed' : 'feeds'} unsubscribed`)
     } catch (reason) {
@@ -2547,32 +2587,45 @@ function FeedManager({ backend, initialFeedId, navigation, onChanged, notify }: 
       <button type="submit" disabled={busy}>{busy ? 'Working...' : 'Add feed'}</button>
     </form>}
     <datalist id="paper-feed-folders">{folders.map(name => <option value={name} key={name} />)}</datalist>
+    {maintenance && <StaleThresholds days={maintenance.staleDays} onSaved={staleDays => setMaintenance(current => current && ({ ...current, staleDays }))} />}
+    {maintenanceError && <p role="alert" className="feed-check-message">{maintenanceError}</p>}
     <div className="feed-manager-tools">
       <label className="feed-search"><Icon name="search" /><input placeholder="Find a feed" value={query} onChange={event => setQuery(event.target.value)} /></label>
       <div className="feed-filters" role="group" aria-label="Feed filter">
-        {([['all', 'All'], ['attention', `Needs attention${feeds.some(feed => feed.broken) ? ` (${feeds.filter(feed => feed.broken).length})` : ''}`], ['3m', '3 to 6 months'], ['6m', '6 to 12 months'], ['1y', '1+ year']] as Array<[FeedFilter, string]>).map(([value, label]) => <button key={value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>)}
+        {([['all', 'All'], ['attention', `Needs attention${feeds.some(feed => feed.broken) ? ` (${feeds.filter(feed => feed.broken).length})` : ''}`], ...(backend === 'standalone' ? [['moved', 'Moved feeds']] : []), ['duplicates', `Duplicates${duplicates.length ? ` (${duplicates.length})` : ''}`]] as Array<[FeedFilter, string]>).map(([value, label]) =>
+          <button key={value} aria-pressed={filter === value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>)}
+        {maintenance && <select aria-label="Filter by last post" value={['first', 'second', 'oldest'].includes(filter) ? filter : 'all'} onChange={event => setFilter(event.target.value as FeedFilter)}>
+          <option value="all">Last post</option>
+          <option value="first">{maintenance.staleDays[0]} to {maintenance.staleDays[1] - 1} days</option>
+          <option value="second">{maintenance.staleDays[1]} to {maintenance.staleDays[2] - 1} days</option>
+          <option value="oldest">{maintenance.staleDays[2]}+ days</option>
+        </select>}
       </div>
     </div>
-    {selectedIds.size > 0 && <div className="feed-bulk-bar"><span>{selectedIds.size} selected</span><label>Move to{backend === 'miniflux' ? <select value={bulkFolder} onChange={event => setBulkFolder(event.target.value)}><option value="">Choose a category</option>{folders.map(name => <option key={name} value={name}>{name}</option>)}</select> : <input list="paper-feed-folders" value={bulkFolder} placeholder="Uncategorized" onChange={event => setBulkFolder(event.target.value)} />}</label><button disabled={busy || backend === 'miniflux' && !bulkFolder} onClick={() => void bulkMove()}>Move selected</button><button onClick={() => { setSelectedIds(new Set()); setConfirmBulkRemove(false) }}>Clear</button><button className={confirmBulkRemove ? 'danger confirming' : 'danger'} onClick={() => void bulkRemove()} disabled={busy}>{confirmBulkRemove ? `Confirm unsubscribe ${selectedIds.size}` : `Unsubscribe ${selectedIds.size}`}</button></div>}
+    {selectedIds.size > 0 && <div className="feed-bulk-bar"><span>{selectedIds.size} selected</span><label>Move to{backend === 'miniflux' ? <select value={bulkFolder} onChange={event => setBulkFolder(event.target.value)}><option value="">Choose a category</option>{folders.map(name => <option key={name} value={name}>{name}</option>)}</select> : <input list="paper-feed-folders" value={bulkFolder} placeholder="Uncategorized" onChange={event => setBulkFolder(event.target.value)} />}</label><button disabled={busy || backend === 'miniflux' && !bulkFolder} onClick={() => void bulkMove()}>Move selected</button><button onClick={() => { setSelectedIds(new Set()); setConfirmedIds(null) }}>Clear</button><button className={confirmBulkRemove ? 'danger confirming' : 'danger'} onClick={() => void bulkRemove()} disabled={busy}>{confirmBulkRemove ? `Confirm unsubscribe ${selectedIds.size}` : `Unsubscribe ${selectedIds.size}`}</button></div>}
     <div className="feed-manager-grid">
       <section className="feed-manager-list">
         <div className="feed-group-scroll">
+          {filter === 'duplicates' && duplicates.length > 0 && <p className="feed-comparison-note">Possible duplicates have similar addresses or share a site and title.</p>}
           {attentionFeeds.length > 0 && <FeedGroup title="Needs attention" feeds={attentionFeeds} selectedId={selected?.id || ''} selectedIds={selectedIds} onSelect={selectFeed} onToggleSelection={toggleSelection} onToggleGroupSelection={toggleGroupSelection} collapsed={collapsedGroups.has('Needs attention')} onToggleCollapsed={() => toggleGroup('Needs attention')} attention />}
-          {normalGroups.map(group => <FeedGroup key={group.title} title={group.title} feeds={group.feeds} selectedId={selected?.id || ''} selectedIds={selectedIds} onSelect={selectFeed} onToggleSelection={toggleSelection} onToggleGroupSelection={toggleGroupSelection} collapsed={collapsedGroups.has(group.title)} onToggleCollapsed={() => toggleGroup(group.title)} />)}
-          {!visibleFeeds.length && <div className="feed-list-empty">No feeds match this filter.</div>}
+          {normalGroups.map(group => <FeedGroup key={group.key} compare={filter === 'duplicates'} counts={maintenance?.articleCounts} title={group.title} feeds={group.feeds} selectedId={selected?.id || ''} selectedIds={selectedIds} onSelect={selectFeed} onToggleSelection={toggleSelection} onToggleGroupSelection={toggleGroupSelection} collapsed={collapsedGroups.has(group.key)} onToggleCollapsed={() => toggleGroup(group.key)} />)}
+          {!displayFeeds.length && <div className="feed-list-empty">No feeds match this filter.</div>}
         </div>
       </section>
       <section className="feed-editor">
         {selected ? <>
           <button className="feed-editor-back" onClick={() => setMobileDetailOpen(false)}><Icon name="back" /> Back to feeds</button>
           <div className="feed-editor-heading"><FeedMark title={selected.title} url={selected.siteUrl || selected.url} iconUrl={selected.iconUrl} /><div><strong>{selected.title}</strong><span>{selected.url}</span></div></div>
-          {selected.broken && <div className="feed-health-alert"><strong>The feed could not be updated</strong><span>{selected.lastErrorAt ? `Last failed ${relativeDate(selected.lastErrorAt)}.` : 'The latest fetch failed.'}{selected.lastCheckedAt ? ` Last checked ${relativeDate(selected.lastCheckedAt)}.` : ''}</span></div>}
+          {selected.broken && <div className="feed-health-alert"><strong>The feed could not be updated</strong><span>{backend !== 'miniflux' && selected.lastErrorAt ? `Last failed ${relativeDate(selected.lastErrorAt)}.` : 'The latest fetch failed.'}</span></div>}
+          {backend === 'freshrss' && !selected.broken && selected.lastErrorAt && <p className="feed-last-post">Last failed {relativeDate(selected.lastErrorAt)}</p>}
+          {backend !== 'standalone' && selected.lastCheckedAt && <p className="feed-last-post">Last checked {relativeDate(selected.lastCheckedAt)}</p>}
+          {selected.parsingErrorCount !== undefined && selected.parsingErrorCount > 0 && <p className="feed-last-post">{selected.parsingErrorCount} parsing {selected.parsingErrorCount === 1 ? 'error' : 'errors'}{selected.parsingErrorMessage && <><br />{selected.parsingErrorMessage}</>}</p>}
           {!selected.broken && <p className="feed-last-post">{selected.lastPublishedAt ? `Last post ${formatFeedDate(selected.lastPublishedAt)}` : backend === 'miniflux' ? 'Last publication unavailable' : 'No posts have arrived yet'}</p>}
           <label><span>Title</span><input value={title} onChange={event => setTitle(event.target.value)} /></label>
           <label><span>Folder</span>{backend === 'miniflux' ? <select value={folder} onChange={event => setFolder(event.target.value)}>{folders.map(name => <option key={name} value={name}>{name}</option>)}</select> : <input list="paper-feed-folders" placeholder="Uncategorized" value={folder} onChange={event => setFolder(event.target.value)} />}</label>
           <p className="feed-editor-note">{backend === 'miniflux' ? 'Choose an existing Miniflux category. Manage category names and feed URL repair in Miniflux.' : 'Clear the folder to move this feed to Uncategorized. Enter a new name to create a folder.'}</p>
-          {backend !== 'miniflux' && <FeedRepair key={selected.id} feed={selected} onChanged={onChanged} />}
-          <button className="copy-feed-url" onClick={() => void navigator.clipboard.writeText(selected.url).then(() => notify('Feed URL copied'))}>Copy feed URL</button>
+          {backend !== 'miniflux' && <FeedRepair key={selected.id} feed={selected} move={feedChecks.get(selected.id)?.move} onChanged={onChanged} />}
+          {selected.url && <button className="copy-feed-url" onClick={() => void navigator.clipboard.writeText(selected.url).then(() => notify('Feed URL copied'))}>Copy feed URL</button>}
           <div className="feed-editor-actions"><button className="primary" onClick={() => void save()} disabled={busy || !title.trim()}>Save changes</button><button className={confirmRemove ? 'danger confirming' : 'danger'} onClick={() => void remove()} disabled={busy}>{confirmRemove ? 'Confirm unsubscribe' : 'Unsubscribe'}</button></div>
         </> : <div className="feed-editor-empty">No feeds match this search.</div>}
         {error && <p className="form-error">{error}</p>}
@@ -2581,7 +2634,9 @@ function FeedManager({ backend, initialFeedId, navigation, onChanged, notify }: 
   </div>
 }
 
-function FeedGroup({ title, feeds, selectedId, selectedIds, onSelect, onToggleSelection, onToggleGroupSelection, collapsed, onToggleCollapsed, attention = false }: {
+function FeedGroup({ title, feeds, selectedId, selectedIds, onSelect, onToggleSelection, onToggleGroupSelection, collapsed, onToggleCollapsed, attention = false, compare, counts }: {
+  compare?: boolean
+  counts?: Record<string, number>
   title: string
   feeds: Feed[]
   selectedId: string
@@ -2603,7 +2658,10 @@ function FeedGroup({ title, feeds, selectedId, selectedIds, onSelect, onToggleSe
       <label className="feed-select"><input type="checkbox" checked={selectedIds.has(feed.id)} onChange={() => onToggleSelection(feed.id)} aria-label={`Select ${feed.title}`} /></label>
       <button className="feed-item-open" onClick={() => onSelect(feed.id)}>
         <FeedMark title={feed.title} url={feed.siteUrl || feed.url} iconUrl={feed.iconUrl} />
-        <span><strong>{feed.title}</strong><small>{feed.broken ? `${feed.lastErrorAt ? `Failed ${relativeDate(feed.lastErrorAt)}` : 'Update failed'}${feed.lastCheckedAt ? ` · Last good check ${relativeDate(feed.lastCheckedAt)}` : ''}` : feed.lastPublishedAt ? `Last post ${formatFeedDate(feed.lastPublishedAt)}` : 'No posts yet'}</small></span>
+        <span><strong>{feed.title}</strong>
+          {compare && <><small>{feed.url}</small><small>{feed.categories.join(', ') || 'Uncategorized'} · {counts ? `${counts[feed.id] ?? 0} ${counts[feed.id] === 1 ? 'article' : 'articles'} in Paper` : 'Article count unavailable'}</small></>}
+          <small>{feed.broken && !compare ? (feed.lastErrorAt ? `Failed ${relativeDate(feed.lastErrorAt)}` : 'Update failed') : feed.lastPublishedAt ? `Last post ${formatFeedDate(feed.lastPublishedAt)}` : 'Last post unavailable'}</small>
+        </span>
         {feed.unread > 0 && <b>{feed.unread}</b>}
       </button>
     </div>)}

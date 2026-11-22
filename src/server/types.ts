@@ -10,6 +10,7 @@ export interface StreamRef {
 }
 
 export interface Feed {
+  urlRef?: string
   linkNumber?: number
   id: string
   title: string
@@ -20,6 +21,8 @@ export interface Feed {
   unread: number
   lastPublishedAt: string | null
   lastCheckedAt: string | null
+  parsingErrorCount?: number
+  parsingErrorMessage?: string
   lastErrorAt: string | null
   broken: boolean
 }

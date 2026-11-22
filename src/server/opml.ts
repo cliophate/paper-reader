@@ -1,3 +1,4 @@
+import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { createHash } from 'node:crypto'
 import { SaxesParser } from 'saxes'
 import { feedUrl } from './feed-parser.js'
@@ -28,10 +29,7 @@ export function subscriptionUrl(value: string): string {
 // export a different, apparently working subscription.
 export function portableUrl(value: string): string {
   const safe = subscriptionUrl(value)
-  if (!safe) return ''
-  const url = new URL(safe)
-  if ([...url.searchParams.keys()].some(key => /token|secret|password|passwd|api.?key|auth|signature|credential/i.test(key))) return ''
-  return safe
+  return displayFeedUrl(safe) === safe ? safe : ''
 }
 
 export function parseOpml(xml: string): OpmlDocument {
@@ -100,8 +98,8 @@ export function previewOpml(document: OpmlDocument, navigation: NavigationPayloa
   const current = subscriptionList(navigation)
   return document.subscriptions.map(row => {
     const identified = current.filter(({ feed }) => row.identity && opmlIdentity(backendId, feed.id) === row.identity)
-    const matches = current.filter(({ feed }) => (subscriptionUrl(feed.url) === row.url && row.url) || identified.some(item => item.feed.id === feed.id))
-    const identityConflict = identified.some(({ feed }) => subscriptionUrl(feed.url) !== row.url)
+    const matches = current.filter(({ feed }) => (!feed.urlRef && subscriptionUrl(feed.url) === row.url && row.url) || identified.some(item => item.feed.id === feed.id))
+    const identityConflict = identified.some(({ feed }) => feed.urlRef || subscriptionUrl(feed.url) !== row.url)
     const repeatedUrl = document.subscriptions.some(other => other !== row && other.url && other.url === row.url)
     const folders = [...new Set(row.paths.map(path => path.join(' / ')))]
     const fold = (name: string) => name.trim().normalize('NFKC').toLowerCase()
@@ -113,7 +111,7 @@ export function previewOpml(document: OpmlDocument, navigation: NavigationPayloa
     return {
       key: row.key, title: row.title, url: row.url, folders, sourcePaths: row.paths,
       identityConflict, folderConflict,
-      matches: matches.map(({ feed, folders }) => ({ id: feed.id, title: feed.title, folders, url: portableUrl(feed.url) })),
+      matches: matches.map(({ feed, folders }) => ({ id: feed.id, title: displayFeedTitle(feed.title), folders, url: displayFeedUrl(feed.url) })),
       suggestedId: identified.length === 1 && !identityConflict ? identified[0].feed.id : !row.identity && !repeatedUrl && matches.length === 1 ? matches[0].feed.id : null,
       repeatedUrl: document.subscriptions.some(other => other !== row && other.url && other.url === row.url),
       ...(row.problem ? { problem: row.problem } : {}),
@@ -126,10 +124,10 @@ const escapeXml = (value: string) => value.replace(/[\u0000-\u0008\u000b\u000c\u
 export function exportOpml(navigation: NavigationPayload, backendId: string): { xml: string; omitted: number } {
   let omitted = 0
   const outline = (feed: Feed) => {
-    const url = portableUrl(feed.url)
+    const url = feed.urlRef ? '' : portableUrl(feed.url)
     if (!url) { omitted++; return '' }
     const site = portableUrl(feed.siteUrl)
-    return `<outline type="rss" text="${escapeXml(feed.title)}" title="${escapeXml(feed.title)}" xmlUrl="${escapeXml(url)}"${site ? ` htmlUrl="${escapeXml(site)}"` : ''} paper:id="${opmlIdentity(backendId, feed.id)}"/>`
+    return `<outline type="rss" text="${escapeXml(displayFeedTitle(feed.title))}" title="${escapeXml(displayFeedTitle(feed.title))}" xmlUrl="${escapeXml(url)}"${site ? ` htmlUrl="${escapeXml(site)}"` : ''} paper:id="${opmlIdentity(backendId, feed.id)}"/>`
   }
   const body = navigation.folders.map(folder => `<outline text="${escapeXml(folder.title)}" title="${escapeXml(folder.title)}">${folder.feeds.map(outline).join('')}</outline>`).join('') + navigation.uncategorized.map(outline).join('')
   return { xml: `<?xml version="1.0" encoding="UTF-8"?>\n<opml version="2.0" xmlns:paper="${PAPER}"><head><title>Paper subscriptions</title></head><body>${body}</body></opml>\n`, omitted }

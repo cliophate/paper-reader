@@ -1,8 +1,10 @@
+import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
+import { privateFeedRef, migrateFeedMaintenance } from './feed-maintenance.js'
 import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
 import { migrateGreader } from './greader-schema.js'
-import { DATABASE_VERSION, migrateAuth } from './auth-schema.js'
+import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION, migrateAuth } from './auth-schema.js'
 import { AuthStore } from './auth-store.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import crypto from 'node:crypto'
@@ -231,6 +233,10 @@ export class PaperDatabase {
         if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 20) {
           if (version > 0) this.backupBeforeMigration(20, 'briefing-delivery')
           migrateBriefingDelivery(this.db)
+        }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < FEED_MAINTENANCE_VERSION) {
+          if (version > 0) this.backupBeforeMigration(FEED_MAINTENANCE_VERSION, 'feed-maintenance')
+          migrateFeedMaintenance(this.db)
         }
       }
       this.retention = new RetentionStore(this.db, ids => { this.commitLocalEntryState(this.activeBackendId, ids, 'read', { origin: 'retention' }) })
@@ -818,7 +824,11 @@ export class PaperDatabase {
   }
 
   numberNavigation(navigation: NavigationPayload): NavigationPayload {
-    const feed = (item: Feed): Feed => ({ ...item, linkNumber: this.linkNumber('feed', item.id) })
+    const feed = (item: Feed): Feed => {
+      const url = displayFeedUrl(item.url)
+      return { ...item, url, title: displayFeedTitle(item.title), siteUrl: displayFeedUrl(item.siteUrl),
+        ...(item.url !== url && { urlRef: privateFeedRef(item.id, item.url) }), linkNumber: this.linkNumber('feed', item.id) }
+    }
     return { ...navigation, uncategorized: navigation.uncategorized.map(feed),
       folders: navigation.folders.map(folder => ({ ...folder, linkNumber: this.linkNumber('folder', folder.id), feeds: folder.feeds.map(feed) })) }
   }
@@ -852,8 +862,8 @@ export class PaperDatabase {
       const upsertFeed = this.db.prepare(`
         INSERT INTO feeds (
           id, title, url, site_url, icon_url, last_published_at, last_checked_at,
-          last_error_at, broken, active, synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+          last_error_at, broken, parsing_error_count, parsing_error_message, active, synced_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
         ON CONFLICT(id) DO UPDATE SET
           title = excluded.title,
           url = excluded.url,
@@ -863,6 +873,8 @@ export class PaperDatabase {
           last_checked_at = excluded.last_checked_at,
           last_error_at = excluded.last_error_at,
           broken = excluded.broken,
+          parsing_error_count = excluded.parsing_error_count,
+          parsing_error_message = excluded.parsing_error_message,
           active = 1,
           synced_at = excluded.synced_at
       `)
@@ -870,7 +882,7 @@ export class PaperDatabase {
         if (this.activeBackendId) this.identities.subscription(this.activeBackendId, feed.id, feed.id)
         upsertFeed.run(
           feed.id, feed.title, feed.url, feed.siteUrl, feed.iconUrl, feed.lastPublishedAt,
-          feed.lastCheckedAt, feed.lastErrorAt, feed.broken ? 1 : 0, now,
+          feed.lastCheckedAt, feed.lastErrorAt, feed.broken ? 1 : 0, feed.parsingErrorCount ?? null, feed.parsingErrorMessage || '', now,
         )
       }
 
@@ -1727,6 +1739,11 @@ export class PaperDatabase {
     }
   }
 
+  feedArticleCounts(): Record<string, number> {
+    const rows = this.db.prepare('SELECT feed_id, COUNT(*) AS total FROM entries GROUP BY feed_id').all()
+    return Object.fromEntries(rows.map(row => [String(row.feed_id), Number(row.total)]))
+  }
+
   entryCount(): number {
     const row = this.db.prepare('SELECT COUNT(*) AS count FROM entries').get() as { count: number }
     return Number(row.count || 0)
@@ -1798,15 +1815,18 @@ export class PaperDatabase {
   activity(limit = 100): ActivityRecord[] {
     const rows = this.db.prepare('SELECT * FROM activity_events ORDER BY occurred_at DESC, id DESC LIMIT ?')
       .all(Math.min(Math.max(limit, 1), 500)) as Array<Record<string, string | number>>
-    return rows.map(row => ({
-      id: Number(row.id),
-      occurredAt: String(row.occurred_at),
-      kind: String(row.kind) as ActivityKind,
-      origin: String(row.origin),
-      summary: String(row.summary),
-      count: Number(row.event_count),
-      details: parseObject(String(row.details_json)),
-    }))
+    return rows.map(row => {
+      const details = parseObject(String(row.details_json))
+      let summary = String(row.summary)
+      if (row.kind === 'feed' && typeof details.url === 'string') {
+        const url = displayFeedUrl(details.url)
+        if (typeof details.title === 'string') details.title = displayFeedTitle(details.title)
+        details.url = url
+        if (summary.startsWith('Added ')) summary = `Added ${details.title || url}`
+      }
+      return { id: Number(row.id), occurredAt: String(row.occurred_at), kind: String(row.kind) as ActivityKind,
+        origin: String(row.origin), summary, count: Number(row.event_count), details }
+    })
   }
 
   async createMuteFilter(phrase: string, scope: MuteFilterScope, feedId = ''): Promise<MuteFilterRecord> {
@@ -1897,6 +1917,7 @@ export class PaperDatabase {
       const entry = snapshot.entry && typeof snapshot.entry === 'object' && !Array.isArray(snapshot.entry)
         ? snapshot.entry as Record<string, unknown>
         : {}
+      if (typeof entry.feedUrl === 'string') entry.feedUrl = displayFeedUrl(entry.feedUrl)
       return {
         id: String(row.id),
         entryId: String(row.entry_id),
@@ -2238,12 +2259,14 @@ function feedFromRow(row: Record<string, string | number | null>, categories: st
     lastCheckedAt: row.last_checked_at ? String(row.last_checked_at) : null,
     lastErrorAt: row.last_error_at ? String(row.last_error_at) : null,
     broken: Boolean(row.broken),
+    ...(row.parsing_error_count != null ? { parsingErrorCount: Number(row.parsing_error_count) } : {}),
+    ...(row.parsing_error_message ? { parsingErrorMessage: String(row.parsing_error_message) } : {}),
   }
 }
 
 function entryFromRow(row: Record<string, string | number>): Entry {
   const url = String(row.url)
-  const feedTitle = decodeHtmlText(String(row.feed_title))
+  const feedTitle = displayFeedTitle(decodeHtmlText(String(row.feed_title)))
   const storedContentHtml = String(row.content_html)
   const contentHtml = normalizeFeedContent({ contentHtml: storedContentHtml, feedTitle, url, title: decodeHtmlText(String(row.title)) })
   const contentChanged = contentHtml !== storedContentHtml.trim()
@@ -2251,7 +2274,7 @@ function entryFromRow(row: Record<string, string | number>): Entry {
     id: String(row.id),
     feedId: String(row.feed_id),
     feedTitle,
-    feedUrl: String(row.feed_url),
+    feedUrl: displayFeedUrl(String(row.feed_url)),
     title: normalizeFeedTitle({ title: decodeHtmlText(String(row.title)), contentHtml, url, feedTitle }),
     author: decodeHtmlText(String(row.author)),
     url,

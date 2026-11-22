@@ -9,6 +9,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 800 
         const pathname = new URL(route.request().url()).pathname
         if (pathname === '/api/auth/status') return route.fulfill({ json: { enabled: true, authenticated, passwordEnabled: true, passkeys: true } })
         if (pathname === '/api/private') return route.fulfill({ status: 401, json: { code: 'login-required', error: 'Sign in to Paper.' } })
+        if (pathname === '/api/feed-checks/maintenance') return route.fulfill({ json: { staleDays: [90, 182, 365], articleCounts: {} } })
         if (pathname === '/api/feed-checks') return route.fulfill({ json: { backend: 'standalone', enabled: true, revision: 0, intervalMinutes: 15, feeds: [], folders: [] } })
         if (pathname === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': fixture\n\n' })
         const json = pathname === '/api/status' ? { backend: 'standalone', sync: {} }
@@ -46,6 +47,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 800 
         const pathname = new URL(route.request().url()).pathname
         if (pathname === '/api/auth/status') return route.fulfill({ json: { enabled, authenticated: enabled, passwordEnabled: enabled, passkeys: enabled, reader: { enabled: false, username: 'owner', activeApps: 1, addresses: { netNewsWire: 'https://paper.example.test/api/greader.php', readYou: 'https://paper.example.test/api/greader.php', capyReader: 'https://paper.example.test' } } } })
         if (pathname === '/api/auth/access') return route.fulfill({ json: { username: 'owner', passwordEnabled: true, passkeys: [{ id: 'key', name: 'Phone', created: Date.now(), used: null }], sessions: [{ id: 'session', created: Date.now(), seen: Date.now(), agent: 'Synthetic browser', current: true }], apps: [{ id: 'app', name: 'Reader', scope: 'reader-sync', created: Date.now(), used: null }] } })
+        if (pathname === '/api/feed-checks/maintenance') return route.fulfill({ json: { staleDays: [90, 182, 365], articleCounts: {} } })
         if (pathname === '/api/feed-checks') return route.fulfill({ json: { backend: 'standalone', enabled: true, revision: 0, intervalMinutes: 15, feeds: [], folders: [] } })
         if (pathname === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': fixture\n\n' })
         const json = pathname === '/api/status' ? { backend: 'standalone', sync: {} }

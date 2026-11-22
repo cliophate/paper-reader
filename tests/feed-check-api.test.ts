@@ -5,6 +5,7 @@ import { PaperDatabase } from '../src/server/db'
 import { StandaloneBackend } from '../src/server/standalone-backend'
 import { StandaloneRuntime } from '../src/server/standalone-runtime'
 import { StandaloneFeedScheduler } from '../src/server/feed-scheduler'
+import { feedMove, resolveFeedRepair } from '../src/server/feed-maintenance'
 import { feedCheckRouter } from '../src/server/feed-check-routes'
 import { requireSameOrigin } from '../src/server/request-origin'
 import type { FeedChecksView } from '../src/shared/feed-checks'
@@ -60,6 +61,48 @@ it('validates interval bounds, optional overrides, and active subscriptions', as
   expect((await post('interval', { ...revision(await snapshot()), feedId, intervalMinutes: 15 })).status).toBe(400)
 })
 
+it('hides signed destinations and rejects a repair reference after the publisher rotates its signature', async () => {
+  await mount()
+  const rawRedirect = 'https://publisher.test/rss?token=redirect-secret'
+  const declared = 'https://publisher.test/new?sig=declared-secret'
+  const save = (address: string) => db.greaderDatabase.prepare(`UPDATE feed_fetch_state
+    SET redirects_json = ?, validator_url = ?, declared_url = ?, publisher_site_url = ?, last_success_at = 1
+    WHERE subscription_id = ?`).run(JSON.stringify([{ status: 301, url: rawRedirect }]), rawRedirect,
+      address, 'https://publisher.test/?sig=site-secret', feedId)
+  save(declared)
+  const view = await snapshot()
+  const move = view.feeds[0].move!
+  expect(move).toMatchObject({ redirects: [{ status: 301, url: 'https://publisher.test/rss' }],
+    declaredUrl: 'https://publisher.test/new', suggestedUrl: 'https://publisher.test/new', repairRef: expect.any(String) })
+  expect(JSON.stringify(view)).not.toMatch(/redirect-secret|declared-secret|site-secret/)
+  const state = () => db.feedFetch.get(backend.identity.id, feedId)!
+  expect(resolveFeedRepair(state(), move.repairRef)).toBe(declared)
+  save(declared + '-rotated')
+  expect(() => resolveFeedRepair(state(), move.repairRef)).toThrow(/changed/)
+  expect(resolveFeedRepair(state(), (await snapshot()).feeds[0].move!.repairRef)).toBe(declared + '-rotated')
+  save('')
+  const permanent = (await snapshot()).feeds[0].move!
+  expect(permanent.suggestedUrl).toBe('https://publisher.test/rss')
+  expect(resolveFeedRepair(state(), permanent.repairRef)).toBe(rawRedirect)
+})
+
+it('expires a signed repair reference even when the same address is suggested again', () => {
+  const state = db.feedFetch.get(backend.identity.id, feedId)!
+  state.declaredUrl = 'https://publisher.test/new?hash=fixture'
+  const start = Date.now()
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(start)
+  const ref = feedMove(state)!.repairRef!
+  clock.mockReturnValue(start + 60 * 60_000 - 1)
+  expect(resolveFeedRepair(state, ref)).toBe(state.declaredUrl)
+  const renewed = feedMove(state)!.repairRef!
+  expect(() => resolveFeedRepair(state, renewed.split('.')[0] + '.' + ref.split('.')[1])).toThrow(/refresh/i)
+  clock.mockReturnValue(start + 60 * 60_000)
+  expect(() => resolveFeedRepair(state, ref)).toThrow(/expired.*refresh/i)
+  expect(resolveFeedRepair(state, renewed)).toBe(state.declaredUrl)
+  state.lastAttemptAt++
+  expect(() => resolveFeedRepair(state, renewed)).toThrow(/changed.*refresh/i)
+})
+
 it('checks the chosen folder once per feed and returns safe schedule fields', async () => {
   await mount()
   await backend.addFeed('https://example.test/second', 'Second', 'Folder')
@@ -92,4 +135,19 @@ it('rejects checks when collection is disabled', async () => {
   const view = await snapshot()
   expect(view.enabled).toBe(false)
   expect((await post('now', { ...revision(view), feedId })).body.error).toMatch(/disabled/)
+})
+
+it.each([false, 'freshrss', 'miniflux'] as const)('stores ordered last-post bands for backend %s', async remote => {
+  await mount(remote)
+  const url = base + '/maintenance'
+  const get = async () => (await fetch(url)).json()
+  const save = (staleDays: unknown) => fetch(url, { method: 'PATCH', headers: {
+    'Content-Type': 'application/json', Origin: 'https://paper.example.test',
+  }, body: JSON.stringify({ staleDays }) })
+  expect(await get()).toEqual({ staleDays: [90, 182, 365], articleCounts: {} })
+  expect((await save([7, 30, 60])).status).toBe(200)
+  for (const invalid of [null, [0, 1, 2], [1, 1, 2], [3, 2, 1], [1, 2], [1, '2', 3], [1, 2, 3.5]]) {
+    expect((await save(invalid)).status).toBe(400)
+  }
+  expect((await get()).staleDays).toEqual([7, 30, 60])
 })
