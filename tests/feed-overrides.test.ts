@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { DATABASE_VERSION, FEED_OVERRIDE_VERSION } from '../src/server/auth-schema'
+import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION, FEED_OVERRIDE_VERSION } from '../src/server/auth-schema'
 import { PaperDatabase } from '../src/server/db'
 import { ingestFeed } from '../src/server/feed-ingestion'
 import { boundedFetch } from '../src/server/feed-http'
@@ -29,7 +29,7 @@ beforeEach(() => {
   ingestFeed(db, { backendId: backend.id, subscriptionId: feedId, endpointGeneration: 'fixture', requestUrl: url, responseUrl: url,
     fetchedAt: new Date().toISOString(), xml: `<rss version="2.0"><channel><title>Fixture feed</title><item><guid>one</guid><title>Fixture</title><link>${story}</link></item></channel></rss>` })
   entryId = db.recentEntryIds(1)[0]
-  vi.mocked(boundedFetch).mockResolvedValue({ status: 200, url: story, text: html, contentType: 'text/html', conditional: false })
+  vi.mocked(boundedFetch).mockResolvedValue({ status: 200, redirects: [], url: story, text: html, contentType: 'text/html', conditional: false })
 })
 afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }); vi.resetAllMocks(); vi.unstubAllGlobals() })
 
@@ -96,25 +96,25 @@ it('sends a replacement cookie to an additional article origin only after the ow
 
 it('previews the configured reader fallback only when the draft restores defaults', async () => {
   const reader = new ReaderService(db, true)
-  vi.mocked(boundedFetch).mockResolvedValue({ status: 403, url: story, text: '', contentType: 'text/html', conditional: false })
+  vi.mocked(boundedFetch).mockResolvedValue({ status: 403, redirects: [], url: story, text: '', contentType: 'text/html', conditional: false })
 
   await expect(reader.fetch(story, 0, undefined, entryId, { feedId, overrides: { ...defaults, userAgent: 'Fixture' } })).rejects.toThrow('403')
   expect(boundedFetch).toHaveBeenCalledTimes(1)
-  vi.mocked(boundedFetch).mockResolvedValueOnce({ status: 403, url: story, text: '', contentType: '', conditional: false })
-    .mockResolvedValueOnce({ status: 200, url: story, text: JSON.stringify({ data: { html } }), contentType: 'application/json', conditional: false })
+  vi.mocked(boundedFetch).mockResolvedValueOnce({ status: 403, redirects: [], url: story, text: '', contentType: '', conditional: false })
+    .mockResolvedValueOnce({ status: 200, redirects: [], url: story, text: JSON.stringify({ data: { html } }), contentType: 'application/json', conditional: false })
   await expect(reader.fetch(story, 0, undefined, entryId, { feedId, overrides: defaults })).resolves.toMatchObject({ cached: false })
   expect(boundedFetch).toHaveBeenLastCalledWith('https://r.jina.ai/' + story, expect.objectContaining({ maxRedirects: 0 }))
   expect(db.getArticleForEntry(entryId)).toBeNull()
 })
 
 it('backs up the previous schema before adding feed overrides', () => {
-  db.greaderDatabase.exec(`DROP TABLE feed_overrides; PRAGMA user_version = ${FEED_OVERRIDE_VERSION - 1}`)
+  db.greaderDatabase.exec(`DROP TABLE feed_overrides; PRAGMA user_version = ${FEED_MAINTENANCE_VERSION}`)
   db.close(); db = new PaperDatabase(filename)
   expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
   expect(db.feedOverrides.view(feedId)).toMatchObject({ ...defaults, cookieSet: false, articles: [{ id: entryId }] })
   const backup = new DatabaseSync(filename + `.before-feed-overrides-v${FEED_OVERRIDE_VERSION}`, { readOnly: true })
   try {
-    expect(backup.prepare('PRAGMA user_version').get()?.user_version).toBe(FEED_OVERRIDE_VERSION - 1)
+    expect(backup.prepare('PRAGMA user_version').get()?.user_version).toBe(FEED_MAINTENANCE_VERSION)
     expect(backup.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'feed_overrides'").get()).toBeUndefined()
   } finally { backup.close() }
 })
@@ -132,7 +132,7 @@ it('terminates the worker at its deadline and retries default article extraction
 it('returns default content and a preview warning for pages over the selector node limit', async () => {
   const nav = '<nav>' + ('<div>' + '<!--node-->'.repeat(100) + '</div>').repeat(100) + '</nav>'
   const text = nav + defaultPage
-  vi.mocked(boundedFetch).mockResolvedValue({ status: 200, url: story, text, contentType: 'text/html', conditional: false })
+  vi.mocked(boundedFetch).mockResolvedValue({ status: 200, redirects: [], url: story, text, contentType: 'text/html', conditional: false })
   const overrides = { ...defaults, contentSelector: '.absent' }
   const result = await new ReaderService(db).fetch(story, 0, undefined, entryId, { feedId, overrides })
   expect(result.overrideWarning).toContain('10,000-node')
@@ -143,7 +143,7 @@ it('returns default content and a preview warning for pages over the selector no
 it('preserves whole signed queries and excluded hosts when stripping tracking', async () => {
   const names = ['sig', 'SIGNATURE', 'hash', 'token', 'expires', 'X-Amz-Date', 'X-Goog-Signature', 'Key-Pair-Id']
   const links = [...names.map(name => '/a?' + name + '=x%2fy&utm_source=v'), 'https://cdn.test/a?utm_source=v', 'https://xn--bcher-kva.test/a?utm_source=v', '/a?b=2&utm_source=v']
-  vi.mocked(boundedFetch).mockResolvedValue({ status: 200, url: story, contentType: 'text/html', conditional: false,
+  vi.mocked(boundedFetch).mockResolvedValue({ status: 200, redirects: [], url: story, contentType: 'text/html', conditional: false,
     text: '<main>' + links.map(link => '<a href="' + link.replaceAll('&', '&amp;') + '">link</a>').join(' ') + '</main>' })
   const overrides = { ...defaults, stripTracking: true, contentSelector: 'main', trackingExcludedHosts: ['CDN.test', 'bücher.test'] }
   db.feedOverrides.save(feedId, overrides)
@@ -162,4 +162,27 @@ it('removes cached cookie-backed full text from search on reset', async () => {
   db.feedOverrides.save(feedId, { ...defaults, cookie: null })
   expect(search()).toEqual([])
   expect(db.getArticleForEntry(entryId)).toBeNull()
+})
+
+it('redacts entity-encoded cookies from preview, cached markup and indexed full text', async () => {
+  const overrides = { ...defaults, cookie: 'sid=privateAlpha&privateBeta', expectedCookieOrigin: 'https://example.test',
+    contentSelector: 'article' }
+  db.feedOverrides.save(feedId, overrides)
+  const reflection = '&#x70;rivateAlpha&amp;privateBeta'
+  const reflectedPage = `<title>${reflection}</title><article><p>Reporting on ${reflection}</p>
+    <a href="/?value=${reflection}">Source</a> &lt;script&gt;literal&lt;/script&gt;</article>`
+  vi.mocked(boundedFetch).mockResolvedValue({ status: 200, redirects: [], url: story, text: reflectedPage, contentType: 'text/html', conditional: false })
+  const reader = new ReaderService(db)
+  const preview = await reader.fetch(story, 0, undefined, entryId, { feedId, overrides })
+  expect(db.getArticleForEntry(entryId)).toBeNull()
+  await reader.fetch(story, 0, undefined, entryId)
+  for (const article of [preview, db.getArticleForEntry(entryId)!]) {
+    expect(article.title).toBe('[*****]')
+    expect(article.contentHtml).toContain('Reporting on [*****]')
+    expect(article.contentHtml).not.toContain('<script>')
+    expect(JSON.stringify(article)).not.toMatch(/privateAlpha|privateBeta/)
+  }
+  const matches = (word: string) => db.greaderDatabase.prepare('SELECT entry_id FROM entries_fts WHERE entries_fts MATCH ?').all(word)
+  expect(matches('Reporting')).toEqual([{ entry_id: entryId }])
+  expect(matches('privateBeta')).toEqual([])
 })

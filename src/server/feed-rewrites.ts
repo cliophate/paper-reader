@@ -1,7 +1,14 @@
 import { ExtractionLimit } from './feed-extraction.js'
 import { signedQueryName } from './url-parameters.js'
-import { JSDOM } from 'jsdom'
+import { createRequire } from 'node:module'
 import type { ExtractionRules } from '../shared/feed-overrides.js'
+
+// Feed URL parsing is also used in short-lived Reader API query processes.
+const require = createRequire(import.meta.url)
+export function feedFragment(html: string) {
+  const { JSDOM } = require('jsdom') as typeof import('jsdom')
+  return JSDOM.fragment(html)
+}
 
 function absoluteImageSet(value: string, base: string) {
   const candidates: string[] = []
@@ -87,7 +94,7 @@ function stripTrackingParameters(url: URL) {
 
 export function rewriteFeedHtml(html: string, base: string, rules?: ExtractionRules): string {
   if (!rules || !rules.removeSelectors.length && !rules.lazyImages && !rules.stripTracking) return html
-  const fragment = JSDOM.fragment(html)
+  const fragment = feedFragment(html)
   applyFeedRewrites(fragment, base, rules)
   const container = fragment.ownerDocument.createElement('div')
   container.append(fragment)

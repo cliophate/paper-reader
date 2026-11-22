@@ -71,7 +71,8 @@ export function FeedOverrides({ feed, backend }: { feed: Feed; backend: 'standal
       <label>Selectors to remove, one per line<textarea rows={3} value={draft.removeSelectors.join('\n')}
         onChange={event => edit({ removeSelectors: event.target.value.split('\n') })} /></label>
       <label><input type="checkbox" checked={draft.lazyImages} onChange={event => edit({ lazyImages: event.target.checked })} /> Prefer lazy-loaded images</label>
-      <label><input type="checkbox" checked={draft.stripTracking} onChange={event => edit({ stripTracking: event.target.checked })} /> Strip tracking parameters from links</label>
+      <label><input type="checkbox" aria-describedby="tracking-help" checked={draft.stripTracking} onChange={event => edit({ stripTracking: event.target.checked })} /> Strip tracking parameters from links</label>
+      <p id="tracking-help">Cleanup can break links that use a custom signature parameter. Add the site's host to this feed's exclusion list to keep those links intact.</p>
       {draft.stripTracking && <label>Keep tracking parameters on these hosts, one per line
         <textarea rows={2} value={(draft.trackingExcludedHosts || []).join('\n')}
           onChange={event => edit({ trackingExcludedHosts: event.target.value.split('\n') })} />

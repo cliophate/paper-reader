@@ -1,6 +1,7 @@
+import { cookieSafeValidator, cookieValues, extractedCookieRedactor } from './feed-cookie.js'
 import { displayFeedUrl } from './feed-url-display.js'
 import { parseFeed } from './feed-parser.js'
-import { extractionRules, extractWithOverrides } from './feed-extraction.js'
+import { EXTRACTION_TIMEOUT_MS, extractionRules, extractWithOverrides } from './feed-extraction.js'
 import type { FeedCheckResult } from '../shared/feed-checks.js'
 import { MANUAL_CHECK_COOLDOWN_MS } from './feed-check-settings.js'
 import { setImmediate, setTimeout as delay } from 'node:timers/promises'
@@ -9,6 +10,8 @@ import { boundedFetch, FeedHttpError, FEED_HTTP_DEFAULTS, validLastModified, typ
 import type { FeedLease, FetchCompletion } from './feed-fetch-state.js'
 import { subscriptionUrl } from './opml.js'
 import { ingestFeed } from './feed-ingestion.js'
+
+const LEASE_MARGIN_MS = 5000
 
 export interface FeedSchedulerOptions {
   trustedOrigins?: readonly string[]
@@ -57,7 +60,7 @@ export class StandaloneFeedScheduler {
     this.retryBase = positive(options.retryBaseMs ?? 60_000, 'retry base')
     this.retryMax = positive(options.retryMaxMs ?? 6 * 60 * 60_000, 'retry maximum')
     this.timeout = positive(options.http?.timeoutMs ?? FEED_HTTP_DEFAULTS.timeoutMs, 'HTTP deadline', 10 * 60_000)
-    this.leaseMs = this.timeout + 5000
+    this.leaseMs = this.timeout + 2 * EXTRACTION_TIMEOUT_MS + LEASE_MARGIN_MS
     // Fail before requests or timers when called for FreshRSS or another backend.
     this.db.feedFetch.get(backendId, '')
   }
@@ -126,7 +129,7 @@ export class StandaloneFeedScheduler {
   private async acquire(url: URL, signal: AbortSignal): Promise<() => void> {
     while (true) {
       signal.throwIfAborted()
-      const token = this.db.feedFetch.reserveHttp(this.backendId, url.hostname.toLowerCase(), Date.now(), Date.now() + this.leaseMs, this.concurrency, this.perHost)
+      const token = this.db.feedFetch.reserveHttp(this.backendId, url.hostname.toLowerCase(), Date.now(), Date.now() + this.timeout + LEASE_MARGIN_MS, this.concurrency, this.perHost)
       if (token) return () => this.db.feedFetch.releaseHttp(token)
       await delay(25, undefined, { signal })
     }
@@ -139,6 +142,13 @@ export class StandaloneFeedScheduler {
     let discardValidators = false
     try {
       const rules = this.db.feedOverrides.get(lease.subscriptionId)
+      if (rules?.cookie) {
+        // Older checks may already have stored a reflected validator. A 304 or
+        // failed check retains the lease's validators at completion.
+        const secrets = cookieValues(rules.cookie)
+        lease.etag = cookieSafeValidator(lease.etag, secrets) ?? ''
+        lease.lastModified = cookieSafeValidator(lease.lastModified, secrets) ?? ''
+      }
       const response = await boundedFetch(lease.url, { ...this.options.http, timeoutMs: this.timeout,
         trustedOrigins: this.options.trustedOrigins, signal,
         ...(rules?.userAgent ? { userAgent: rules.userAgent } : {}),
@@ -161,6 +171,19 @@ export class StandaloneFeedScheduler {
           ? await extractWithOverrides({ kind: 'feed', body: response.text, url: response.url }, extraction,
             reason => this.db.feedOverrides.warn(rules.revision, reason), signal)
           : parseFeed(response.text, response.url)
+        const redact = rules?.cookie && extractedCookieRedactor(rules.cookie)
+        if (redact) {
+          parsed.title = redact.text(parsed.title)
+          parsed.siteUrl = redact.text(parsed.siteUrl)
+          if (parsed.declaredUrl) parsed.declaredUrl = redact.text(parsed.declaredUrl)
+          parsed.conflictingExternalIds = parsed.conflictingExternalIds.map(redact.text)
+          for (const entry of parsed.entries) {
+            for (const key of ['title', 'author', 'url', 'thumbnailUrl'] as const) entry[key] = redact.text(entry[key])
+            if (redact.text(entry.publishedAt) !== entry.publishedAt) entry.publishedAt = ''
+            if (entry.externalId) entry.externalId = redact.text(entry.externalId)
+            entry.contentHtml = redact.html(entry.contentHtml)
+          }
+        }
         // Service pending requests between parsing and the synchronous ingestion transaction.
         await setImmediate(undefined, { signal })
       }

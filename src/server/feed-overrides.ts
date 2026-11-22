@@ -1,8 +1,7 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { domainToASCII } from 'node:url'
 import type { DatabaseSync } from 'node:sqlite'
-import { supportedSelector } from './feed-rewrites.js'
-import { JSDOM } from 'jsdom'
+import { feedFragment, supportedSelector } from './feed-rewrites.js'
 import type { FeedOverrideOptions, FeedOverrideUpdate, FeedOverrideView } from '../shared/feed-overrides.js'
 import { BackendValidationError } from './backend.js'
 import { validateRequestHeader } from './feed-http.js'
@@ -45,7 +44,7 @@ export function validateOverrides(input: unknown): FeedOverrideUpdate {
     }
     articleCookieOrigin = origin.origin
   }
-  const fragment = JSDOM.fragment('<p></p>')
+  let fragment: DocumentFragment | undefined
   let count = 0
   for (const selector of [contentSelector, ...removeSelectors]) {
     if (typeof selector !== 'string' || selector.length > 256 || /[\x00-\x1f\x7f]/.test(selector)) throw new BackendValidationError('Use a single line of up to 256 characters per selector.')
@@ -53,6 +52,7 @@ export function validateOverrides(input: unknown): FeedOverrideUpdate {
     count += selector.split(',').length
     if (count > 12 + Number(Boolean(contentSelector.trim()))) throw new BackendValidationError('Use at most 12 removal selectors and one content selector.')
     if (!supportedSelector(selector)) throw new BackendValidationError('Use simple CSS selectors without escapes, comments or functional pseudo-classes such as :has().')
+    fragment ??= feedFragment('<p></p>')
     try { fragment.querySelector(selector) } catch { throw new BackendValidationError('Enter a valid CSS selector.') }
   }
   return { trackingExcludedHosts, userAgent: userAgent.trim(), articleCookieOrigin, expectedCookieOrigin, cookie: cookie?.trim() || (cookie === undefined ? undefined : null),

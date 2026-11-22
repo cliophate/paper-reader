@@ -17,7 +17,8 @@ export interface ExtractionTask<K extends keyof ExtractionResult = keyof Extract
 }
 
 export class ExtractionLimit extends Error {}
-const EXTRACTION_TIMEOUT_MS = 3000
+const MAX_DOM_WORKERS = 2
+export const EXTRACTION_TIMEOUT_MS = 3000
 
 // Only send rewrite settings to the worker. Saved overrides can also contain a cookie.
 export function extractionRules({ contentSelector, removeSelectors, lazyImages, stripTracking, trackingExcludedHosts }: ExtractionRules, kind: ExtractionTask['kind']) {
@@ -29,6 +30,30 @@ export function extractionRules({ contentSelector, removeSelectors, lazyImages, 
 // A feed preview often runs again after a small edit. Keep one idle DOM worker briefly.
 let idle: Worker | undefined
 let expiry: NodeJS.Timeout | undefined
+
+let workerCount = 0
+const waiting = new Set<() => void>()
+
+function wakeNext() { waiting.values().next().value?.() }
+
+function acquireWorker(signal: AbortSignal): Promise<Worker> {
+  signal.throwIfAborted()
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      waiting.delete(take)
+      signal.removeEventListener('abort', abort)
+    }
+    const abort = () => { cleanup(); reject(signal.reason) }
+    const take = () => {
+      if (!idle && workerCount >= MAX_DOM_WORKERS) return
+      cleanup()
+      try { resolve(takeWorker()) } catch (error) { reject(error); wakeNext() }
+    }
+    waiting.add(take)
+    signal.addEventListener('abort', abort, { once: true })
+    take()
+  })
+}
 
 function takeWorker() {
   if (idle) {
@@ -50,16 +75,27 @@ function takeWorker() {
       clearTimeout(expiry)
     }
   }
-  worker.on('error', discardIdle).once('exit', discardIdle)
+  workerCount++
+  worker.on('error', discardIdle).once('exit', () => {
+    discardIdle()
+    workerCount--
+    wakeNext()
+  })
   return worker
 }
 
 async function runWorker<K extends keyof ExtractionResult>(task: ExtractionTask<K>, rules: ExtractionRules | undefined,
   timeoutMs: number, signal?: AbortSignal): Promise<ExtractionResult[K]> {
   signal?.throwIfAborted()
-  const worker = takeWorker()
   const deadline = AbortSignal.timeout(timeoutMs)
   const stop = signal ? AbortSignal.any([signal, deadline]) : deadline
+  let worker: Worker
+  try { worker = await acquireWorker(stop) }
+  catch (error) {
+    signal?.throwIfAborted()
+    if (deadline.aborted) throw new ExtractionLimit('Extraction timed out.')
+    throw error
+  }
   let reusable = false
   let cleanup = () => {}
   try {
@@ -72,6 +108,7 @@ async function runWorker<K extends keyof ExtractionResult>(task: ExtractionTask<
         else if (message.error) reject(new BackendValidationError(message.error))
         else resolve(message.value)
       }
+      if (stop.aborted) return abort()
       stop.addEventListener('abort', abort, { once: true })
       worker.once('message', receive).once('error', failed).once('exit', failed)
       cleanup = () => {
@@ -89,6 +126,7 @@ async function runWorker<K extends keyof ExtractionResult>(task: ExtractionTask<
         idle = undefined
         void worker.terminate()
       }, 5000).unref()
+      wakeNext()
     } else await worker.terminate()
   }
 }

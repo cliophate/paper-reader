@@ -1,3 +1,4 @@
+import { cookiePattern, cookieSafeValidator, cookieValues, MIN_REDACTED_COOKIE_LENGTH, reflectsCookie } from './feed-cookie.js'
 import { BackendValidationError } from './backend.js'
 import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { request as httpsRequest } from 'node:https'
@@ -125,23 +126,6 @@ export function boundedApiRequest(url: URL, trustedOrigins: readonly string[], r
     maxResponseBytes: MiB, maxDecompressedBytes: MiB, maxDecodedBytes: MiB }, request) as Promise<BoundedFetchResult>
 }
 
-function cookieValues(cookie: string): string[] {
-  const values = cookie.split(';').flatMap(pair => {
-    const equals = pair.indexOf('=')
-    if (equals < 0) return []
-    const value = pair.slice(equals + 1).trim().replace(/^"(.*)"$/, '$1')
-    return value.length >= 8 ? [value] : []
-  })
-  return [...new Set(values)].sort((a, b) => b.length - a.length)
-}
-
-function reflectsCookie(location: string, values: string[]): boolean {
-  // Cookie headers are ASCII. Decode each percent-encoded byte independently so a
-  // malformed escape elsewhere in the Location cannot hide an encoded value.
-  const decoded = location.replace(/%([a-f\d]{2})/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
-  return values.some(value => location.includes(value) || decoded.includes(value))
-}
-
 async function fetchBounded(input: string, options: TextFetchOptions | BytesFetchOptions, api?: ApiRequest): Promise<BoundedFetchResult | BoundedBytesResult> {
   // A text prefix closes the response at maxDecompressedBytes.
   const textPrefix = options.responseBody === 'text-prefix'
@@ -159,9 +143,9 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
     const redirects: BoundedFetchResult['redirects'] = []
     let cookie = options.cookie?.origin === url.origin ? options.cookie : undefined
     const secrets = cookieValues(options.cookie?.value || '')
-    const reflectedValues = secrets.length
-      ? new RegExp(secrets.map(value => value.replace(/[.*+?^$(){}|[\]\\]/g, '\\$&')).join('|'), 'g')
-      : undefined
+    const protectedValues = secrets.filter(value => value.length >= MIN_REDACTED_COOKIE_LENGTH)
+    const reflectedValues = cookiePattern(protectedValues)
+    const safeValidator = (value: string | undefined) => cookieSafeValidator(value, secrets)
     for (let hop = 0; ; hop++) {
       signal.throwIfAborted()
       url.hash = ''
@@ -176,8 +160,8 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
       try {
         signal.throwIfAborted()
         const validators = options.validators?.url === url.href ? options.validators : undefined
-        const etag = validEtag(validators?.etag)
-        const lastModified = validLastModified(validators?.lastModified)
+        const etag = safeValidator(validEtag(validators?.etag))
+        const lastModified = safeValidator(validLastModified(validators?.lastModified))
         const response = await new Promise<IncomingMessage>((resolve, reject) => {
           const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
             method: api?.method ?? (api?.body === undefined ? 'GET' : 'POST'), agent: false, signal, maxHeaderSize: 16 * 1024,
@@ -201,7 +185,7 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
           response.destroy()
           if (!location || hop >= limits.maxRedirects) throw new FeedHttpError('redirect', 'The response has an invalid or excessive redirect.')
           try { url = new URL(location, url) } catch { throw new FeedHttpError('redirect', 'The response has an invalid redirect URL.') }
-          if (secrets.length && (reflectsCookie(location, secrets) || reflectsCookie(url.href, secrets))) {
+          if (protectedValues.length && (reflectsCookie(location, protectedValues) || reflectsCookie(url.href, protectedValues))) {
             throw new FeedHttpError('redirect', 'The redirect contains a feed cookie value.')
           }
           redirects.push({ status, url: url.href })
@@ -209,7 +193,7 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
           continue
         }
         const result = { status, redirects, url: url.href, contentType: header(response, 'content-type'),
-          etag: validEtag(header(response, 'etag')), lastModified: validLastModified(header(response, 'last-modified')),
+          etag: safeValidator(validEtag(header(response, 'etag'))), lastModified: safeValidator(validLastModified(header(response, 'last-modified'))),
           retryAfter: header(response, 'retry-after').slice(0, 128) || undefined, conditional: Boolean(etag || lastModified) }
         if (status === 304 || status === 204 || options.skipBodyStatuses?.includes(status)) {
           response.destroy()

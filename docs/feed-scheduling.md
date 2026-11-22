@@ -43,8 +43,9 @@ An unsolicited 304 fails and clears validators so the retry requests content.
 
 The collector queries an indexed due queue one row at a time. It holds only its
 configured number of active jobs, not the full subscription list. Each claim
-gets a random persisted lease token and expiry five seconds beyond the complete
-HTTP deadline. Claimed rows become eligible again when that lease expires.
+gets a random persisted lease token. The lease covers the HTTP deadline, two
+three-second extraction attempts and a five-second margin. Claimed rows become
+eligible again when that lease expires.
 Restart preserves due times, retries and unexpired leases. It does not reset
 all schedules or import only articles newer than a previous fetch.
 

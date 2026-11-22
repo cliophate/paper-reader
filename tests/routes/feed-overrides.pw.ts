@@ -1,5 +1,8 @@
 import { expect, test } from '@playwright/test'
 
+// Both fixtures intercept API requests, including the full article preview.
+test.use({ serviceWorkers: 'block' })
+
 test('Manage feeds saves, redacts and resets full article overrides', async ({ page, request }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
@@ -8,6 +11,10 @@ test('Manage feeds saves, redacts and resets full article overrides', async ({ p
   const panel = page.locator('details.feed-overrides')
   await panel.locator('summary').click()
   await expect(panel.getByText(/Keep full backups private/)).toBeVisible()
+  const cleanup = panel.getByRole('checkbox', { name: 'Strip tracking parameters from links' })
+  await expect(cleanup).toHaveAccessibleDescription(/custom signature parameter.*host.*exclusion list/)
+  await cleanup.check()
+  await expect(panel.getByLabel('Keep tracking parameters on these hosts, one per line')).toBeVisible()
   const agent = panel.getByLabel('User agent')
   const cookie = 'fixture=synthetic-only'
   await agent.fill('Synthetic reader')

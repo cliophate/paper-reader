@@ -1,3 +1,4 @@
+import { EXTRACTION_TIMEOUT_MS } from '../src/server/feed-extraction.js'
 import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -579,13 +580,50 @@ it('falls back before the ingestion transaction and reports the selector limit o
     '<description><![CDATA[<p>Default feed text</p>' + '<!--node-->'.repeat(10_000) + ']]></description></item>')))
   const id = save(origin)
   db.feedOverrides.save(id, { userAgent: '', contentSelector: '', removeSelectors: ['p'], lazyImages: false, stripTracking: false })
+  const httpDeadline = 2000
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now())
   const originalWarn = db.feedOverrides.warn.bind(db.feedOverrides)
   const check = vi.spyOn(db.feedOverrides, 'warn').mockImplementation((revision, message) => {
     expect(db.greaderDatabase.isTransaction).toBe(false)
     originalWarn(revision, message)
+    clock.mockReturnValue(state(id).lastAttemptAt + httpDeadline + 2 * EXTRACTION_TIMEOUT_MS)
   })
-  expect(await scheduler(origin).runDue()).toMatchObject({ fetched: 1 })
+  try {
+    const collector = new StandaloneFeedScheduler(db, backend.id, { trustedOrigins: [origin], http: { timeoutMs: httpDeadline } })
+    expect(await collector.runDue()).toMatchObject({ fetched: 1, stale: 0 })
+  } finally { clock.mockRestore() }
   expect(check).toHaveBeenCalledOnce()
   expect(db.feedOverrides.view(id).overrideWarning).toContain('10,000-node')
   expect(db.localEntry(db.recentEntryIds(1)[0])!.contentHtml).toContain('Default feed text')
+})
+
+it('drops reflected validators and redacts decoded feed content before indexing', async () => {
+  const conditions: Array<[string | undefined, string | undefined]> = []
+  const origin = await server((req, res) => {
+    conditions.push([req.headers['if-none-match'], req.headers['if-modified-since']])
+    if (conditions.length === 3) { res.writeHead(304).end(); return }
+    res.writeHead(200, { ETag: '"echo-privateAlpha&privateBeta"', 'Last-Modified': 'Wed, 21 Oct 2015 07:28:00 GMT' })
+    res.end(rss('one', '&#x70;rivateAlpha&amp;privateBeta').replace('</item>',
+      '<description><![CDATA[<p>Story &#x70;rivateAlpha&amp;privateBeta</p>]]></description></item>'))
+  })
+  const id = save(origin)
+  db.feedOverrides.save(id, { userAgent: '', cookie: 'sid=privateAlpha&privateBeta; date=07:28', expectedCookieOrigin: origin,
+    contentSelector: '', removeSelectors: [], lazyImages: false, stripTracking: false })
+  expect(await scheduler(origin).runDue()).toMatchObject({ fetched: 1 })
+  reopen()
+  expect(state(id)).toMatchObject({ etag: '', lastModified: '' })
+  const entry = db.localEntry(db.recentEntryIds(1)[0])!
+  expect(entry.title).toBe('[*****]')
+  expect(entry.contentHtml).toContain('Story [*****]')
+  expect(db.greaderDatabase.prepare("SELECT entry_id FROM entries_fts WHERE entries_fts MATCH 'privateBeta'").all()).toEqual([])
+  due(id)
+  expect(await scheduler(origin).runDue()).toMatchObject({ fetched: 1 })
+  // An older build could have saved a reflected validator next to a safe one.
+  const safeDate = 'Wed, 21 Oct 2015 10:00:00 GMT'
+  sql(c => c.prepare('UPDATE feed_fetch_state SET etag = ?, last_modified = ? WHERE subscription_id = ?')
+    .run('"privateAlpha&privateBeta"', safeDate, id))
+  due(id)
+  expect(await scheduler(origin).runDue()).toMatchObject({ notModified: 1 })
+  expect(state(id)).toMatchObject({ etag: '', lastModified: safeDate })
+  expect(conditions).toEqual([[undefined, undefined], [undefined, undefined], [undefined, safeDate]])
 })

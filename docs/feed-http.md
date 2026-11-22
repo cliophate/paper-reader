@@ -37,7 +37,8 @@ to the saved feed origin or an explicit article origin. Adding a different
 article origin requires entering the cookie again. A cross-origin redirect drops it for
 the rest of the request. Address checks and size limits apply on every hop.
 Paper rejects redirects that contain a cookie value of eight or more characters
-and redacts those values in response text before extraction or storage.
+and redacts those values from response bodies and extracted content. It drops
+ETag and Last-Modified headers that contain a cookie value.
 Discovery, feed repair and icon lookups use their usual headers.
 
 Every hop requires HTTP or HTTPS without embedded credentials. Public DNS
@@ -92,13 +93,16 @@ Leave it empty for automatic extraction. Enter up to 12 removal selectors, one
 per line. Each selector can contain up to 256 characters. Prefer lazy-loaded
 images to use the publisher's deferred image in place of a placeholder.
 Link cleanup removes `utm_*`, `fbclid`, `gclid`, `dclid`, `msclkid`, `mc_cid`
-and `mc_eid`. Paper keeps signed queries and links to hosts on the feed's
-exclusion list intact. It sanitizes the resulting HTML.
+and `mc_eid` when you turn it on. Paper skips links with recognizable signature
+parameters. Cleanup can break links signed with a custom parameter such as
+`mac`. Add the host to this feed's exclusion list to preserve its links.
+Paper sanitizes the resulting HTML.
 
 Selectors support up to 10,000 DOM nodes per document. Functional pseudo-classes
 such as `:has()`, escapes and CSS comments are unsupported. If the worker reaches
 its three-second deadline or the node limit, Paper retries with default extraction.
-Manage feeds shows the reason.
+Manage feeds shows the reason. Two DOM workers can run at once. Each attempt's
+deadline includes the wait for a worker.
 
 Preview fetches the chosen article with the form's current values. It leaves
 saved settings, the full-text cache and the search index alone. Saved rules

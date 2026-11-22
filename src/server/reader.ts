@@ -1,3 +1,4 @@
+import { extractedCookieRedactor } from './feed-cookie.js'
 import { extractReadableArticle } from './article-extraction.js'
 import { extractionRules, extractWithOverrides } from './feed-extraction.js'
 import { hasFeedOverrides, type SavedOverrides } from './feed-overrides.js'
@@ -52,6 +53,13 @@ export class ReaderService {
       extracted = extractReadableArticle(page.html, finalUrl.href)
     }
 
+    const redact = rules?.cookie && extractedCookieRedactor(rules.cookie)
+    if (redact) {
+      extracted.title = redact.text(extracted.title)
+      extracted.byline = redact.text(extracted.byline)
+      extracted.excerpt = redact.text(extracted.excerpt)
+      extracted.contentHtml = redact.html(extracted.contentHtml)
+    }
     const article: ArticleCacheRecord = {
       url: url.href,
       ...extracted,
