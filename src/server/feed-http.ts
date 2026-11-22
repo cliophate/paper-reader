@@ -91,7 +91,7 @@ function decode(bytes: Buffer, contentType: string, max: number, fatal: boolean)
   }
 }
 
-// No cookies, authorization, proxy environment or arbitrary caller headers.
+// Feed requests carry no credentials. Authenticated API requests reject redirects.
 // DNS validation and connection lookup share the same resolved address.
 type TextFetchOptions = BoundedFetchOptions & { responseBody?: 'text-prefix' }
 type BytesFetchOptions = BoundedFetchOptions & { responseBody: 'bytes' }
@@ -99,6 +99,23 @@ type BytesFetchOptions = BoundedFetchOptions & { responseBody: 'bytes' }
 export function boundedFetch(input: string, options: BytesFetchOptions): Promise<BoundedBytesResult>
 export function boundedFetch(input: string, options?: TextFetchOptions): Promise<BoundedFetchResult>
 export async function boundedFetch(input: string, options: TextFetchOptions | BytesFetchOptions = {}): Promise<BoundedFetchResult | BoundedBytesResult> {
+  return fetchBounded(input, options)
+}
+
+export interface ApiRequest {
+  method?: 'GET' | 'POST' | 'PATCH'
+  authorization?: string
+  body?: string
+  contentType?: 'application/json' | 'application/x-www-form-urlencoded'
+}
+
+export function boundedApiRequest(url: URL, trustedOrigins: readonly string[], request: ApiRequest) {
+  if (url.protocol !== 'https:' && !trustedOrigins.includes(url.origin)) throw new FeedHttpError('policy', 'Public API connections require HTTPS.')
+  return fetchBounded(url.href, { trustedOrigins, accept: 'application/json', maxRedirects: 0,
+    maxResponseBytes: MiB, maxDecompressedBytes: MiB, maxDecodedBytes: MiB }, request) as Promise<BoundedFetchResult>
+}
+
+async function fetchBounded(input: string, options: TextFetchOptions | BytesFetchOptions, api?: ApiRequest): Promise<BoundedFetchResult | BoundedBytesResult> {
   // A text prefix closes the response at maxDecompressedBytes.
   const textPrefix = options.responseBody === 'text-prefix'
   const limits = { ...FEED_HTTP_DEFAULTS, ...Object.fromEntries(Object.entries(options).filter(([key, value]) => key in FEED_HTTP_DEFAULTS && value !== undefined)) } as typeof FEED_HTTP_DEFAULTS
@@ -128,16 +145,18 @@ export async function boundedFetch(input: string, options: TextFetchOptions | By
         const lastModified = validLastModified(validators?.lastModified)
         const response = await new Promise<IncomingMessage>((resolve, reject) => {
           const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
-            agent: false, signal, maxHeaderSize: 16 * 1024,
+            method: api?.method ?? (api?.body === undefined ? 'GET' : 'POST'), agent: false, signal, maxHeaderSize: 16 * 1024,
             lookup: (_hostname, lookupOptions, callback) => lookupOptions.all
               ? callback(null, [addresses[0]]) : callback(null, addresses[0].address, addresses[0].family),
             headers: { Accept: options.accept || 'application/rss+xml, application/atom+xml, application/feed+json, application/xml, text/xml, text/html',
               'Accept-Encoding': 'gzip, deflate, br', 'User-Agent': options.userAgent ?? 'Mozilla/5.0 (compatible; Paper/0.1; feed reader)',
+              ...(api?.authorization ? { Authorization: api.authorization } : {}),
+              ...(api?.body !== undefined ? { 'Content-Type': api.contentType ?? 'application/json', 'Content-Length': Buffer.byteLength(api.body) } : {}),
               ...(options.acceptLanguage ? { 'Accept-Language': options.acceptLanguage } : {}),
               ...(etag ? { 'If-None-Match': etag } : {}), ...(lastModified ? { 'If-Modified-Since': lastModified } : {}) },
           }, resolve)
           request.on('error', reject)
-          request.end()
+          request.end(api?.body)
         })
         const status = response.statusCode || 0
         if ([301, 302, 303, 307, 308].includes(status)) {

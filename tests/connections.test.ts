@@ -277,3 +277,24 @@ describe('private connection settings', () => {
     expect(fetcher.mock.calls[1][1]).toMatchObject({ headers: { Authorization: 'Bearer synthetic-new-kirby' } })
   })
 })
+
+it('binds saved destination credentials to their installation and redacts every Wallabag field', () => {
+  const settings = new ConnectionSettings(loadConfig())
+  const baseUrl = 'https://save.example.test/reader'
+  const credentials = { clientId: 'synthetic-id', clientSecret: 'synthetic-client-secret', username: 'synthetic-user', password: 'synthetic password' }
+  const view = settings.update({ wallabag: { enabled: true, baseUrl, ...credentials } })
+  expect(view.saveDestinations.find(item => item.id === 'wallabag')).toMatchObject({ enabled: true, baseUrl, savedSecrets: Object.keys(credentials) })
+  for (const secret of Object.values(credentials)) expect(JSON.stringify(view)).not.toContain(secret)
+  const restored = new ConnectionSettings(loadConfig())
+  expect(restored.destination('wallabag').ready).toBe(true)
+  for (const newUrl of ['https://other.example.test', baseUrl + '/other']) {
+    expect(() => restored.destinationTestClient('wallabag', { baseUrl: newUrl, password: 'replacement' })).toThrow('Enter the credentials again')
+    expect(() => restored.update({ wallabag: { baseUrl: newUrl } })).toThrow('Enter the credentials again')
+  }
+  restored.update({ wallabag: { enabled: false, password: '' } })
+  expect(restored.destination('wallabag').ready).toBe(true)
+  restored.update({ wallabag: { password: null } })
+  expect(restored.destination('wallabag').ready).toBe(false)
+  expect(() => restored.update({ raindrop: { baseUrl } })).toThrow('Unknown connection setting')
+  expect(() => restored.update({ linkding: { trustedOrigins: [baseUrl] } })).toThrow('Unknown connection setting')
+})

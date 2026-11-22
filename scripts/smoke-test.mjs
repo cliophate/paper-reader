@@ -25,6 +25,12 @@ const fixture = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://fixture')
   const body = new URLSearchParams(await Array.fromAsync(req).then(chunks => Buffer.concat(chunks).toString()))
   const send = value => { res.setHeader('Content-Type', typeof value === 'string' ? 'text/plain' : 'application/json'); res.end(typeof value === 'string' ? value : JSON.stringify(value)) }
+  if (url.pathname.startsWith('/linkding/')) {
+    if (req.headers.authorization !== 'Token synthetic-save-token') { res.statusCode = 401; return send({ error: 'Invalid fixture token' }) }
+    if (req.method === 'GET' && url.pathname === '/linkding/api/user/profile/') return send({ theme: 'auto', private: 'synthetic-save-token' })
+    if (req.method === 'GET' && url.pathname === '/linkding/api/bookmarks/check/') return send({ bookmark: null })
+    if (req.method === 'POST' && url.pathname === '/linkding/api/bookmarks/') return send({ id: 1 })
+  }
   if (url.pathname.endsWith('/accounts/ClientLogin')) return send('Auth=fixture/synthetic-token\n')
   if (req.headers.authorization !== 'GoogleLogin auth=fixture/synthetic-token') { res.statusCode = 401; return send('Unauthorized') }
   const selected = () => rows.filter(row => (!url.searchParams.get('xt') || !row.categories.includes(readTag)) && (!`${url.pathname} ${url.searchParams.get('s')}`.includes('starred') || row.categories.includes(starTag)))
@@ -68,6 +74,7 @@ async function start(state, localReads = true) {
       FRESHRSS_USERNAME: 'fixture', FRESHRSS_API_PASSWORD: 'synthetic-password',
       PAPER_INTERNAL_SECRET: 'synthetic-internal-secret-only-for-tests', PAPER_SIGNING_SECRET: 'synthetic-signing-secret-only-for-tests',
       PAPER_SYNC_MINUTES: '28,58', PAPER_SYNC_ENABLED: 'true', PAPER_LOCAL_READS: String(localReads),
+      PAPER_TRUSTED_SAVE_ORIGINS: `http://127.0.0.1:${fixture.address().port}`,
       CODEX_ENABLED: 'false', PAPER_TRUSTED_AI_ORIGINS: openai.origin,
     },
   })
@@ -138,6 +145,21 @@ try {
     const response = await fetch(settingsUrl, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify(value) })
     return { status: response.status, data: await response.json() }
   }
+  const destination = { baseUrl: `http://127.0.0.1:${fixture.address().port}/linkding`, token: 'synthetic-save-token' }
+  const article = { url: 'https://example.test/article', title: 'Fixture', tags: ['Example'] }
+  assert.equal((await request('/api/save/linkding', article)).status, 503)
+  assert.deepEqual(await request('/api/settings/connections/test-save/linkding', destination), { status: 200, data: { ok: true } })
+  assert.deepEqual((await request('/api/status')).data.saveDestinations, [])
+  const configured = await patchSettings({ linkding: { ...destination, enabled: true } })
+  assert.equal(configured.status, 200)
+  assert(!JSON.stringify(configured.data).includes(destination.token))
+  assert.deepEqual((await request('/api/status')).data.saveDestinations, [{ id: 'linkding', name: 'Linkding' }])
+  assert.deepEqual(await request('/api/save/linkding', article), { status: 200, data: { ok: true } })
+  assert.deepEqual(await request('/api/save/linkding', { ...article, tags: ['x'.repeat(65)] }), {
+    status: 200, data: { ok: true, note: 'Paper shortened tags to fit the 64-character limit.' },
+  })
+  assert.equal((await request('/api/save/linkding', article, { Origin: 'https://untrusted.example' })).status, 403)
+  await patchSettings({ linkding: { enabled: false } })
   const initialSettings = await fetch(settingsUrl)
   assert.equal(initialSettings.headers.get('cache-control'), 'no-store')
   assert.equal((await initialSettings.json()).ai.enabled, false)

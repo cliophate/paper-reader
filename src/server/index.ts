@@ -44,6 +44,7 @@ import { minifluxImportStore } from './subscription-import-miniflux.js'
 import { discoveryTransport } from './discovery-transport.js'
 import { ReaderService } from './reader.js'
 import { fullTextRoute } from './fulltext-route.js'
+import { DestinationError, destinationIds, isDestination } from './save-destinations.js'
 import { ReadwiseClient } from './readwise.js'
 import { SearchService, SearchUnavailableError } from './search-service.js'
 import { entryMatchesSearch } from './search.js'
@@ -233,6 +234,8 @@ app.get('/api/status', (_request, response) => response.json({
   discussionConfigured: discussionEnabled(),
   rssHubConfigured: Boolean(config.rssHub.baseUrl),
   readwiseConfigured: readwise.configured,
+  saveDestinations: destinationIds.map(id => connectionSettings.destination(id)).filter(client => client.configured)
+    .map(({ id, name }) => ({ id, name })),
   kirbyConfigured: kirby.configured,
   briefingConfigured: providerConfigured(config) && config.ai.briefingsEnabled,
   localReadsConfigured: config.sync.localReads,
@@ -672,6 +675,48 @@ app.post('/api/undo', asyncRoute(async (request, response) => {
   await synchronizer.editEntries(undo.entryIds, undo.operation, 'undo')
   database.deleteUndo(token)
   response.json({ ok: true, count: undo.entryIds.length })
+}))
+
+app.post('/api/settings/connections/test-save/:destination', asyncRoute(async (request, response) => {
+  response.set('Cache-Control', 'no-store')
+  const id = String(request.params.destination)
+  if (!isDestination(id)) return response.status(404).json({ error: 'Unknown save destination.' })
+  try {
+    await connectionSettings.destinationTestClient(id, request.body).test()
+    response.json({ ok: true })
+  } catch (error) {
+    response.status(error instanceof SettingsValidationError ? 400 : 422).json({
+      error: error instanceof SettingsValidationError || error instanceof DestinationError ? error.message : 'Could not test the connection.',
+    })
+  }
+}))
+
+app.post('/api/save/:destination', asyncRoute(async (request, response) => {
+  const id = String(request.params.destination)
+  if (!isDestination(id)) return response.status(404).json({ error: 'Unknown save destination.' })
+  const client = connectionSettings.destination(id)
+  const { name } = client
+  if (!client.configured) return response.status(503).json({ error: `${name} is not configured.` })
+  const { url, title, tags = [] } = request.body ?? {}
+  const articleUrl = typeof url === 'string' && url.length <= 8192 ? URL.parse(url) : null
+  if (!articleUrl || !['http:', 'https:'].includes(articleUrl.protocol) || articleUrl.username || articleUrl.password) {
+    return response.status(400).json({ error: 'A valid article URL is required.' })
+  }
+  if (typeof title !== 'string' || title.length > 8192) {
+    return response.status(400).json({ error: 'Paper accepts article titles up to 8192 characters long.' })
+  }
+  if (!Array.isArray(tags) || tags.length > 256) {
+    return response.status(400).json({ error: 'Paper accepts a list of up to 256 tags per article.' })
+  }
+  if (tags.some(tag => typeof tag !== 'string' || tag.length > 1024)) {
+    return response.status(400).json({ error: 'Paper accepts tag names up to 1024 characters long.' })
+  }
+  try {
+    const note = await client.save({ url, title, tags })
+    response.json({ ok: true, note })
+  } catch (error) {
+    response.status(502).json({ error: error instanceof DestinationError ? error.message : `Could not save to ${name}.` })
+  }
 }))
 
 app.post('/api/readwise', asyncRoute(async (request, response) => {

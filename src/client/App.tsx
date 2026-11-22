@@ -1,6 +1,7 @@
 import { AccessSettings } from './components/AccessSettings'
 import { OrganizationSidebar } from './components/OrganizationSidebar'
 import { FeedMark } from './components/FeedMark'
+import type { SaveDestination } from '../shared/connections'
 import type { OrganizationView } from '../shared/organization'
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createArticleBoundaryStore, type ArticleBoundaryStore } from './articleBoundaryStore'
@@ -32,6 +33,7 @@ import { authorLine, resistedPullDistance, shouldAutoMarkRead, shouldAutomatical
 import { formatInstagramHtml, formatThreadsHtml, formatXPostHtml, formatYoutubeHtml } from './socialHtml'
 import type { ArticleReport, Entry, Feed, Folder, NavigationPayload, StreamRef, XThreadPost } from './types'
 
+type ReaderDestination = SaveDestination | { id: 'readwise'; name: string }
 type ReaderFont = 'literata' | 'source'
 type ReaderSize = 'small' | 'medium' | 'large'
 type ReaderSpacing = 'compact' | 'comfortable' | 'spacious'
@@ -119,7 +121,8 @@ export default function App() {
   const [fullMode, setFullMode] = useState<FullTextMode>('auto')
   const feedVersions = useRef(new Map<string, Entry>())
   const fullVersions = useRef(new Map<string, Entry>())
-  const [readwiseBusy, setReadwiseBusy] = useState(false)
+  const [saveBusy, setSaveBusy] = useState(false)
+  const [chooseSaveFor, setChooseSaveFor] = useState<Entry | null>(null)
   const [bulkPreview, setBulkPreview] = useState<{ token: string; count: number; label: string } | null>(null)
   const [bulkBusy, setBulkBusy] = useState(false)
   const [offlineBusy, setOfflineBusy] = useState(false)
@@ -163,7 +166,7 @@ export default function App() {
   const [articleNavigation] = useState(createArticleNavigation)
   const [articleNavigationBusy, setArticleNavigationBusy] = useState(false)
   const [automaticFullFeeds, setAutomaticFullFeeds] = useState(() => automaticFullTextFeeds(localStorage))
-  const [status, setStatus] = useState({ backend: 'freshrss' as 'freshrss' | 'standalone' | 'miniflux', discussionConfigured: false, readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false })
+  const [status, setStatus] = useState({ backend: 'freshrss' as 'freshrss' | 'standalone' | 'miniflux', discussionConfigured: false, readwiseConfigured: false, saveDestinations: [] as SaveDestination[], kirbyConfigured: false, briefingConfigured: false })
   const listRef = useRef<HTMLDivElement>(null)
   const selectedIdRef = useRef(selectedId)
   selectedIdRef.current = selectedId
@@ -1335,22 +1338,39 @@ export default function App() {
     }
   }, [entryOrder, loadEntries, loadNavigation, notify, query, stream, streamUnreadOnly, searchStream, dates, libraryMode, online])
 
-  const saveEntryReadwise = useCallback(async (entry: Entry) => {
-    if (!status.readwiseConfigured) return notify('Enable Readwise Reader in Settings > Reading & connections')
-    if (readwiseBusy || entry.readwiseSavedAt) return
-    setReadwiseBusy(true)
-    try {
-      const result = await api.saveReadwise(entry.url, entry.title)
-      updateEntry(entry.id, { readwiseSavedAt: result.savedAt })
-      notify('Saved to Readwise Reader')
-    } catch (error) {
-      notify(error instanceof Error ? error.message : 'Readwise could not save this article')
-    } finally { setReadwiseBusy(false) }
-  }, [status.readwiseConfigured, notify, readwiseBusy, updateEntry])
+  const destinations = useMemo<ReaderDestination[]>(() => [
+    ...(status.readwiseConfigured ? [{ id: 'readwise' as const, name: 'Readwise Reader' }] : []),
+    ...(status.saveDestinations ?? []),
+  ], [status.readwiseConfigured, status.saveDestinations])
 
-  const saveReadwise = useCallback(async () => {
-    if (selected) await saveEntryReadwise(selected)
-  }, [saveEntryReadwise, selected])
+  const saveArticle = useCallback(async (entry: Entry, destination: ReaderDestination) => {
+    if (saveBusy || !online || (destination.id === 'readwise' && entry.readwiseSavedAt)) return
+    setChooseSaveFor(null)
+    setSaveBusy(true)
+    try {
+      if (destination.id === 'readwise') {
+        const result = await api.saveReadwise(entry.url, entry.title)
+        updateEntry(entry.id, { readwiseSavedAt: result.savedAt })
+      } else {
+        const tags = uniqueFeeds(navigation).find(feed => feed.id === entry.feedId)?.categories ?? []
+        const { note } = await api.saveArticle(destination.id, entry.url, entry.title, tags)
+        if (note) return notify(`Saved to ${destination.name}. ${note}`)
+      }
+      notify(`Saved to ${destination.name}`)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : `Could not save to ${destination.name}`)
+    } finally { setSaveBusy(false) }
+  }, [saveBusy, online, navigation, updateEntry, notify])
+
+  const startSave = useCallback(() => {
+    if (!selected || saveBusy || !online) return
+    if (!destinations.length) return notify('Enable a save destination in Settings > Reading & connections')
+    if (destinations.length === 1) void saveArticle(selected, destinations[0])
+    else setChooseSaveFor(selected)
+  }, [selected, saveBusy, online, destinations, notify, saveArticle])
+  const readwiseOnly = destinations.length === 1 && destinations[0].id === 'readwise'
+  const savedToReadwise = readwiseOnly && Boolean(selected?.readwiseSavedAt)
+  const saveLabel = savedToReadwise ? 'Saved to Readwise' : destinations.length === 1 ? `Save to ${readwiseOnly ? 'Readwise' : destinations[0].name}` : 'Save article'
 
   const createKirbyNote = useCallback(async (quote: string) => {
     if (!selected) return
@@ -1388,7 +1408,7 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (discussionTarget || bulkPreview || reportEntry || selectionContext || entryContext) return
+      if (chooseSaveFor || discussionTarget || bulkPreview || reportEntry || selectionContext || entryContext) return
       const target = event.target instanceof Element ? event.target : document.body
       const typing = Boolean(target.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])'))
       if (event.defaultPrevented || target.closest('[role="dialog"],[role="menu"],[data-organization-handle]')) return
@@ -1415,7 +1435,7 @@ export default function App() {
         window.focus()
       } else if (key === 'q') {
         event.preventDefault()
-        void saveReadwise()
+        if (!event.repeat) startSave()
       } else if (key === 'm' && selected) {
         void setEntryState(selected, selected.read ? 'unread' : 'read')
       } else if (key === 's' && selected) {
@@ -1444,7 +1464,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [closeEntry, move, openEntry, overlays, selected, refresh, fetchFullText, markAllRead, saveReadwise, setEntryState, discussionTarget, bulkPreview, reportEntry, selectionContext, entryContext])
+  }, [closeEntry, move, openEntry, overlays, selected, refresh, fetchFullText, markAllRead, chooseSaveFor, startSave, setEntryState, discussionTarget, bulkPreview, reportEntry, selectionContext, entryContext])
 
   function openSettings() {
     setSettingsFeedId('')
@@ -1593,8 +1613,9 @@ export default function App() {
           onRetryAction={() => { if (actionError?.id === selected.id) void setEntryState(selected, actionError.operation) }}
           fullTextError={fullTextError?.id === selected.id ? fullTextError.message : ''}
           backLabel={pulseContext ? 'Back to collection' : 'Back to stories'}
-          readwiseBusy={readwiseBusy}
-          readwiseConfigured={status.readwiseConfigured}
+          saveLabel={destinations.length ? saveLabel : ''}
+          saveDisabled={!online || saveBusy || savedToReadwise}
+          saveCaption={savedToReadwise ? 'Saved' : saveBusy ? 'Saving...' : readwiseOnly ? 'Readwise' : 'Save'}
           online={online}
           fullMode={fullMode}
           onFullMode={mode => { setFullMode(mode); setFullTextMode(selected.feedId, mode); automaticFullTextAttempts.current.delete(selected.id) }}
@@ -1606,7 +1627,7 @@ export default function App() {
           onPrevious={() => void move(-1)} onNext={() => void move(1)}
           onToggleRead={() => void setEntryState(selected, selected.read ? 'unread' : 'read')}
           onToggleStar={() => void setEntryState(selected, selected.starred ? 'unstar' : 'star')}
-          onReadwise={() => void saveReadwise()}
+          onSave={startSave}
           onCopyUrl={() => void copyArticleUrl(selected)}
           onFullText={() => { const full = fullVersions.current.get(selected.id); if (full) updateEntry(selected.id, articleContent(full)); else void fetchFullText() }}
           onReport={() => setReportEntry(selected)}
@@ -1647,6 +1668,10 @@ export default function App() {
         <button className={mobilePane === 'article' ? 'active' : ''} disabled={!selected} onClick={() => selected && changeMobilePane('article')}><Icon name="bookmark" /><span>Reading</span></button>
       </MobileTabs>
 
+      {chooseSaveFor && <Modal title="Save article to" onClose={() => setChooseSaveFor(null)}>
+        <div className="command-list">{destinations.map(destination => <button key={destination.id} disabled={!online || (destination.id === 'readwise' && !!chooseSaveFor.readwiseSavedAt)}
+          onClick={() => void saveArticle(chooseSaveFor, destination)}>{destination.name}</button>)}</div>
+      </Modal>}
       {bulkPreview && <Modal title="Mark search results read" onClose={() => !bulkBusy && setBulkPreview(null)}><p>{bulkPreview.label}: {bulkPreview.count} unread articles will be marked read.</p><button disabled={bulkBusy || !bulkPreview.count} onClick={() => {
         const generation = readerGeneration.current
         setBulkBusy(true)
@@ -1847,8 +1872,9 @@ const ArticleView = forwardRef<HTMLElement, {
   actionError: string
   onRetryAction: () => void
   fullTextError: string
-  readwiseBusy: boolean
-  readwiseConfigured: boolean
+  saveLabel: string
+  saveCaption: string
+  saveDisabled: boolean
   online: boolean
   fullMode: FullTextMode
   onFullMode: (mode: FullTextMode) => void
@@ -1861,7 +1887,7 @@ const ArticleView = forwardRef<HTMLElement, {
   onNext: () => void
   onToggleRead: () => void
   onToggleStar: () => void
-  onReadwise: () => void
+  onSave: () => void
   onCopyUrl: () => void
   onFullText: () => void
   onReport: () => void
@@ -1879,7 +1905,7 @@ const ArticleView = forwardRef<HTMLElement, {
   previousTitle: string
   nextTitle: string
   onSelectionContext: (state: SelectionContextState | null) => void
-}>(function ArticleView({ active, entry, feedIconUrl, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, readwiseBusy, readwiseConfigured, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onReadwise, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, selectionActionsConfigured, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext }, ref) {
+}>(function ArticleView({ active, entry, feedIconUrl, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, saveLabel, saveCaption, saveDisabled, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onSave, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, selectionActionsConfigured, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext }, ref) {
   const content = useRef<HTMLDivElement>(null)
   const chrome = useRef<HTMLDivElement>(null)
   const [hasSelection, setHasSelection] = useState(false)
@@ -1927,7 +1953,7 @@ const ArticleView = forwardRef<HTMLElement, {
         <div className="reader-actions">
           <button className={entry.starred ? 'active' : ''} onClick={onToggleStar} disabled={!online} aria-label={entry.starred ? 'Remove star' : 'Star article'} title={entry.starred ? 'Remove star' : 'Star article'}><Icon name="star" className={entry.starred ? 'filled' : ''} /><span>{entry.starred ? 'Starred' : 'Star'}</span></button>
           <button onClick={onToggleRead} disabled={!online} aria-label={entry.read ? 'Mark unread' : 'Mark read'} title={entry.read ? 'Mark unread' : 'Mark read'}><Icon name={entry.read ? 'archive' : 'check'} /><span>{entry.read ? 'Mark unread' : 'Mark read'}</span></button>
-          {readwiseConfigured && <button onClick={onReadwise} disabled={!online || readwiseBusy || Boolean(entry.readwiseSavedAt)} aria-label={entry.readwiseSavedAt ? "Saved to Readwise" : "Save to Readwise"} title={entry.readwiseSavedAt ? "Saved to Readwise" : "Save to Readwise"}><Icon name="bookmark" /><span>{entry.readwiseSavedAt ? "Saved" : readwiseBusy ? "Saving..." : "Readwise"}</span></button>}
+          {saveLabel && <button onClick={onSave} disabled={saveDisabled} aria-label={saveLabel} title={saveLabel}><Icon name="bookmark" /><span>{saveCaption}</span></button>}
           {entry.kind === 'article' && <button className={entry.fullText ? 'active' : ''} onClick={onFullText} disabled={fullTextBusy || !online} aria-label={fullTextBusy ? 'Fetching full article' : entry.fullText ? 'Showing full article' : 'Fetch full article'} title={entry.fullText ? 'Showing full article' : 'Fetch full article'}><Icon name="reader" /><span>{fullTextBusy ? 'Fetching...' : entry.fullText ? 'Full text' : 'Full article'}</span></button>}
           <a href={entry.url} target="_blank" rel="noopener noreferrer" aria-label="Open original" title="Open original"><Icon name="external" /><span>Original</span></a>
           <button onClick={onCopyUrl} aria-label="Copy article URL" title="Copy article URL"><Icon name="copy" /><span>Copy URL</span></button>
@@ -1944,6 +1970,7 @@ const ArticleView = forwardRef<HTMLElement, {
         <button disabled={!previousAvailable || navigationBusy} onClick={onPrevious}>Previous</button><button disabled={!nextAvailable || navigationBusy} onClick={onNext}>Next</button>
         <details><summary>Article options</summary><div className="article-options-menu">
           {entry.kind === 'article' && <><button disabled={!entry.fullText || !online} onClick={onFeedText}>Show feed version</button><button disabled={fullTextBusy || !online} onClick={onRefreshText}>Refresh full article</button><label>Full text for this feed<select value={fullMode} onChange={event => onFullMode(event.target.value as FullTextMode)}><option value="auto">Auto</option><option value="always">Always</option><option value="never">Never automatically</option></select></label></>}
+          {saveLabel && <button disabled={saveDisabled} onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); onSave() }}>{saveLabel}</button>}
           <button disabled={offlineBusy} onClick={onOffline}>{offlineBusy ? 'Saving offline...' : 'Save offline'}</button>
           {onRemoveOffline && <button onClick={onRemoveOffline}>Remove offline copy</button>}
         </div></details>
@@ -2248,7 +2275,7 @@ function CommandPalette({ commands, onClose }: { commands: Array<{ label: string
 
 function ShortcutHelp({ onClose }: { onClose: () => void }) {
   const shortcuts = [
-    ['j / ↓', 'Next article'], ['k / ↑', 'Previous article'], ['Ctrl / Cmd K', 'Open commands'], ['Enter', 'Open selected article'], ['o', 'Open original'], ['b', 'Open original in a background tab'], ['q', 'Save to Readwise'], ['f', 'Fetch full article'], ['m', 'Toggle read'], ['s', 'Toggle star'], ['Shift A', 'Mark this stream read'], ['r', 'Refresh'], ['u / Esc', 'Close article'], ['[', 'Toggle sidebar'], [',', 'Open settings'], ['?', 'Show shortcuts'], ['/', 'Search'],
+    ['j / ↓', 'Next article'], ['k / ↑', 'Previous article'], ['Ctrl / Cmd K', 'Open commands'], ['Enter', 'Open selected article'], ['o', 'Open original'], ['b', 'Open original in a background tab'], ['q', 'Save article to a connected service'], ['f', 'Fetch full article'], ['m', 'Toggle read'], ['s', 'Toggle star'], ['Shift A', 'Mark this stream read'], ['r', 'Refresh'], ['u / Esc', 'Close article'], ['[', 'Toggle sidebar'], [',', 'Open settings'], ['?', 'Show shortcuts'], ['/', 'Search'],
   ]
   return <Modal title="Keyboard shortcuts" onClose={onClose} className="help-modal"><dl>{shortcuts.map(([key, label]) => <div key={key}><dt>{key}</dt><dd>{label}</dd></div>)}</dl></Modal>
 }

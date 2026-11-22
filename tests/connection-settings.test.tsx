@@ -6,7 +6,7 @@ import { ConnectionSettings } from '../src/client/components/ConnectionSettings'
 import { api } from '../src/client/api'
 import type { ConnectionsSettings } from '../src/shared/connections'
 
-vi.mock('../src/client/api', () => ({ api: { connections: vi.fn(), updateConnections: vi.fn(), testAiConnection: vi.fn(), briefingDeliveryHistory: vi.fn() } }))
+vi.mock('../src/client/api', () => ({ api: { connections: vi.fn(), updateConnections: vi.fn(), testAiConnection: vi.fn(), testSaveDestination: vi.fn(), briefingDeliveryHistory: vi.fn() } }))
 let root: Root
 let container: HTMLDivElement
 let settings: ConnectionsSettings
@@ -21,6 +21,7 @@ beforeEach(() => {
     },
     ai: { provider: 'codex', enabled: false, codexEnabled: true, discussionEnabled: true, briefingsEnabled: true, headlinesEnabled: true, collectionsEnabled: true },
     openai: { baseUrl: 'https://api.example.test/v1', discussionModel: 'discussion', headlinesModel: 'headlines', groupingModel: 'grouping', shortlistModel: 'shortlist', editorModel: 'editor', tokenConfigured: true, tokenSource: 'environment' },
+    saveDestinations: [{ id: 'readeck', name: 'Readeck', baseUrl: 'https://save.example.test', enabled: false, savedSecrets: ['token'] }],
     readwise: { enabled: true, location: 'later', tokenConfigured: true, tokenSource: 'environment' },
     kirby: { enabled: false, publishUrl: '', tokenConfigured: false, tokenSource: null },
   }
@@ -48,6 +49,22 @@ async function enter(input: HTMLInputElement, value: string) {
 }
 
 describe('connection settings forms', () => {
+  it('tests an unsaved destination, keeps stored credentials blank and clears the replacement after saving', async () => {
+    await render()
+    const connection = form('Readeck')
+    const input = connection.querySelector<HTMLInputElement>('input[type="password"]')!
+    expect(input.value).toBe('')
+    await enter(input, 'synthetic-new-token')
+    const test = [...connection.querySelectorAll('button')].find(button => button.textContent === 'Test connection')!
+    await act(async () => test.click())
+    const patch = { enabled: false, baseUrl: 'https://save.example.test', token: 'synthetic-new-token' }
+    expect(api.testSaveDestination).toHaveBeenCalledWith('readeck', patch)
+    expect(api.updateConnections).not.toHaveBeenCalled()
+    await submit(connection)
+    expect(api.updateConnections).toHaveBeenCalledWith({ readeck: patch })
+    expect(input.value).toBe('')
+  })
+
   it('shows setup instructions and keeps existing tokens out of password fields', async () => {
     await render()
     expect(container.textContent).toContain('Every connection is optional')

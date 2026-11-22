@@ -99,6 +99,7 @@ export function loadConfig(secrets?: { internalSecret: string; signingSecret: st
     host: value('HOST', '127.0.0.1'),
     readerFallbackEnabled: value('PAPER_READER_FALLBACK_ENABLED', 'false') === 'true',
     timeZone: timeZone(),
+    trustedSaveOrigins: trustedOrigins('PAPER_TRUSTED_SAVE_ORIGINS'),
     trustedFeedOrigins: trustedOrigins('PAPER_TRUSTED_FEED_ORIGINS'),
     openai: {
       baseUrl: value('PAPER_OPENAI_BASE_URL', 'https://api.openai.com/v1'),

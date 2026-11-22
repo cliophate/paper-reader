@@ -24,8 +24,12 @@ cancelled, but its late result cannot start a request.
 `FeedValidators` contains `url`, `etag` and `lastModified`. Set `url` to the exact
 final URL that supplied those validators. Only a request to that URL can send
 them. Redirects to another URL omit them. Malformed or oversized validators are
-ignored on send and receive. No arbitrary headers, credentials, cookies or
-proxy environment settings enter the request.
+ignored on send and receive. Feed requests carry no credentials, cookies or
+proxy environment settings.
+
+Save destinations use `boundedApiRequest` for authenticated GET, POST and PATCH requests.
+It pins the resolved address, rejects redirects and caps responses at 1 MiB.
+Private addresses and HTTP require an exact origin in `PAPER_TRUSTED_SAVE_ORIGINS`.
 
 Every hop requires HTTP or HTTPS without embedded credentials. Public DNS
 answers must all pass the address policy. The connection uses one validated

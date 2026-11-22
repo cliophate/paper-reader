@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { api } from '../api'
-import type { AiSettings, ConnectionsSettings, ConnectionsUpdate } from '../../shared/connections'
+import type { AiSettings, ConnectionsSettings, ConnectionsUpdate, DestinationSecret, DestinationSettings, DestinationUpdate } from '../../shared/connections'
 import type { BriefingDeliverySettings, DeliveryHistoryItem, DeliveryState, SmtpFields } from '../../shared/briefing-delivery'
 
 export function ConnectionSettings({ onChanged }: { onChanged: () => Promise<void> }) {
@@ -29,6 +29,7 @@ export function ConnectionSettings({ onChanged }: { onChanged: () => Promise<voi
       <AiConnection runtime={settings.aiRuntime} settings={settings.ai} openai={settings.openai} onSave={save} />
       <BriefingEmail settings={settings.briefingDelivery} onSave={save} />
       <TokenConnection kind="readwise" settings={settings} onSave={save} />
+      {settings.saveDestinations?.map(destination => <SaveConnection key={destination.id} settings={destination} onSave={save} />)}
       <TokenConnection kind="kirby" settings={settings} onSave={save} />
       <p className="connection-help">Tokens stay on the server and are never returned by Settings. Stored tokens are private files, without encryption at rest. Use HTTPS for remote access and protect Paper with your proxy login. Anyone with access to Paper can change these settings.</p>
     </>}
@@ -222,6 +223,54 @@ function BriefingEmail({ settings, onSave }: { settings: BriefingDeliverySetting
   </ConnectionForm>
 }
 
+const credentialLabels: Record<DestinationSecret, string> = {
+  token: 'Access token', clientId: 'Client ID', clientSecret: 'Client secret', username: 'Username', password: 'Password',
+}
+const destinationHelp = {
+  linkding: 'Copy the API token from your Linkding settings.',
+  wallabag: 'Create a client under API clients management in Wallabag. Enter its ID and secret along with your Wallabag login.',
+  readeck: 'Create an API token in your Readeck profile with permission to write bookmarks.',
+  raindrop: 'Create an app under Integrations in your Raindrop.io settings and generate a test token for your account.',
+  linkwarden: 'Create an access token in your Linkwarden settings.',
+}
+
+function SaveConnection({ settings, onSave }: { settings: DestinationSettings; onSave: (patch: ConnectionsUpdate) => Promise<void> }) {
+  const { id, name } = settings
+  const [enabled, setEnabled] = useState(settings.enabled)
+  const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
+  const [secrets, setSecrets] = useState<Partial<Record<DestinationSecret, string | null>>>({})
+  const [testing, setTesting] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const fields: DestinationSecret[] = id === 'wallabag' ? ['clientId', 'clientSecret', 'username', 'password'] : ['token']
+  const patch = (): DestinationUpdate => ({ enabled, ...(id === 'raindrop' ? {} : { baseUrl }), ...secrets })
+  async function test() {
+    setTesting(true)
+    setResult(null)
+    try { await api.testSaveDestination(id, patch()); setResult({ ok: true, message: `Connected to ${name}.` }) }
+    catch (error) { setResult({ ok: false, message: error instanceof Error ? error.message : `Could not connect to ${name}.` }) }
+    finally { setTesting(false) }
+  }
+  return <ConnectionForm title={name} testing={testing} onSave={async () => { await onSave({ [id]: patch() }); setSecrets({}) }}>
+    <Toggle label={`Enable ${name}`} checked={enabled} onChange={setEnabled} />
+    <p className="connection-help">{destinationHelp[id]} Saving an article sends its URL, title and feed folders as tags.</p>
+    <fieldset onChange={() => setResult(null)}>
+      {id !== 'raindrop' && <>
+        <label className="connection-field">Base URL<input type="url" value={baseUrl} onChange={event => setBaseUrl(event.target.value)} autoComplete="off" /></label>
+        <p className="connection-help">Enter the server URL, including any installation path. Private servers need their origin in PAPER_TRUSTED_SAVE_ORIGINS.</p>
+      </>}
+      {fields.map(key => <label className="connection-field" key={key}>{credentialLabels[key]}
+        <input type="password" autoComplete="new-password" spellCheck={false} maxLength={4096} value={secrets[key] ?? ''}
+          placeholder={settings.savedSecrets.includes(key) && secrets[key] !== null ? 'Saved. Leave blank to keep it.' : ''}
+          onChange={event => setSecrets({ ...secrets, [key]: event.target.value })} />
+      </label>)}
+      {settings.savedSecrets.length > 0 && <button type="button" onClick={() => { setSecrets(Object.fromEntries(fields.map(key => [key, null]))); setResult(null) }}>Remove saved credentials</button>}
+      {fields.some(key => secrets[key] === null) && <p className="connection-help">Save to remove these credentials. <button type="button" onClick={() => { setSecrets({}); setResult(null) }}>Keep credentials</button></p>}
+      <button type="button" onClick={() => void test()}>{testing ? 'Testing...' : 'Test connection'}</button>
+      {result && <p role={result.ok ? 'status' : 'alert'}>{result.message}</p>}
+    </fieldset>
+  </ConnectionForm>
+}
+
 function TokenConnection({ kind, settings, onSave }: { kind: 'readwise' | 'kirby'; settings: ConnectionsSettings; onSave: (patch: ConnectionsUpdate) => Promise<void> }) {
   const current = settings[kind]
   const [enabled, setEnabled] = useState(current.enabled)
@@ -246,7 +295,7 @@ function TokenConnection({ kind, settings, onSave }: { kind: 'readwise' | 'kirby
     {kind === 'readwise' && <label className="connection-field">Save articles to<select value={location} onChange={event => setLocation(event.target.value)}><option value="new">Inbox</option><option value="later">Later</option><option value="archive">Archive</option><option value="feed">Feed</option></select></label>}
     <details className="connection-setup"><summary>How to set up {title}</summary>
       {kind === 'readwise' ? <>
-        <ol><li>Sign in to Readwise and open <a href="https://readwise.io/access_token" target="_blank" rel="noreferrer">your access token page</a>.</li><li>Copy the token, paste it above, and choose a destination.</li><li>Enable Readwise Reader and save. Use the Readwise button on an article to save its URL and title.</li></ol>
+        <ol><li>Sign in to Readwise and open <a href="https://readwise.io/access_token" target="_blank" rel="noreferrer">your access token page</a>.</li><li>Copy the token, paste it above, and choose a destination.</li><li>Enable Readwise Reader and save. Use the bookmark button on an article to save its URL and title. If you enabled several services, choose Readwise Reader.</li></ol>
         <p>Paper does not import your Reader library or highlights. See the <a href="https://readwise.io/reader_api" target="_blank" rel="noreferrer">Reader API documentation</a>. Reader may use your default destination if the one you select is unavailable in your account.</p>
       </> : <>
         <ol><li>Install a compatible publishing endpoint on your Kirby site. Paper requires a custom endpoint; Kirby's standard API alone will not work.</li><li>Get the publishing URL and bearer token from that plugin's configuration. Paste them above. Use HTTPS unless you control the private network.</li><li>Enable Kirby notes and save. Select a passage in an article and choose Create note in Kirby.</li></ol>

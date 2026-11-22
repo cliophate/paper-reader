@@ -138,11 +138,15 @@ Open **Settings > Reading & connections** to enable:
 
 - AI discussions, headline cleanup, Pulse story grouping, and briefings.
 - Scheduled morning and evening briefing emails using your SMTP relay.
-- Readwise Reader saves.
+- Article saves to Readwise Reader, Linkding, Wallabag, Readeck, Raindrop.io or Linkwarden.
 - Kirby note drafts through a compatible publishing plugin.
 
-Each connection has setup instructions. Readwise and Kirby tokens can be saved
-in Settings. AI supports an OpenAI-compatible API or the isolated Codex worker
+Test and enable a save destination in Settings. Press `q` in the reader to save
+the article or choose between enabled services. For a private Linkding, Wallabag,
+Readeck or Linkwarden server, add its exact origin to `PAPER_TRUSTED_SAVE_ORIGINS`
+in Paper's environment. Separate multiple origins with commas.
+
+Each connection has setup instructions. AI supports an OpenAI-compatible API or the isolated Codex worker
 with a ChatGPT login. See [AI providers](docs/ai-providers.md) for setup. AI installs
 from before alpha.4 must follow the
 [worker upgrade steps](docs/integrations.md#upgrade-an-existing-ai-installation).
