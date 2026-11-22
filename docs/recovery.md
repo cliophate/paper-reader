@@ -14,7 +14,7 @@ in Settings. It contains connection switches and credentials, including save
 destination tokens and Wallabag login details, without encryption at rest. Keep its permissions at 0600 and include it
 in private backups. A database-only backup does not include these settings.
 `secrets.json` contains generated signing and internal secrets. Losing it can
-invalidate saved briefing links. Keep these files private and together. The
+invalidate saved briefing links and prevent Paper from decrypting feed cookies. Keep these files private and together. The
 permanent `paper-lock.sqlite` is a coordination file, not an application database.
 
 AI login files live separately under ai-auth when using compose.ai.yaml. Protect
@@ -78,7 +78,9 @@ tar -czf paper-data-backup.tar.gz data
 docker compose start paper
 ```
 
-Keep this archive outside the repository and protect it as private data.
+Keep the full backup private. Anyone with this archive can use `secrets.json`
+to decrypt feed cookies in `paper.sqlite` and read the other saved credentials.
+Store it outside the repository and never attach it to a support request.
 An online backup tool must use SQLite's backup API or another documented method
 that provides a consistent database snapshot. Copying only paper.sqlite while
 Paper is writing can omit committed changes in the WAL.

@@ -1,5 +1,5 @@
 import type { PaperDatabase } from './db.js'
-import { parseFeed, feedUrl } from './feed-parser.js'
+import { parseFeed, feedUrl, type ParsedFeed } from './feed-parser.js'
 import { detectKind } from './entry-kind.js'
 import { excerpt, firstImage, readingMinutes } from './text.js'
 
@@ -34,8 +34,7 @@ export function successfulFeedFetch(db: PaperDatabase, endpoint: FeedEndpoint): 
 // The caller supplies an already fetched, decoded response from the current
 // endpoint generation. Fetch policy, scheduling and stale-response fencing are
 // owned by the HTTP collector, not by XML parsing or identity matching.
-export function ingestFeed(db: PaperDatabase, input: FeedEndpoint & {
-  xml: string
+export function ingestFeed(db: PaperDatabase, input: FeedEndpoint & ({ xml: string } | { parsed: ParsedFeed }) & {
   requestUrl: string
   responseUrl: string
   fetchedAt: string
@@ -46,7 +45,7 @@ export function ingestFeed(db: PaperDatabase, input: FeedEndpoint & {
   const responseUrl = feedUrl(input.responseUrl)
   const fetchedTime = Date.parse(input.fetchedAt)
   if (!requestUrl || !responseUrl || !Number.isFinite(fetchedTime)) throw new Error('Invalid feed fetch metadata')
-  const parsed = parseFeed(input.xml, responseUrl)
+  const parsed = 'parsed' in input ? input.parsed : parseFeed(input.xml, responseUrl)
   // Conflicts belong to the subscription and survive endpoint repairs.
   const conflictsKey = `feed-conflicting-ids:v1:${JSON.stringify(input.subscriptionId)}`
   const savedConflicts = db.identities.checkpoint(input.backendId, conflictsKey)

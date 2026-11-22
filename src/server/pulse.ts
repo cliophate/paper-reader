@@ -387,7 +387,7 @@ export class PulseService {
     for (const { collection, revision } of batch) this.catchUpRetries.set(collection.id, { revision, after: this.now() + CATCH_UP_RETRY_MS })
 
     const summaries = await generatePulseCatchUps(this.catchUpModel, batch.map(item => item.collection), source => {
-      const entry = this.db.getArticle(source.url) || this.db.localEntry(source.id)
+      const entry = this.db.getArticleForEntry(source.id) || this.db.localEntry(source.id)
       return entry ? pulseExtract(entry) : source.development || ''
     })
     if (!this.enabled || !summaries.size) return
@@ -411,7 +411,7 @@ export class PulseService {
       if (!fresh.length) return
       const context = this.db.pulseRelatedCandidates(fresh, now, CONTEXT_SIZE)
       const articles = [...fresh, ...context].map(entry => {
-        const cached = this.db.getArticle(entry.url)
+        const cached = this.db.getArticleForEntry(entry.id)
         return cached ? { ...entry, contentHtml: cached.contentHtml, excerpt: cached.excerpt } : entry
       })
       const all = correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now(), true).collections

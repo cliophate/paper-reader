@@ -75,7 +75,7 @@ export class HeadlineService {
   private timer?: ReturnType<typeof setInterval>
   private lastErrorAt: string | null = null
   private lastCompletedAt: string | null = null
-  constructor(private readonly db: PaperDatabase, private readonly fetchArticle: (url: string) => Promise<{ contentHtml: string }>,
+  constructor(private readonly db: PaperDatabase, private readonly fetchArticle: (url: string, entryId: string) => Promise<{ contentHtml: string }>,
     private readonly model: HeadlineModel, private enabled = true, private readonly modelVersionSource: string | (() => string) = '') {}
 
   private get modelVersion() { return typeof this.modelVersionSource === 'function' ? this.modelVersionSource() : this.modelVersionSource }
@@ -136,7 +136,7 @@ export class HeadlineService {
       for (const item of pending) {
         if (!this.enabled) return
         try {
-          const body = plainText((await this.fetchArticle(item.entry.url)).contentHtml)
+          const body = plainText((await this.fetchArticle(item.entry.url, item.entry.id)).contentHtml)
           if (body.length < 500 || body.length > 35_000) { save(item, 'unchanged'); continue }
           input.push({ id: item.entry.id, original: item.entry.title, body })
         } catch { save(item, 'error'); this.lastErrorAt = new Date().toISOString() }

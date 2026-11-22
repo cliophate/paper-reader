@@ -44,6 +44,11 @@ from the data directory, then copy `paper.sqlite.before-feed-maintenance-v21`
 over `paper.sqlite`. Start the previous binary with the restored database.
 It contains the data from before the upgrade.
 
+Schema v22 adds per-feed fetch and extraction overrides. The migration saves
+`paper.sqlite.before-feed-overrides-v22` before upgrading. Full articles fetched
+with overrides use a separate cache key for each saved revision. Back up
+`secrets.json` with the database to preserve feed cookies.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh

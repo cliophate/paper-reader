@@ -1,3 +1,4 @@
+import type { FeedOverrideView, FeedOverrideUpdate } from '../shared/feed-overrides'
 import type { RetentionPolicy, RetentionPreview, RetentionView } from '../shared/retention'
 import type { FeedMaintenance, StaleDays, FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarget } from '../shared/feed-checks'
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
@@ -34,6 +35,11 @@ export const api = {
   saveRetention: (policy: RetentionPolicy, revision: number, token?: string) => request<RetentionView>('/api/retention', { method: 'POST', body: JSON.stringify({ policy, revision, token }) }),
   feedMaintenance: () => request<FeedMaintenance>('/api/feed-checks/maintenance'),
   saveStaleDays: (staleDays: number[]) => request<{ staleDays: StaleDays }>('/api/feed-checks/maintenance', { method: 'PATCH', body: JSON.stringify({ staleDays }) }),
+  feedOverrides: (feedId: string) => request<FeedOverrideView>(`/api/feed-overrides/${encodeURIComponent(feedId)}`),
+  saveFeedOverrides: (feedId: string, overrides: FeedOverrideUpdate) =>
+    request<FeedOverrideView>(`/api/feed-overrides/${encodeURIComponent(feedId)}`, { method: 'PUT', body: JSON.stringify(overrides) }),
+  previewFeedOverrides: (feedId: string, entryId: string, overrides: FeedOverrideUpdate) =>
+    request<FullArticle>('/api/fulltext', { method: 'POST', body: JSON.stringify({ entryId, preview: { feedId, overrides } }) }),
   feedChecks: () => request<FeedChecksView>('/api/feed-checks'),
   checkFeeds: (body: FeedCheckRevision & FeedCheckTarget) => request<{ results: FeedCheckResult[]; snapshot: FeedChecksView }>('/api/feed-checks/now', { method: 'POST', body: JSON.stringify(body) }),
   setCheckInterval: (body: FeedCheckRevision & { feedId?: string; intervalMinutes: number | null }) => request<{ snapshot: FeedChecksView }>('/api/feed-checks/interval', { method: 'POST', body: JSON.stringify(body) }),
@@ -157,8 +163,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ title, sourceUrl, quote }),
     }),
-  fullText: (url: string, refresh = false) =>
-    request<FullArticle>('/api/fulltext', { method: 'POST', body: JSON.stringify({ url, refresh }) }),
+  fullText: (url: string, refresh = false, entryId?: string) =>
+    request<FullArticle>('/api/fulltext', { method: 'POST', body: JSON.stringify({ url, refresh, entryId }) }),
   xThread: (url: string) =>
     request<{ posts: XThreadPost[] }>('/api/x/thread', { method: 'POST', body: JSON.stringify({ url }) }),
   addFeed: (url: string, title = '', folder = '') => request<{ ok: boolean }>('/api/feeds', { method: 'POST', body: JSON.stringify({ url, title, folder }) }),

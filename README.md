@@ -65,6 +65,18 @@ counts and last posts before choosing whether to unsubscribe. **Last post
 filters** sets the age bands for all your devices. The defaults are 90, 182 and
 365 days. Quiet feeds stay out of **Needs attention** unless a check fails.
 
+In **Manage feeds**, select a feed and open **Fetch and extraction overrides**.
+Set a user agent or cookie, choose the article body with a CSS selector, or
+remove unwanted elements. Paper can also prefer lazy-loaded images and strip
+tracking parameters from links. Choose a recent article and select **Preview
+article** to try your changes before saving. **Reset overrides** restores the
+defaults for that feed. In FreshRSS and Miniflux modes, these settings apply
+only to full articles fetched by Paper.
+
+Paper sends the cookie to the exact origin of the feed URL where you set it.
+If the publisher hosts articles elsewhere, you can enter that site's origin
+too. Settings shows whether a cookie is set and lets you replace or clear it.
+
 Paper saves feed icons in the background. If you migrated from FreshRSS, keep
 it running until Paper has copied the icons you want to preserve. For a private
 FreshRSS address, include its exact origin in `PAPER_TRUSTED_FEED_ORIGINS` while

@@ -1,4 +1,4 @@
-import { DATABASE_VERSION } from '../src/server/auth-schema'
+import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'

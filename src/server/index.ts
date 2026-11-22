@@ -90,7 +90,7 @@ const kirby = new KirbyPublisher(config.kirby)
 const retention = new RetentionService(database, backend.identity, standalone?.state)
 retention.start()
 const reader = new ReaderService(database, config.readerFallbackEnabled)
-const headlines = new HeadlineService(database, url => reader.fetch(url, 0), (stage, prompt, input, schema) =>
+const headlines = new HeadlineService(database, (url, entryId) => reader.fetch(url, 0, undefined, entryId), (stage, prompt, input, schema) =>
   runAiBatch(config, 'headlines', stage === 'write' ? config.headlines.writerModel : config.headlines.reviewerModel,
     prompt, input, schema, 'medium'), providerConfigured(config) && config.headlines.enabled,
   () => config.ai.provider === 'openai' ? `openai:${config.openai.baseUrl}:${config.openai.headlinesModel}` : `${config.headlines.writerModel}:${config.headlines.reviewerModel}`)
@@ -145,10 +145,13 @@ app.use('/api/subscription-tools', subscriptionToolsRoutes(standalone ? localImp
   : backend.identity.kind === 'miniflux' ? minifluxImportStore(backend, synchronizer) : freshRssImportStore(backend, synchronizer), discoveryTransport(config.trustedFeedOrigins)))
 app.use(express.json({ limit: '2mb' }))
 app.use(express.urlencoded({ extended: false }))
-app.use('/api/settings/connections', (error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+app.use(['/api/settings/connections', '/api/feed-overrides', '/api/fulltext'], (error: unknown, request: Request, response: Response, _next: NextFunction) => {
   // Body-parser errors can quote submitted JSON. Do not log or return tokens.
   const tooLarge = (error as { status?: number })?.status === 413
-  response.status(tooLarge ? 413 : 400).set('Cache-Control', 'no-store').json({ error: tooLarge ? 'Connection settings are too large.' : 'Could not read connection settings. Send valid JSON.' })
+  const connection = request.baseUrl === '/api/settings/connections'
+  const message = connection ? (tooLarge ? 'Connection settings are too large.' : 'Could not read connection settings. Send valid JSON.')
+    : (tooLarge ? 'The request is too large.' : 'Send valid JSON.')
+  response.status(tooLarge ? 413 : 400).set('Cache-Control', 'no-store').json({ error: message })
 })
 
 app.get('/health', (_request, response) => response.json({ status: 'ok' }))
@@ -742,6 +745,13 @@ app.post('/api/notes', asyncRoute(async (request, response) => {
   if (!quote) return response.status(400).json({ error: 'Select some article text first' })
   response.status(201).json({ ok: true, result: await kirby.createNote({ title, sourceUrl, quote }) })
 }))
+
+app.get('/api/feed-overrides/:id', (request, response) => {
+  response.set('Cache-Control', 'no-store').json(database.feedOverrides.view(request.params.id))
+})
+app.put('/api/feed-overrides/:id', (request, response) => {
+  response.set('Cache-Control', 'no-store').json(database.feedOverrides.save(request.params.id, request.body))
+})
 
 app.post('/api/fulltext', fullTextRoute(reader))
 
