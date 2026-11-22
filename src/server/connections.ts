@@ -2,8 +2,9 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Config } from './config.js'
-import type { ConnectionsSettings, ConnectionsUpdate } from '../shared/connections.js'
+import type { ConnectionsSettings, ConnectionsUpdate, DestinationUpdate, SaveDestinationId } from '../shared/connections.js'
 import type { BriefingSchedule, SmtpUpdate } from '../shared/briefing-delivery.js'
+import { DestinationClient, destinationIds, isDestination, secretFields } from './save-destinations.js'
 import { isIP } from 'node:net'
 
 const address = String.raw`[a-z0-9.!#$%&'*+/=?^_\`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*`
@@ -15,6 +16,7 @@ export class SettingsValidationError extends Error {}
 
 const aiKeys = ['enabled', 'codexEnabled', 'discussionEnabled', 'briefingsEnabled', 'headlinesEnabled', 'collectionsEnabled'] as const
 const openaiKeys = ['baseUrl', 'token', 'discussionModel', 'headlinesModel', 'groupingModel', 'shortlistModel', 'editorModel'] as const
+const maxSettingsBytes = 256 * 1024
 const locations = new Set(['new', 'later', 'archive', 'feed'])
 
 function sameSmtpConnection(a: Config['smtp'], b: Config['smtp']): boolean {
@@ -70,9 +72,12 @@ function validate(input: unknown): ConnectionsUpdate {
   for (const [section, raw] of Object.entries(object(input))) {
     if (section === 'smtp') { result.smtp = validateSmtp(raw); continue }
     if (section === 'briefingSchedule') { result.briefingSchedule = validateSchedule(raw); continue }
-    if (section !== 'ai' && section !== 'readwise' && section !== 'kirby' && section !== 'openai') throw new SettingsValidationError('Unknown connection.')
+    const destination = isDestination(section) ? section : undefined
+    if (!destination && section !== 'ai' && section !== 'readwise' && section !== 'kirby' && section !== 'openai') throw new SettingsValidationError('Unknown connection.')
     const fields = object(raw)
-    const allowed: readonly string[] = section === 'ai' ? [...aiKeys, 'provider'] : section === 'openai' ? openaiKeys : section === 'readwise' ? ['enabled', 'location', 'token'] : ['enabled', 'publishUrl', 'token']
+    const allowed: readonly string[] = destination
+      ? ['enabled', ...(destination === 'raindrop' ? [] : ['baseUrl']), ...secretFields(destination)]
+      : section === 'ai' ? [...aiKeys, 'provider'] : section === 'openai' ? openaiKeys : section === 'readwise' ? ['enabled', 'location', 'token'] : ['enabled', 'publishUrl', 'token']
     const checked: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(fields)) {
       // Accept old saved settings without restoring the removed provider.
@@ -88,6 +93,10 @@ function validate(input: unknown): ConnectionsUpdate {
         if (value === null) { checked.token = null; continue }
         if (typeof value !== 'string' || value.length > 4096 || /[^\x21-\x7e]/.test(value.trim())) throw new SettingsValidationError('Enter a valid token on one line without spaces.')
         if (value.trim()) checked.token = value.trim()
+      } else if (destination === 'wallabag' && key !== 'baseUrl') {
+        if (value === null) { checked[key] = null; continue }
+        if (typeof value !== 'string' || value.length > 4096 || /[\x00-\x1f\x7f]/.test(value)) throw new SettingsValidationError('Enter Wallabag credentials on one line.')
+        if (value) checked[key] = value
       } else if (section === 'openai' && key !== 'baseUrl') {
         if (typeof value !== 'string' || !value.trim() || value.length > 200 || /[\x00-\x1f\x7f]/.test(value)) throw new SettingsValidationError('Enter a model name on one line, up to 200 characters.')
         checked[key] = value.trim()
@@ -97,10 +106,11 @@ function validate(input: unknown): ConnectionsUpdate {
       } else {
         if (typeof value !== 'string' || value.length > 2048) throw new SettingsValidationError('Enter a valid URL.')
         checked[key] = value.trim()
-        if (!value.trim() && key === 'publishUrl') continue
+        if (!value.trim() && (key === 'publishUrl' || destination)) continue
         try {
           const url = new URL(value.trim())
           if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error()
+          if (destination) checked[key] = url.href.replace(/\/+$/, '')
         } catch { throw new SettingsValidationError('Use an HTTP or HTTPS URL without credentials, query parameters, or a fragment.') }
       }
     }
@@ -111,8 +121,9 @@ function validate(input: unknown): ConnectionsUpdate {
 
 export class ConnectionSettings {
   private saved: ConnectionsUpdate = {}
-  private readonly defaults: Omit<ConnectionsSettings, 'briefingDelivery'> & { readwiseToken: string; kirbyToken: string; openaiToken: string }
+  private readonly defaults: Omit<ConnectionsSettings, 'briefingDelivery' | 'saveDestinations'> & { readwiseToken: string; kirbyToken: string; openaiToken: string }
   private readonly filename: string
+  private readonly destinationClients = new Map<SaveDestinationId, DestinationClient>()
   private readonly smtpDefaults: Config['smtp']
   private readonly scheduleDefaults: Config['briefingSchedule']
 
@@ -143,7 +154,7 @@ export class ConnectionSettings {
     catch { throw new Error('Invalid OpenAI-compatible API configuration. Check its URL, key and model names.') }
     try {
       const stat = fs.lstatSync(this.filename)
-      if (!stat.isFile() || stat.size > 32_768) throw new Error()
+      if (!stat.isFile() || stat.size > maxSettingsBytes) throw new Error()
       fs.chmodSync(this.filename, 0o600)
       this.saved = validate(JSON.parse(fs.readFileSync(this.filename, 'utf8')))
       // Migrate the old switch once. New settings always choose a provider explicitly.
@@ -181,6 +192,7 @@ export class ConnectionSettings {
     } catch { publishUrl = '' }
     const { password, ...smtp } = this.smtpConfig()
     return {
+      saveDestinations: destinationIds.map(id => this.destination(id).view()),
       briefingDelivery: {
         smtp: { ...smtp, passwordConfigured: Boolean(password), passwordSource: password ? (this.saved.smtp?.password ? 'settings' : 'environment') : null },
         schedule: { ...this.scheduleDefaults, ...this.saved.briefingSchedule },
@@ -192,6 +204,28 @@ export class ConnectionSettings {
       readwise: { ...connection('readwise'), location: this.saved.readwise?.location ?? this.defaults.readwise.location },
       kirby: { ...connection('kirby'), publishUrl },
     }
+  }
+
+  destination(id: SaveDestinationId) {
+    let client = this.destinationClients.get(id)
+    if (!client) {
+      client = new DestinationClient(id, this.saved[id] ?? {}, this.config.trustedSaveOrigins)
+      this.destinationClients.set(id, client)
+    }
+    return client
+  }
+
+  private checkDestinationUrl(id: SaveDestinationId, patch: DestinationUpdate) {
+    const saved = this.saved[id]
+    if (patch.baseUrl !== undefined && patch.baseUrl !== saved?.baseUrl && secretFields(id).some(key => saved?.[key] && patch[key] === undefined)) {
+      throw new SettingsValidationError('Enter the credentials again for the new base URL, or remove them.')
+    }
+  }
+
+  destinationTestClient(id: SaveDestinationId, input: unknown) {
+    const patch = validate({ [id]: input })[id]!
+    this.checkDestinationUrl(id, patch)
+    return new DestinationClient(id, { ...this.saved[id], ...patch }, this.config.trustedSaveOrigins)
   }
 
   // A key only goes to the origin it was saved for. A new scheme, host or port
@@ -233,6 +267,7 @@ export class ConnectionSettings {
 
   update(input: unknown): ConnectionsSettings {
     const patch = validate(input)
+    for (const id of destinationIds) if (patch[id]) this.checkDestinationUrl(id, patch[id])
     this.requireKeyForOrigin(patch.openai)
     this.requirePasswordForServer(patch.smtp)
     if (patch.smtp?.password) {
@@ -243,15 +278,18 @@ export class ConnectionSettings {
       patch.ai.provider = patch.ai.codexEnabled ? 'codex' : 'none'
     }
     const next = { ...this.saved }
-    for (const section of ['ai', 'readwise', 'kirby', 'openai', 'smtp', 'briefingSchedule'] as const) {
+    for (const section of ['ai', 'readwise', 'kirby', 'openai', 'smtp', 'briefingSchedule', ...destinationIds] as const) {
       if (patch[section]) Object.assign(next, { [section]: { ...this.saved[section], ...patch[section] } })
     }
+    const contents = JSON.stringify(next, null, 2) + '\n'
+    if (Buffer.byteLength(contents) > maxSettingsBytes) throw new SettingsValidationError('Connection settings are too large.')
     fs.mkdirSync(this.config.stateDir, { recursive: true, mode: 0o700 })
     const temporary = `${this.filename}.${crypto.randomUUID()}.tmp`
     try {
-      fs.writeFileSync(temporary, JSON.stringify(next, null, 2) + '\n', { mode: 0o600, flag: 'wx' })
+      fs.writeFileSync(temporary, contents, { mode: 0o600, flag: 'wx' })
       fs.renameSync(temporary, this.filename)
     } finally { fs.rmSync(temporary, { force: true }) }
+    for (const id of destinationIds) if (patch[id]) this.destinationClients.delete(id)
     this.saved = next
     this.apply()
     return this.view()

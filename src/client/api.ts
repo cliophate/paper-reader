@@ -3,7 +3,7 @@ import type { FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarge
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
 import type { PulsePayload } from '../shared/pulse'
 import type { CollectionAnswer } from '../shared/discussion'
-import type { ConnectionsSettings, ConnectionsUpdate } from '../shared/connections'
+import type { ConnectionsSettings, ConnectionsUpdate, DestinationUpdate, SaveDestination, SaveDestinationId } from '../shared/connections'
 import type { BriefingReadResult } from '../shared/briefings'
 import type { DeliveryHistoryItem, SmtpUpdate } from '../shared/briefing-delivery'
 import type { ActivityRecord, ArticleReport, BriefingDetail, BriefingSummary, CoverageFeedback, Entry, EntryPage, FullArticle, MuteFilter, NavigationPayload, StreamRef, XThreadPost } from './types'
@@ -37,6 +37,10 @@ export const api = {
   setCheckInterval: (body: FeedCheckRevision & { feedId?: string; intervalMinutes: number | null }) => request<{ snapshot: FeedChecksView }>('/api/feed-checks/interval', { method: 'POST', body: JSON.stringify(body) }),
   organization: (refresh = false, signal?: AbortSignal) => request<OrganizationView>(`/api/organization${refresh ? '?refresh=1' : ''}`, { signal: sourceRequestSignal(signal) }),
   organize: (requestBody: OrganizationRequest) => request<OrganizationResponse>('/api/organization/commands', { method: 'POST', body: JSON.stringify(requestBody) }),
+  testSaveDestination: (id: SaveDestinationId, settings: DestinationUpdate) =>
+    request<{ ok: boolean }>(`/api/settings/connections/test-save/${id}`, { method: 'POST', body: JSON.stringify(settings) }),
+  saveArticle: (id: SaveDestinationId, url: string, title: string, tags: string[]) =>
+    request<{ ok: boolean }>(`/api/save/${id}`, { method: 'POST', body: JSON.stringify({ url, title, tags }) }),
   testAiConnection: (openai: ConnectionsUpdate['openai']) => request<{ available: boolean; message: string }>('/api/settings/connections/test-ai', { method: 'POST', body: JSON.stringify({ openai }) }),
   testSmtp: (smtp: SmtpUpdate) => request<{ message: string }>('/api/settings/connections/test-smtp', { method: 'POST', body: JSON.stringify({ smtp }) }),
   briefingDeliveryHistory: () => request<DeliveryHistoryItem[]>('/api/settings/connections/briefing-delivery'),
@@ -79,6 +83,7 @@ export const api = {
     backend: 'standalone' | 'freshrss' | 'miniflux'
     backendInstance: string
     discussionConfigured: boolean
+    saveDestinations: SaveDestination[]
     readwiseConfigured: boolean
     kirbyConfigured: boolean
     briefingConfigured: boolean

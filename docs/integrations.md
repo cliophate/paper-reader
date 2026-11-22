@@ -5,11 +5,11 @@ Select the backend in private configuration. Use a separate data directory
 for a different backend or FreshRSS account.
 All other connections can be left disabled. Never commit authentication files,
 tokens, or a real .env. Open Settings > Reading & connections to enable or disable
-AI, Readwise Reader, and Kirby notes. Changes take effect without restarting
+AI, article saves, briefing email and Kirby notes. Changes take effect without restarting
 Paper. The same settings apply to every device using this server.
 
-Settings accepts Readwise and Kirby tokens, OpenAI-compatible API keys, and an
-SMTP password. Secret fields stay blank after saving. Leave them blank to keep
+Settings accepts service tokens, Wallabag credentials, OpenAI-compatible API keys and
+an SMTP password. Secret fields stay blank after saving. Leave them blank to keep
 the current value. Choose Remove and save to clear the secret and prevent an
 environment value from taking over. Turning a connection off
 keeps its credentials so you can enable it again later.
@@ -40,11 +40,39 @@ deliberately. Both endpoints use its existing API authentication. Core reading
 works without them. Feed repair reports that the helper needs installation when
 it is absent. The integration test uses FreshRSS 1.30.4.
 
+## Article save destinations
+
+Open **Settings > Reading & connections** and find the service you want to use.
+For self-hosted services, enter the installation URL, including any subpath.
+Use **Test connection** to check the credentials before enabling and saving.
+The test reads the account profile.
+
+| Service | Credentials |
+| --- | --- |
+| Linkding | Copy the API token from Linkding settings. [Linkding API](https://linkding.link/api/) |
+| Wallabag | Create a client under **API clients management**. Enter the client ID, secret, username and password. Paper renews access tokens on the server. [Wallabag OAuth](https://doc.wallabag.org/developer/api/oauth/) |
+| Readeck | Create a token in your user profile with permission to write bookmarks. [Readeck API](https://codeberg.org/readeck/readeck/src/branch/main/docs/api) |
+| Raindrop.io | Create an app in **Settings > Integrations** and generate a test token for your account. [Raindrop.io authentication](https://developer.raindrop.io/v1/authentication/token) |
+| Linkwarden | Create an access token in Linkwarden settings. [Linkwarden API](https://docs.linkwarden.app/api/overview) |
+
+Use the bookmark button, **Article options** or `q` in the reader. Paper asks
+which service to use if you enabled more than one. These five services receive
+the article URL, title and feed folder names as tags. Readwise keeps its usual
+save location and receives the URL and title.
+
+Paper accepts public HTTPS by default. For a LAN, loopback or Docker address, add the
+exact origin to `PAPER_TRUSTED_SAVE_ORIGINS` in Paper's environment, for example
+`http://linkding:9090,https://readeck.internal.example`. Include the scheme
+and port. Keep installation paths in Settings. Recreate the Paper container
+after editing its environment. Use the final URL because Paper rejects redirects.
+Enter the credentials again if you change the installation URL.
+
 ## Readwise and Kirby
 
 In Settings, enable Readwise Reader, paste a token from
 [your Readwise token page](https://readwise.io/access_token), choose a destination,
-and save. Use the Readwise button on an article to save its URL and title.
+and save. Press `q` on an article to save its URL and title. If you enabled
+several services, choose Readwise Reader.
 Paper does not import your Reader library or highlights. The
 [Reader API documentation](https://readwise.io/reader_api) describes token access
 and supported locations. Reader uses your default destination when the selected

@@ -10,7 +10,7 @@ import type { Entry, EntryPage, Feed } from '../src/client/types'
 
 vi.mock('../src/client/api', async () => ({ ...await vi.importActual('../src/client/api'), api: {
   reload: vi.fn(), organization: vi.fn(), organize: vi.fn(), recentReading: vi.fn(), navigation: vi.fn(), status: vi.fn(), entries: vi.fn(), entry: vi.fn(), entryByNumber: vi.fn(), editState: vi.fn(), markStreamRead: vi.fn(),
-  markRelativeRead: vi.fn(), undo: vi.fn(),
+  saveArticle: vi.fn(), saveReadwise: vi.fn(), markRelativeRead: vi.fn(), undo: vi.fn(),
   setStreamOrder: vi.fn(), removeFeed: vi.fn(), fullText: vi.fn(), previewRead: vi.fn(), confirmRead: vi.fn(), filters: vi.fn(),
 } }))
 
@@ -50,7 +50,7 @@ beforeEach(() => {
   ] })
   vi.mocked(api.organization).mockImplementation(async () => ({ backend: 'freshrss', capabilities: FRESHRSS_ORGANIZATION_CAPABILITIES, revision: null, navigation: await api.navigation() }))
   vi.mocked(api.editState).mockResolvedValue({ ok: true })
-  vi.mocked(api.status).mockResolvedValue({ backend: 'freshrss', backendInstance: 'freshrss:fixture', discussionConfigured: false, readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } })
+  vi.mocked(api.status).mockResolvedValue({ backend: 'freshrss', backendInstance: 'freshrss:fixture', discussionConfigured: false, readwiseConfigured: false, saveDestinations: [], kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } })
   vi.mocked(offlineArticles).mockResolvedValue([])
   vi.mocked(api.entry).mockResolvedValue({ entry: post('a') })
   container = document.createElement('div')
@@ -81,6 +81,21 @@ async function edge(target = 'video', cancel = false, release = true) {
 }
 
 describe('mobile reader switching', () => {
+  it('opens the destination chooser with q and sends the selected article and its folder tags', async () => {
+    vi.mocked(api.status).mockResolvedValue({ ...(await api.status()), readwiseConfigured: true, saveDestinations: [{ id: 'linkding', name: 'Linkding' }] })
+    const feed = { id: 'a', categories: ['Tech'] } as Feed
+    vi.mocked(api.navigation).mockResolvedValue({ unread: 0, starred: 0, uncategorized: [], folders: [{ id: 'tech', title: 'Tech', unread: 0, feeds: [feed] }] })
+    await mount()
+    await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q', bubbles: true })) })
+    const chooser = container.querySelector('[role="dialog"][aria-label="Save article to"]')!
+    expect(chooser.textContent).toContain('Readwise Reader')
+    vi.mocked(api.saveArticle).mockRejectedValue(new Error('Linkding denied access.'))
+    await act(async () => { [...chooser.querySelectorAll('button')].find(button => button.textContent === 'Linkding')!.click() })
+    expect(api.saveArticle).toHaveBeenCalledWith('linkding', post('a').url, post('a').title, ['Tech'])
+    expect(api.saveReadwise).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Linkding denied access.')
+  })
+
   it('navigates with j and k while Caps Lock is enabled', async () => {
     await mount()
     for (const [key, selectedId] of [['J', 'b'], ['K', 'a']]) {
@@ -546,7 +561,7 @@ describe('mobile reader switching', () => {
   it('sends the displayed standalone revision and restores server state after a conflict', async () => {
     initialPage.items[0] = { ...post('a'), stateRevision: 4 }
     vi.mocked(api.entry).mockResolvedValue({ entry: initialPage.items[0] })
-    vi.mocked(api.status).mockResolvedValue({ backend: 'standalone', backendInstance: 'standalone:fixture', discussionConfigured: false, readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } })
+    vi.mocked(api.status).mockResolvedValue({ backend: 'standalone', backendInstance: 'standalone:fixture', discussionConfigured: false, readwiseConfigured: false, saveDestinations: [], kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } })
     vi.mocked(api.editState).mockRejectedValue(new ApiError('Article state changed', 409, 'state-conflict', undefined, { a: { read: true, starred: true, revision: 5 } }))
     await mount()
     const star = container.querySelector<HTMLButtonElement>('[aria-label="Star article"]')!

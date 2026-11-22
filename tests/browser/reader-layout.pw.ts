@@ -17,7 +17,7 @@ async function openReader(page: Page, short = false, crossFeeds = false) {
   await page.route('**/api/**', async route => {
     const pathname = new URL(route.request().url()).pathname
     const json = pathname === '/api/organization' ? { backend: 'freshrss', revision: null, capabilities: FRESHRSS_ORGANIZATION_CAPABILITIES, navigation }
-      : pathname === '/api/status' ? { backend: 'freshrss', backendInstance: 'fixture', discussionConfigured: false, readwiseConfigured: false, kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } }
+      : pathname === '/api/status' ? { backend: 'freshrss', backendInstance: 'fixture', discussionConfigured: false, readwiseConfigured: true, saveDestinations: [{ id: 'linkding', name: 'Linkding' }], kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } }
       : pathname === '/api/entries' ? { items, continuation: '' }
       : pathname === '/api/entries/item' ? { entry: items.find(item => item.id === route.request().postDataJSON().id) }
       : pathname === '/api/reading' ? [] : { ok: true }
@@ -35,6 +35,18 @@ async function openReader(page: Page, short = false, crossFeeds = false) {
   const inset = await page.evaluate(() => matchMedia('(max-width: 1040px)').matches ? 96 : 0)
   await expect.poll(() => page.locator('.article-scroll').evaluate(el => el.scrollTop)).toBe(inset)
 }
+
+test('saves through the article options on a phone', async ({ page }) => {
+  await page.setViewportSize({ width: 393, height: 875 })
+  await openReader(page)
+  await page.getByText('Article options', { exact: true }).click()
+  await page.locator('.article-options-menu').getByRole('button', { name: 'Save article' }).click()
+  const chooser = page.getByRole('dialog', { name: 'Save article to' })
+  await expect(chooser.getByRole('button', { name: 'Readwise Reader' })).toBeVisible()
+  await chooser.getByRole('button', { name: 'Linkding' }).click()
+  await expect(page.getByText('Saved to Linkding', { exact: true })).toBeVisible()
+  await expect(chooser).toHaveCount(0)
+})
 
 async function geometry(page: Page) {
   return page.locator('.article-scroll').evaluate(el => ({

@@ -10,8 +10,8 @@ discussions, filters, briefing history, Pulse collections, and feedback.
 An empty remote-backend cache can resync articles but cannot recover that additional
 state. An empty standalone database cannot recover subscriptions or reading state.
 The same directory also holds connections.json when connections have been edited
-in Settings. It contains enable switches and any Readwise or Kirby tokens saved
-there, without encryption at rest. Keep its permissions at 0600 and include it
+in Settings. It contains connection switches and credentials, including save
+destination tokens and Wallabag login details, without encryption at rest. Keep its permissions at 0600 and include it
 in private backups. A database-only backup does not include these settings.
 `secrets.json` contains generated signing and internal secrets. Losing it can
 invalidate saved briefing links. Keep these files private and together. The

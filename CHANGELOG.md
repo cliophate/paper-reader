@@ -4,6 +4,8 @@
 
 - Add Linux ARM64 support for the reader and Codex worker. Both use the same
   release tags as amd64. Reader archives are available for each architecture.
+- Save articles to Linkding, Wallabag, Readeck, Raindrop.io or Linkwarden.
+  Set up a destination in Settings > Reading & connections, then press `q` in the reader.
 - Pulse ranks active collections by recent reporting and shows the first 25.
   New collections need three articles from at least two publications within a week.
   Collections whose newest article is over seven days old move to the archive under Quiet.
