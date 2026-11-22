@@ -38,7 +38,11 @@ export interface Folder {
 
 export type EntryKind = 'article' | 'x' | 'instagram' | 'threads' | 'bluesky' | 'mastodon' | 'youtube'
 
+// Symbol keys survive server-side object spreads and stay out of JSON responses.
+export const indexedSearchText = Symbol('indexedSearchText')
 export interface Entry {
+  [indexedSearchText]?: { title: string; author: string; feedTitle: string; contentText: string; fullContentText: string }
+  searchSnapshot?: string
   linkNumber?: number
   stateRevision?: number
   searchExcerpt?: string

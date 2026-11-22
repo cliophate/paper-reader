@@ -3,18 +3,30 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import type { LocalEntryPage, PageOptions, PaperDatabase, SearchSnapshot } from './db.js'
 import type { StreamRef } from './types.js'
+import { parseSearch, SearchLimitError } from './search-query.js'
 
+export type BulkSelection =
+  | { kind: 'preview'; withRevisions: boolean }
+  | { kind: 'relative'; anchorId: string; direction: 'above' | 'below'; snapshot?: string; displayedIds?: string[]; withRevisions: boolean }
+  | { kind: 'unread'; ids: string[] }
+type SelectionResult = { ids: string[]; revisions?: Record<string, number> }
+
+export class SearchSnapshotError extends Error {}
 export class SearchUnavailableError extends Error {}
 interface Job {
   id: number
   stream: StreamRef
   options: PageOptions
-  resolve(page: LocalEntryPage): void
+  selection?: BulkSelection
+  resolve(result: LocalEntryPage | SelectionResult): void
   reject(error: Error): void
   cleanup(): void
   cancelled: boolean
 }
-type WorkerMessage = { id: number; type: string; snapshot?: SearchSnapshot; page: LocalEntryPage; error: string; unavailable?: boolean }
+type WorkerMessage =
+  | { id: number; type: 'snapshot'; snapshot?: SearchSnapshot }
+  | { id: number; type: 'result'; value: LocalEntryPage | SelectionResult }
+  | { id: number; type: 'error'; error: string; failure?: 'snapshot' | 'limit' }
 
 // One worker and at most eight waiting requests, including while a cancelled
 // native SQLite call finishes. Never replace a worker before its exit event.
@@ -30,11 +42,22 @@ export class SearchService {
   constructor(private readonly database: PaperDatabase) {}
 
   search(stream: StreamRef, options: PageOptions, signal?: AbortSignal): Promise<LocalEntryPage> {
+    return this.enqueue(stream, options, undefined, signal)
+  }
+
+  select(stream: StreamRef, options: PageOptions, selection: BulkSelection, signal?: AbortSignal): Promise<SelectionResult> {
+    return this.enqueue(stream, options, selection, signal)
+  }
+
+  private enqueue(stream: StreamRef, options: PageOptions, selection: undefined, signal?: AbortSignal): Promise<LocalEntryPage>
+  private enqueue(stream: StreamRef, options: PageOptions, selection: BulkSelection, signal?: AbortSignal): Promise<SelectionResult>
+  private async enqueue(stream: StreamRef, options: PageOptions, selection?: BulkSelection, signal?: AbortSignal): Promise<LocalEntryPage | SelectionResult> {
+    if (options.query) parseSearch(options.query)
     if (this.closed) return Promise.reject(new SearchUnavailableError('Search is shutting down.'))
     if (signal?.aborted) return Promise.reject(new SearchUnavailableError('Search cancelled.'))
     if ((this.active || this.retiring) && this.queue.length >= 8) return Promise.reject(new SearchUnavailableError('Search is busy. Try again shortly.'))
     return new Promise((resolve, reject) => {
-      const job: Job = { id: ++this.nextId, stream, options, resolve, reject, cancelled: false, cleanup: () => signal?.removeEventListener('abort', abort) }
+      const job: Job = { id: ++this.nextId, stream, options, selection, resolve, reject, cancelled: false, cleanup: () => signal?.removeEventListener('abort', abort) }
       const abort = () => {
         job.cancelled = true
         job.cleanup()
@@ -53,7 +76,7 @@ export class SearchService {
     const job = this.active = this.queue.shift()!
     try {
       if (!this.worker) this.startWorker()
-      this.worker!.postMessage({ type: 'search', id: job.id, stream: job.stream, options: job.options })
+      this.worker!.postMessage({ type: 'search', id: job.id, stream: job.stream, options: job.options, selection: job.selection })
     } catch {
       job.cleanup(); job.reject(new SearchUnavailableError('Search worker could not start. Try again.'))
       if (this.worker) this.retire()
@@ -95,8 +118,10 @@ export class SearchService {
       }
       if (message.type !== 'result' && message.type !== 'error') return
       job.cleanup(); this.active = undefined
-      if (message.type === 'error') job.reject(message.unavailable ? new SearchUnavailableError(message.error) : new Error(message.error))
-      else job.resolve(message.page)
+      if (message.type === 'error') {
+        const ErrorType = message.failure === 'snapshot' ? SearchSnapshotError : message.failure === 'limit' ? SearchLimitError : SearchUnavailableError
+        job.reject(new ErrorType(message.error))
+      } else job.resolve(message.value)
       this.pump()
     })
   }

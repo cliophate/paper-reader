@@ -1,4 +1,5 @@
 import { EnclosurePlayers } from './components/EnclosurePlayers'
+import { MAX_DISPLAYED_SEARCH_IDS, searchHint as getSearchHint } from '../server/search-query'
 import { AccessSettings } from './components/AccessSettings'
 import { OrganizationSidebar } from './components/OrganizationSidebar'
 import { FeedMark } from './components/FeedMark'
@@ -61,7 +62,7 @@ const starredStream: StreamRef = { kind: 'starred', id: 'starred', title: 'Starr
 
 interface OverlayState {
   command: boolean
-  help: boolean
+  help: false | 'shortcuts' | 'search'
   settings: boolean
   appearance: boolean
 }
@@ -105,6 +106,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(initialLocation.selectedId)
   const [unreadOnly, setUnreadOnly] = useState(initialLocation.unreadOnly)
   const [query, setQuery] = useState(initialLocation.query)
+  const searchHint = useMemo(() => getSearchHint(query), [query])
   const [searchStream, setSearchStream] = useState<StreamRef>(initialLocation.searchStream || allStream)
   const [searchUnread, setSearchUnread] = useState(initialLocation.searchUnread || false)
   const [after, setAfter] = useState(initialLocation.after || '')
@@ -1373,7 +1375,12 @@ export default function App() {
     if (libraryMode !== 'stream' || !online) { notify('Open a feed or search while connected to use relative read actions.'); return }
     let serial = requestSerial.current
     try {
-      const result = await api.markRelativeRead(query ? searchStream : stream, entry.id, direction, streamUnreadOnly, query, entryOrder, query ? dates : { after: '', before: '' })
+      const displayed = currentReader.current.entries
+      const anchor = displayed.find(item => item.id === entry.id)
+      if (query && !anchor) throw new Error('The search results changed. Choose an article again.')
+      if (query && displayed.length > MAX_DISPLAYED_SEARCH_IDS) throw new Error('Narrow the search before marking above or below.')
+      const searchOptions = query ? { ...dates, snapshot: anchor?.searchSnapshot, displayedIds: displayed.map(item => item.id) } : undefined
+      const result = await api.markRelativeRead(query ? searchStream : stream, entry.id, direction, streamUnreadOnly, query, entryOrder, searchOptions ?? { after: '', before: '' })
       const changed = new Set(result.ids)
       setEntries(current => current.map(item => changed.has(item.id) ? { ...item, read: true } : item))
       // Keep the list mounted, including on no-op actions, instead of replacing
@@ -1462,7 +1469,7 @@ export default function App() {
     { label: 'Activity log', hint: '', run: () => { setSettingsSection('activity'); setOverlays({ ...closedOverlays, settings: true }) } },
     { label: 'Appearance', hint: 'Aa', run: () => setOverlays({ ...closedOverlays, appearance: true }) },
     { label: 'Settings', hint: ',', run: () => setOverlays({ ...closedOverlays, settings: true }) },
-    { label: 'Keyboard shortcuts', hint: '?', run: () => setOverlays({ ...closedOverlays, help: true }) },
+    { label: 'Keyboard shortcuts', hint: '?', run: () => setOverlays({ ...closedOverlays, help: 'shortcuts' }) },
   ], [changeUnreadOnly, refresh, unreadOnly, markAllRead])
 
   useEffect(() => {
@@ -1515,7 +1522,7 @@ export default function App() {
       } else if (key === ',') {
         setOverlays({ ...closedOverlays, settings: true })
       } else if (key === '?') {
-        setOverlays({ ...closedOverlays, help: true })
+        setOverlays({ ...closedOverlays, help: 'shortcuts' })
       } else if (key === '/') {
         event.preventDefault()
         searchRef.current?.focus()
@@ -1548,11 +1555,12 @@ export default function App() {
           <img className="brand-logo brand-logo-dark" src="/brand/paper-logo.svg" alt="" />
           <img className="brand-logo brand-logo-light" src="/brand/paper-logo-light.svg" alt="" />
         </button>
-        <label className="search-box">
+        <div className="search-box">
           <Icon name="search" />
-          <input ref={searchRef} value={query} onChange={event => { setView('reader'); setLibraryMode('stream'); setPulseContext(null); setSelectedId(''); setMobilePane('stories'); setQuery(event.target.value) }} aria-label="Search articles" placeholder="Search articles" />
+          <input ref={searchRef} value={query} onChange={event => { setView('reader'); setLibraryMode('stream'); setPulseContext(null); setSelectedId(''); setMobilePane('stories'); setQuery(event.target.value) }} aria-label="Search articles" aria-describedby={searchHint ? 'search-hint' : undefined} placeholder="Search articles" />
           <kbd>/</kbd>
-        </label>
+          <button aria-label="Search syntax" title="Search syntax" onClick={() => setOverlays({ ...closedOverlays, help: 'search' })}><Icon name="info" /></button>
+        </div>
         <button className="command-button" onClick={() => setOverlays({ ...closedOverlays, command: true })}><span>Commands</span><kbd>Ctrl K</kbd></button>
       </header>
 
@@ -1606,6 +1614,7 @@ export default function App() {
         </div>
         <div className="reader-status" role="status">{!online ? 'Offline. Saved articles are available below.' : (navigationError || statusError || syncError) ? `Sync needs attention: ${navigationError || statusError || syncError}` : lastSync ? `Last synced ${relativeDate(lastSync)}` : status.backend === 'standalone' ? 'Ready to fetch feeds' : 'Waiting for synchronization'}{(navigationError || statusError || syncError) && online && <button onClick={() => void refresh()}>Retry</button>}</div>
         {query && <div className="search-controls">
+          {searchHint && <span id="search-hint" role="status">{searchHint}</span>}
           <label>Search in<select aria-label="Search scope" value={searchStream.id} onChange={event => {
             const id = event.target.value
             const folder = navigation?.folders.find(item => item.id === id)
@@ -1738,7 +1747,13 @@ export default function App() {
         void api.confirmRead(bulkPreview.token).then(async result => { setBulkPreview(null); await Promise.all([generation === readerGeneration.current ? loadEntries() : Promise.resolve(), loadNavigation()]); notify(`Marked ${result.count} articles read`, { label: 'Undo', run: () => void api.undo(result.undoToken).then(() => Promise.all([generation === readerGeneration.current ? loadEntries() : Promise.resolve(), loadNavigation()])).catch(error => notify(error.message)) }) }).catch(error => notify(error.message)).finally(() => setBulkBusy(false))
       }}>{bulkBusy ? 'Marking read...' : `Mark ${bulkPreview.count} read`}</button><button disabled={bulkBusy} onClick={() => setBulkPreview(null)}>Cancel</button></Modal>}
       {overlays.command && <CommandPalette commands={commands} onClose={() => setOverlays(closedOverlays)} />}
-      {overlays.help && <ShortcutHelp onClose={() => setOverlays(closedOverlays)} />}
+      {overlays.help === 'search' && <Modal title="Search syntax" onClose={() => setOverlays(closedOverlays)}>
+        <p>Words match prefixes. Use quotes for a phrase, like <code>"night sky"</code>.</p>
+        <p>Use <code>OR</code> for alternatives and <code>-</code> or <code>NOT</code> to exclude. Try <code>(moon OR mars) -landing</code>.</p>
+        <p>Limit a search with <code>title:</code>, <code>author:</code>, <code>feed:</code>, <code>folder:</code> or <code>url:</code>. For example, <code>url:"example.org/wiki/Paper_(reader)"</code> matches that URL fragment. Filter by <code>is:read</code>, <code>is:unread</code> or <code>is:starred</code>.</p>
+        <p>Use <code>after:</code> or <code>before:</code> with a date like <code>2026-01-31</code> or a period like <code>7d</code>, <code>2w</code>, <code>3m</code> or <code>1y</code>.</p>
+      </Modal>}
+      {overlays.help === 'shortcuts' && <ShortcutHelp onSearchHelp={() => setOverlays({ ...closedOverlays, help: 'search' })} onClose={() => setOverlays(closedOverlays)} />}
       {entryContext && <EntryContextMenu key={entryContext.entry.id} state={entryContext} unsubscribeAvailable={Boolean(organization?.capabilities.unsubscribe && uniqueFeeds(navigation).some(feed => feed.id === entryContext.entry.feedId))} relativeAvailable={libraryMode === 'stream' && online} onClose={() => setEntryContext(null)} onOpen={() => { setEntryContext(null); openEntry(entryContext.entry) }} onCopyUrl={() => { void copyArticleUrl(entryContext.entry); setEntryContext(null) }} onToggleRead={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.read ? 'unread' : 'read') }} onToggleStar={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.starred ? 'unstar' : 'star') }} onReport={() => { setReportEntry(entryContext.entry); setEntryContext(null) }} onMarkAbove={() => void markRelativeRead(entryContext.entry, 'above')} onMarkBelow={() => void markRelativeRead(entryContext.entry, 'below')} onUnsubscribe={() => void unsubscribeFeed({ id: entryContext.entry.feedId, title: entryContext.entry.feedTitle })} />}
       {selectionContext && (status.kirbyConfigured || status.discussionConfigured) && <SelectionContextMenu state={selectionContext} kirbyConfigured={status.kirbyConfigured} discussionConfigured={status.discussionConfigured} onClose={() => setSelectionContext(null)} onCreate={() => void createKirbyNote(selectionContext.quote)} onDiscuss={() => { if (!status.discussionConfigured) return notify('Article discussion is not configured'); if (selected) setDiscussionTarget({ entry: selected, quote: selectionContext.quote }); setSelectionContext(null) }} />}
       {discussionTarget && <ArticleDiscussion key={discussionTarget.entry.id} entry={discussionTarget.entry} initialQuote={discussionTarget.quote} onClose={() => setDiscussionTarget(null)} />}
@@ -2363,11 +2378,11 @@ function CommandPalette({ commands, onClose }: { commands: Array<{ label: string
   </Modal>
 }
 
-function ShortcutHelp({ onClose }: { onClose: () => void }) {
+function ShortcutHelp({ onClose, onSearchHelp }: { onClose: () => void; onSearchHelp: () => void }) {
   const shortcuts = [
     ['j / ↓', 'Next article'], ['k / ↑', 'Previous article'], ['Ctrl / Cmd K', 'Open commands'], ['Enter', 'Open selected article'], ['o', 'Open original'], ['b', 'Open original in a background tab'], ['q', 'Save article to a connected service'], ['f', 'Fetch full article'], ['m', 'Toggle read'], ['s', 'Toggle star'], ['Shift A', 'Mark this stream read'], ['r', 'Refresh'], ['u / Esc', 'Close article'], ['[', 'Toggle sidebar'], [',', 'Open settings'], ['?', 'Show shortcuts'], ['/', 'Search'],
   ]
-  return <Modal title="Keyboard shortcuts" onClose={onClose} className="help-modal"><dl>{shortcuts.map(([key, label]) => <div key={key}><dt>{key}</dt><dd>{label}</dd></div>)}</dl></Modal>
+  return <Modal title="Keyboard shortcuts" onClose={onClose} className="help-modal"><button onClick={onSearchHelp}>Search syntax</button><dl>{shortcuts.map(([key, label]) => <div key={key}><dt>{key}</dt><dd>{label}</dd></div>)}</dl></Modal>
 }
 
 function Settings({ backend, section, setSection, initialFeedId, initialFeedView, navigation, onChanged, onFiltersChanged, onFiltersMatching, notify, onConnectionsChanged, autoRead, setAutoRead, onOpenEntry, onClose }: {

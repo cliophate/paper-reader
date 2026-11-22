@@ -1087,6 +1087,53 @@ describe('reader workflow improvements', () => {
     expect(container.querySelector('[role="dialog"]')?.textContent).toContain('2 unread articles')
   })
 
+  it('sends the selected search result snapshot when marking below', async () => {
+    history.replaceState(null, '', '/?q=is%3Aunread&pane=stories')
+    const item = { ...post('anchor'), searchSnapshot: 'original-page' }
+    vi.mocked(api.entries).mockResolvedValue({ items: [item], continuation: '' })
+    vi.mocked(api.markRelativeRead).mockResolvedValue({ ok: true, count: 0, ids: [] })
+    await mount()
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    const row = container.querySelector('.story-row')!
+    await act(async () => { row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })) })
+    await click([...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent?.includes('Mark all below'))!)
+    expect(api.markRelativeRead).toHaveBeenCalledWith(expect.objectContaining({ kind: 'all' }), item.id, 'below', false, 'is:unread',
+      'newest', { after: '', before: '', snapshot: item.searchSnapshot, displayedIds: [item.id] })
+  })
+
+  it('sends the refreshed row order when an unseen result moves above a second-page anchor', async () => {
+    history.replaceState(null, '', '/?q=is%3Aunread&pane=stories')
+    const events = new Map<string, EventListener>()
+    vi.stubGlobal('EventSource', class {
+      addEventListener(name: string, listener: EventListener) { events.set(name, listener) }
+      removeEventListener() {}
+      close() {}
+    })
+    let intersect: () => void
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(callback: (records: { isIntersecting: boolean }[]) => void) {
+        intersect = () => callback([{ isIntersecting: true }])
+      }
+      observe() {}
+      disconnect() {}
+    })
+    const item = (id: string, searchSnapshot = 'old') => ({ ...post(id), read: false, searchSnapshot })
+    vi.mocked(api.entries)
+      .mockResolvedValueOnce({ items: [item('first')], continuation: 'second-page' })
+      .mockResolvedValueOnce({ items: [item('anchor')], continuation: 'third-page' })
+      .mockResolvedValueOnce({ items: [item('moved', 'new')], continuation: 'refreshed-page' })
+    vi.mocked(api.markRelativeRead).mockResolvedValue({ ok: true, count: 0, ids: [] })
+    await mount()
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    await act(async () => intersect())
+    await act(async () => { container.querySelectorAll('.story-row')[1].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })) })
+    await act(async () => { events.get('sync')!(new Event('sync')) })
+    expect([...container.querySelectorAll('.story-row h2')].map(node => node.textContent)).toEqual(['Post moved', 'Post first', 'Post anchor'])
+    await click([...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent?.includes('Mark all below'))!)
+    expect(api.markRelativeRead).toHaveBeenCalledWith(expect.anything(), 'anchor', 'below', false, 'is:unread', 'newest',
+      { after: '', before: '', snapshot: 'old', displayedIds: ['moved', 'first', 'anchor'] })
+  })
+
   it('shows the full-text capacity error with a retry button and keeps the feed content', async () => {
     initialPage = { items: [{ ...post('a'), kind: 'article', contentHtml: '<p>Original feed version.</p>' }], continuation: '' }
     const message = 'Paper is fetching too many full articles. Try again shortly.'

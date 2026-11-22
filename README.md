@@ -56,7 +56,8 @@ has. To request an upstream check, open **Settings > Feeds > Manage feeds** and
 select a feed for **Check now**. Open **Feed checks and intervals** to check a
 folder or change the default interval. Each feed can override that interval,
 from 5 minutes to one day. Manual checks respect publisher delays and a
-one-minute cooldown. Search and reading state work immediately.
+one-minute cooldown. Search and reading state work immediately. Press `/` to search, or open
+**Search syntax** beside the search box for [operators and examples](docs/search-index.md#search-syntax).
 
 In **Manage feeds**, open **Moved feeds** to review standalone redirects and
 publisher-declared moves. **Use new address** checks the address and updates
@@ -119,7 +120,7 @@ Reader-compatible sync. Access starts disabled and requires app passwords.
 Set `PAPER_BACKEND=freshrss` and provide `FRESHRSS_BASE_URL`, `FRESHRSS_USERNAME`
 and `FRESHRSS_API_PASSWORD` in your private configuration. Enable FreshRSS's
 Google Reader API and use its separate API password. Paper imports your archive
-in the background; search becomes available after that initial import.
+in the background. Search uses the local index once the import finishes and local reads are enabled.
 
 Existing installations that omit `PAPER_BACKEND` retain FreshRSS behavior.
 FreshRSS must be reachable from Paper's container. `localhost` inside the

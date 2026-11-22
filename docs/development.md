@@ -15,8 +15,12 @@ flat-folder mapping, partial failures and the bounded discovery transport.
 leases, conditional requests, manual checks and interval controls. [Bounded HTTP transport](feed-http.md) defines
 the shared collector, discovery and repair fetch contract.
 
-[Search indexing](search-index.md) documents schema v11 and the collection and
-search responsiveness regression.
+[Search indexing](search-index.md) covers the query syntax, schema v11 and the
+200,000-article responsiveness test. The client and server import the pure parser
+in `src/server/search-query.ts`. Archive searches compile its tree to SQL.
+`ArticleSearchEvaluator` tests one article against the same tree. Callers can
+supply folder names, saved full text and a clock. Close the evaluator after a
+batch to release its in-memory FTS tokenizer and index.
 
 [Reader routes](reader-routes.md) documents schema v12, link numbers, legacy
 bookmarks and nested offline routes.

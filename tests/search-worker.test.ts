@@ -64,6 +64,8 @@ it('bounds admission, removes cancelled queued jobs and resumes the queue after 
   const first = service.search(all, { query: 'the' }, active.signal).catch(error => error)
   const waiting = Array.from({ length: 8 }, (_, i) => service.search(all, { query: 'the' }, i === 0 ? queued.signal : undefined).catch(error => error))
   await expect(service.search(all, { query: 'the' })).rejects.toThrow(/busy/)
+  await expect(service.select(all, {}, { kind: 'preview', withRevisions: true })).rejects.toThrow(/busy/)
+  await expect(service.search(all, { query: 'x '.repeat(257) })).rejects.toThrow(/256 search terms/)
   queued.abort(); active.abort()
   expect(await first).toMatchObject({ message: 'Search cancelled.' })
   const results = await Promise.all(waiting)
@@ -132,4 +134,24 @@ it('limits page transfer without truncating the saved match set', async () => {
   const next = await service.search(all, { query: 'the', limit: 999, continuation: page.continuation })
   expect(next.items).toHaveLength(50)
   expect(next.continuation).toBe('')
+})
+
+it('marks below an auto-read anchor using its original snapshot and current candidate eligibility', async () => {
+  const options = { query: 'is:unread', unreadOnly: true, limit: 2 }
+  const page = await service.search(all, options)
+  const anchor = page.items[1]
+  expect(anchor.id).toBe('10')
+  sql(db => db.exec("UPDATE entries SET read=1,state_revision=1 WHERE id IN ('10','8')"))
+  database.upsertEntries([{ ...entry(99), timestamp: 5 }])
+  const selection = { kind: 'relative', anchorId: anchor.id, direction: 'below', snapshot: anchor.searchSnapshot, withRevisions: true } as const
+  const below = await service.select(all, options, selection)
+  expect(below.revisions).toEqual(Object.fromEntries(below.ids.map(id => [id, 0])))
+  expect(below.ids).toEqual(['9', '7', '6', '5', '4', '3', '2', '1', '0'])
+  await expect(service.select(all, { ...options, query: 'is:starred' }, selection)).rejects.toThrow(/expired/)
+  const refreshed = { ...selection, displayedIds: ['7', '11', '10', '99'] }
+  expect((await service.select(all, options, refreshed)).ids).toEqual(['99', '9', '6', '5', '4', '3', '2', '1', '0'])
+  expect((await service.select(all, options, { ...refreshed, direction: 'above' })).ids).toEqual(['7', '11'])
+  const preview = await service.select(all, { query: 'url:/9' }, { kind: 'preview', withRevisions: true })
+  expect(preview.revisions).toEqual({ '9': 0, '99': 0 })
+  expect(preview.ids.sort()).toEqual(['9', '99'])
 })
