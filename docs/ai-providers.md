@@ -124,6 +124,9 @@ to None. Selecting Codex requires its worker and login; see the
 remain separate when switching providers. Briefings use the existing
 `recap/editorial-profile.md` with either provider.
 
+The worker installs one CLI, Codex. Its pinned npm package includes native
+Linux amd64 and arm64 binaries. The same worker setup works on both architectures.
+
 ## Protocol and limits
 
 Batch requests first send `response_format: json_schema`. A 400 or 422 response

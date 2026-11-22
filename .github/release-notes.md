@@ -16,8 +16,8 @@ See the [changelog](https://github.com/cliophate/paper-reader/blob/v0.2.0-alpha.
 ## Install or upgrade
 
 Follow the [quick start](https://github.com/cliophate/paper-reader/blob/v0.2.0-alpha.3/README.md#quick-start).
-Start new installations in standalone mode. Runtime and AI images target Linux
-amd64. The runtime archive does not include the AI worker.
+Start new installations in standalone mode. The release archive contains the
+reader. Pull the separate `-ai` image if you use the Codex worker.
 
 Before upgrading, stop Paper, briefing commands and the optional AI worker.
 Back up AI login files when used. Pull and recreate the runtime and optional

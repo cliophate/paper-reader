@@ -29,6 +29,8 @@ Start new installations in standalone mode. For an existing installation, follow
 the [upgrade guide](docs/recovery.md#upgrade-from-020-alpha1-to-020-alpha2).
 
 You need Docker Compose 2.24.4 or newer. The 0.2.0-alpha.3 images support Linux amd64.
+On a Raspberry Pi 4 or 5 with a 64-bit OS, or another Linux ARM64 server,
+[build from source](#build-from-source) until the first ARM64 release.
 Standalone mode needs one Paper container and a persistent data directory. No
 FreshRSS or optional integration credentials are needed.
 
@@ -199,6 +201,11 @@ loop. Article cleanup avoids known repeated-markup scans; very deep or large
 HTML still has a processing cost.
 
 ## Build from source
+
+The reader and optional Codex worker support Linux amd64 and arm64.
+For a library around 200,000 articles, budget 1 GiB of RAM for Paper plus
+memory for the OS and any other containers. The Reader API scale test checks
+that the peak RSS of Paper and its child processes stays below 1 GiB.
 
 Clone the repository at the tag or commit you want to build, then run
 `sh scripts/setup.sh` if you do not already have private configuration. From

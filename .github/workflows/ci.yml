@@ -90,11 +90,34 @@ jobs:
       - run: python3 scripts/test-miniflux-installation.py
         env:
           MINIFLUX_TEST_VERSION: "2.3.3"
+  image-arm64:
+    needs: application
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - run: docker build --platform linux/arm64 --target runtime --build-arg SOURCE_REVISION="$GITHUB_SHA" -t paper-public:test .
+      - name: Check standalone startup
+        run: |
+          container=$(docker run -d -e PAPER_BACKEND=standalone -p 127.0.0.1::8080 paper-public:test)
+          trap 'docker rm -f "$container" >/dev/null' EXIT
+          address=$(docker port "$container" 8080/tcp)
+          curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-delay 1 --max-time 2 "http://$address/health"
   ai-image:
+    name: ${{ matrix.check }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - check: ai-image
+            runner: ubuntu-24.04
+          - check: ai-image-arm64
+            runner: ubuntu-24.04-arm
     needs: application
     # Image builds need a Docker daemon. Self-hosted runners may not provide one.
     if: github.server_url == 'https://github.com'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

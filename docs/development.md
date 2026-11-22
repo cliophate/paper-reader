@@ -208,9 +208,14 @@ docker build --target ai -t paper-public:ai-test .
 python3 scripts/test-ai-worker.py --real
 ```
 
-CI runs this in `ai-image`; release publishing runs it before pushing the runtime
-and `-ai` worker images. Failure blocks either job. The fixture changes only the
-provider URL and authentication requirement. All normal runner sandbox and
+CI runs this test on native amd64 and arm64 runners in `ai-image` and
+`ai-image-arm64`. The `image-arm64` job also starts a standalone reader and
+checks `/health`. On a release tag, each runner tests its reader and worker
+by digest. After both pass, the release workflow publishes the version and
+`-ai` tags and a checksummed reader archive for each architecture.
+
+The fixture changes only the provider URL and authentication requirement.
+All normal runner sandbox and
 tool-disabling flags remain in effect. It forces direct `apply_patch` calls
 through both `codex exec` and the discussion app-server, and checks identical
 missing-file results with a synthetic file present and absent on Paper's side.
