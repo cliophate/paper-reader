@@ -54,7 +54,9 @@ export async function openCoordinatedStorage(directory: string, options: {
       // Reacquire shared and inspect again before opening application storage.
     } catch (error) {
       lock?.release()
-      const busy = error instanceof StateLockError ? error.busy : (error as { errcode?: number }).errcode === 5
+      const code = (error as { errcode?: number }).errcode ?? 0
+      // Extended codes such as SQLITE_BUSY_RECOVERY carry SQLITE_BUSY in the low byte.
+      const busy = error instanceof StateLockError ? error.busy : (code & 0xff) === 5
       if (!busy || Date.now() >= deadline) throw error
       await delay(10)
     }

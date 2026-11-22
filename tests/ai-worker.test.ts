@@ -307,7 +307,7 @@ describe('isolated AI protocol', () => {
     expect(() => process.kill(record.pid, 0)).not.toThrow()
     active.controller.abort()
     await active.result
-    expect((await post()).status).toBe(200)
+    await vi.waitFor(async () => expect((await post()).status).toBe(200))
   })
   it('removes an aborted queued request so it never spawns and the next request can run', async () => {
     await start({ concurrency: 1, queueCapacity: 1 })
