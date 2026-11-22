@@ -3,6 +3,7 @@ import { request as httpsRequest } from 'node:https'
 import { PassThrough, Transform, Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib'
+import type { FeedRedirect } from '../shared/feed-checks.js'
 import { HttpUrlPolicyError, resolveHttpUrl } from './network-policy.js'
 
 export type FeedHttpErrorCode = 'policy' | 'limit' | 'encoding' | 'redirect' | 'timeout' | 'aborted' | 'network'
@@ -30,6 +31,7 @@ export interface BoundedFetchOptions {
   acquire?: (url: URL, signal: AbortSignal) => Promise<() => void>
 }
 export interface BoundedFetchResult {
+  redirects: FeedRedirect[]
   status: number
   url: string
   text: string
@@ -127,6 +129,7 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
   try {
     let url: URL
     try { url = new URL(input) } catch { throw new FeedHttpError('policy', 'Enter a complete HTTP or HTTPS URL.') }
+    const redirects: BoundedFetchResult['redirects'] = []
     for (let hop = 0; ; hop++) {
       signal.throwIfAborted()
       url.hash = ''
@@ -164,9 +167,10 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
           response.destroy()
           if (!location || hop >= limits.maxRedirects) throw new FeedHttpError('redirect', 'The response has an invalid or excessive redirect.')
           try { url = new URL(location, url) } catch { throw new FeedHttpError('redirect', 'The response has an invalid redirect URL.') }
+          redirects.push({ status, url: url.href })
           continue
         }
-        const result = { status, url: url.href, contentType: header(response, 'content-type'),
+        const result = { status, redirects, url: url.href, contentType: header(response, 'content-type'),
           etag: validEtag(header(response, 'etag')), lastModified: validLastModified(header(response, 'last-modified')),
           retryAfter: header(response, 'retry-after').slice(0, 128) || undefined, conditional: Boolean(etag || lastModified) }
         if (status === 304 || status === 204 || options.skipBodyStatuses?.includes(status)) {

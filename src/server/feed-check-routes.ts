@@ -4,6 +4,8 @@ import type { StandaloneRuntime } from './standalone-runtime.js'
 import type { BackendIdentity } from './identity.js'
 import type { FeedChecksView } from '../shared/feed-checks.js'
 import { OrganizationError } from './organization.js'
+import { portableUrl, subscriptionUrl } from './opml.js'
+import { DEFAULT_STALE_DAYS, feedMove, validStaleDays } from './feed-maintenance.js'
 import { MANUAL_CHECK_COOLDOWN_MS } from './feed-check-settings.js'
 
 export function feedCheckRouter(database: PaperDatabase, backend: BackendIdentity, runtime?: StandaloneRuntime) {
@@ -18,7 +20,10 @@ export function feedCheckRouter(database: PaperDatabase, backend: BackendIdentit
       feeds: feeds.flatMap(feed => {
         const state = database.feedFetch.get(backend.id, feed.id)
         if (!state) return []
-        return [{ feedId: feed.id, lastSuccessAt: state.lastSuccessAt, nextFetchAt: state.nextFetchAt,
+        // Before redirect history, the collector already kept the last successful response URL.
+        const finalUrl = state.validatorUrl && state.validatorUrl !== subscriptionUrl(state.url) ? portableUrl(state.validatorUrl) : ''
+        return [{ feedId: feed.id, move: feedMove(state), finalUrl: finalUrl || undefined, publisherSiteUrl: state.publisherSiteUrl || undefined,
+          lastSuccessAt: state.lastSuccessAt, nextFetchAt: state.nextFetchAt,
           failures: state.failures, lastError: state.lastError, lastStatus: state.lastStatus,
           retryAfterUntil: state.retryAfterUntil, cooldownUntil: state.lastAttemptAt ? state.lastAttemptAt + MANUAL_CHECK_COOLDOWN_MS : 0,
           intervalMinutes: state.intervalMinutes, state: state.leaseUntil > Date.now() ? 'running' : runtime.checkState(feed.id) }]
@@ -26,6 +31,19 @@ export function feedCheckRouter(database: PaperDatabase, backend: BackendIdentit
   }
   router.use((_request, response, next) => { response.set('Cache-Control', 'no-store'); next() })
   router.get('/', (_request, response) => response.json(snapshot()))
+  router.get('/maintenance', (_request, response) => {
+    const saved = database.getSyncValue('feed_stale_days')
+    response.json({ staleDays: saved ? JSON.parse(saved) : DEFAULT_STALE_DAYS, articleCounts: database.feedArticleCounts() })
+  })
+  router.patch('/maintenance', (request, response) => {
+    const days = request.body?.staleDays
+    if (!validStaleDays(days)) {
+      response.status(400).json({ error: 'Enter three increasing whole numbers from 1 to 36500 days.' })
+      return
+    }
+    database.setSyncValue('feed_stale_days', JSON.stringify(days))
+    response.json({ staleDays: days })
+  })
   router.post('/:action', (request, response) => {
     try {
       if (!runtime) { response.status(400).json({ error: `${backend.kind === 'miniflux' ? 'Miniflux' : 'FreshRSS'} manages feed checks and intervals.` }); return }

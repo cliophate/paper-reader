@@ -58,6 +58,13 @@ folder or change the default interval. Each feed can override that interval,
 from 5 minutes to one day. Manual checks respect publisher delays and a
 one-minute cooldown. Search and reading state work immediately.
 
+In **Manage feeds**, open **Moved feeds** to review standalone redirects and
+publisher-declared moves. **Use new address** checks the address and updates
+the existing subscription. Open **Duplicates** to compare folders, article
+counts and last posts before choosing whether to unsubscribe. **Last post
+filters** sets the age bands for all your devices. The defaults are 90, 182 and
+365 days. Quiet feeds stay out of **Needs attention** unless a check fails.
+
 Paper saves feed icons in the background. If you migrated from FreshRSS, keep
 it running until Paper has copied the icons you want to preserve. For a private
 FreshRSS address, include its exact origin in `PAPER_TRUSTED_FEED_ORIGINS` while

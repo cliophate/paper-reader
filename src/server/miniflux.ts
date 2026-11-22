@@ -150,12 +150,19 @@ export class MinifluxClient implements ReaderBackend {
   private mapFeed(value: unknown, unread = 0): Feed {
     const row = object(value), category = object(row.category)
     const checked = date(row.checked_at)
+    const errors = row.parsing_error_count == null ? undefined : count(row.parsing_error_count)
+    const message = text(row.parsing_error_message)
+    // Upstream diagnostics can quote a request URL, custom header or feed credential.
+    const privateValues = [this.config.apiKey, row.password, row.username, row.cookie, row.proxy_url, row.webhook_url, row.apprise_service_urls]
+    const safeMessage = errors && !privateValues.some(value => typeof value === 'string' && value && message.includes(value))
+      && !/authorization|bearer |cookie|password|token|api.?key/i.test(message)
+      ? message.replace(/https?:\/\/[^\s"<>]+/gi, '[URL]').slice(0, 500) : ''
     return {
       id: this.id('feed', row.id), title: decodeHtmlText(text(row.title)),
       url: portableUrl(text(row.feed_url)), siteUrl: portableUrl(text(row.site_url)), iconUrl: '',
       categories: [text(category.title)], unread, lastPublishedAt: null, lastCheckedAt: checked,
-      broken: count(row.parsing_error_count ?? 0) > 0,
-      lastErrorAt: count(row.parsing_error_count ?? 0) > 0 ? checked : null,
+      broken: Boolean(errors), parsingErrorCount: errors, parsingErrorMessage: safeMessage,
+      lastErrorAt: null,
     }
   }
 

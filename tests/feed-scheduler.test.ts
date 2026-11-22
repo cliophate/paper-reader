@@ -1,4 +1,4 @@
-import { DATABASE_VERSION } from '../src/server/auth-schema.js'
+import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -455,4 +455,55 @@ describe('schema v9 recovery', () => {
     expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
     expect(fs.readFileSync(`${file}.before-feed-fetch-v9`)).toEqual(backup)
   })
+})
+
+it('records mixed redirects and publisher moves across restart, 304, a new body and URL repair', async () => {
+  let first = 301, second = 307, declared = true, status = 200
+  const origin = await server((req, res) => {
+    if (req.url === '/old' || req.url === '/next') {
+      res.writeHead(req.url === '/old' ? first : second, { Location: req.url === '/old' ? '/next' : '/final' })
+      res.end(); return
+    }
+    res.writeHead(status, { ETag: '"move"' })
+    res.end(status === 304 ? '' : rss().replace('<channel>', '<channel xmlns:i="http://www.itunes.com/dtds/podcast-1.0.dtd">' +
+      (declared ? '<i:new-feed-url>new-feed</i:new-feed-url>' : '')))
+  })
+  const id = save(origin + '/old')
+  const { feedMove } = await import('../src/server/feed-maintenance')
+  async function check() { due(id); await scheduler(origin).runDue(); return feedMove(state(id)) }
+  expect(await check()).toEqual({ declaredUrl: origin + '/new-feed', suggestedUrl: origin + '/new-feed',
+    redirects: [{ status: 301, url: origin + '/next' }, { status: 307, url: origin + '/final' }] })
+  reopen(); status = 304
+  expect((await check())?.declaredUrl).toBe(origin + '/new-feed')
+  declared = false; status = 200
+  expect(await check()).toMatchObject({ declaredUrl: '', suggestedUrl: origin + '/next' })
+  first = 302; second = 308
+  expect(await check()).toMatchObject({ suggestedUrl: '' })
+  first = 308
+  expect(await check()).toMatchObject({ suggestedUrl: origin + '/final' })
+  save(origin + '/final', id)
+  expect(feedMove(state(id))).toBeUndefined()
+  expect(await check()).toBeUndefined()
+})
+
+it('backs up the previous schema and keeps schedules and subscriptions through the maintenance migration', () => {
+  const id = save('https://example.test/old')
+  const before = state(id)
+  const previousVersion = FEED_MAINTENANCE_VERSION - 1
+  db.close()
+  sql(c => c.exec(`
+    ALTER TABLE feed_fetch_state DROP COLUMN declared_url;
+    ALTER TABLE feed_fetch_state DROP COLUMN publisher_site_url;
+    ALTER TABLE feed_fetch_state DROP COLUMN redirects_json;
+    ALTER TABLE feeds DROP COLUMN parsing_error_count;
+    ALTER TABLE feeds DROP COLUMN parsing_error_message;
+    PRAGMA user_version = ${previousVersion};`))
+  db = new PaperDatabase(file)
+  expect(state(id)).toEqual(before)
+  const backup = new DatabaseSync(`${file}.before-feed-maintenance-v${FEED_MAINTENANCE_VERSION}`, { readOnly: true })
+  try {
+    expect(backup.prepare('PRAGMA user_version').get()?.user_version).toBe(previousVersion)
+    expect(backup.prepare('SELECT url FROM feeds WHERE id = ?').get(id)?.url).toBe(before.url)
+    expect(backup.prepare("SELECT 1 FROM pragma_table_info('feed_fetch_state') WHERE name = 'declared_url'").get()).toBeUndefined()
+  } finally { backup.close() }
 })

@@ -93,3 +93,18 @@ it('rejects checks when collection is disabled', async () => {
   expect(view.enabled).toBe(false)
   expect((await post('now', { ...revision(view), feedId })).body.error).toMatch(/disabled/)
 })
+
+it.each([false, 'freshrss', 'miniflux'] as const)('stores ordered last-post bands for backend %s', async remote => {
+  await mount(remote)
+  const url = base + '/maintenance'
+  const get = async () => (await fetch(url)).json()
+  const save = (staleDays: unknown) => fetch(url, { method: 'PATCH', headers: {
+    'Content-Type': 'application/json', Origin: 'https://paper.example.test',
+  }, body: JSON.stringify({ staleDays }) })
+  expect(await get()).toEqual({ staleDays: [90, 182, 365], articleCounts: {} })
+  expect((await save([7, 30, 60])).status).toBe(200)
+  for (const invalid of [null, [0, 1, 2], [1, 1, 2], [3, 2, 1], [1, 2], [1, '2', 3], [1, 2, 3.5]]) {
+    expect((await save(invalid)).status).toBe(400)
+  }
+  expect((await get()).staleDays).toEqual([7, 30, 60])
+})

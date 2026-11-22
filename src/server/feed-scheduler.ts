@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import type { PaperDatabase } from './db.js'
 import { boundedFetch, FeedHttpError, FEED_HTTP_DEFAULTS, validLastModified, type BoundedFetchOptions } from './feed-http.js'
 import type { FeedLease, FetchCompletion } from './feed-fetch-state.js'
+import { portableUrl } from './opml.js'
 import { ingestFeed } from './feed-ingestion.js'
 
 export interface FeedSchedulerOptions {
@@ -131,6 +132,7 @@ export class StandaloneFeedScheduler {
   private async fetch(lease: FeedLease, signal?: AbortSignal): Promise<{ kind: 'fetched' | 'notModified' | 'failed' | 'stale'; ambiguous: number }> {
     let status = 0
     let retryAfter: string | undefined
+    let redirectsJson: string | undefined
     let discardValidators = false
     try {
       const response = await boundedFetch(lease.url, { ...this.options.http, timeoutMs: this.timeout,
@@ -138,6 +140,7 @@ export class StandaloneFeedScheduler {
         validators: { url: lease.validatorUrl, etag: lease.etag, lastModified: lease.lastModified },
         acquire: (url, signal) => this.acquire(url, signal) })
       signal?.throwIfAborted()
+      redirectsJson = JSON.stringify(response.redirects.map(hop => ({ status: hop.status, url: portableUrl(hop.url) })))
       status = response.status
       retryAfter = response.retryAfter
       if (status === 304 && (!response.conditional || !lease.lastSuccessAt)) {
@@ -150,7 +153,7 @@ export class StandaloneFeedScheduler {
         ?? this.db.feedFetch.settings(this.backendId).intervalMinutes) * 60_000)
       const update: FetchCompletion = { nextFetchAt: Math.max(now + interval, retryAfterTime(retryAfter, now)),
         retryAfterUntil: retryAfterTime(retryAfter, now), failures: 0,
-        lastStatus: status, lastError: '', lastSuccessAt: now,
+        redirectsJson, lastStatus: status, lastError: '', lastSuccessAt: now,
         etag: response.etag ?? (status === 304 ? lease.etag : ''),
         lastModified: response.lastModified ?? (status === 304 ? lease.lastModified : ''), validatorUrl: response.url }
       const result = this.db.feedFetch.complete(lease, now, update, () => {
@@ -158,6 +161,9 @@ export class StandaloneFeedScheduler {
         const ingested = ingestFeed(this.db, { backendId: this.backendId, subscriptionId: lease.subscriptionId,
           endpointGeneration: lease.endpointGeneration, xml: response.text, requestUrl: lease.url,
           responseUrl: response.url, fetchedAt: new Date(now).toISOString() })
+        update.publisherSiteUrl = ingested.feed.siteUrl.length <= 4096 ? portableUrl(ingested.feed.siteUrl) : ''
+        const declared = ingested.feed.declaredUrl || ''
+        update.declaredUrl = declared.length <= 4096 ? portableUrl(declared) : ''
         update.ambiguous = ingested.ambiguous
         return ingested.ambiguous
       })
@@ -169,7 +175,7 @@ export class StandaloneFeedScheduler {
       // Jitter spreads recovery work without shortening the publisher's delay.
       const nextFetchAt = Math.max(now + Math.round(backoff * (0.8 + Math.random() * 0.2)), retryAfterTime(retryAfter, now))
       const lastError = error instanceof FeedHttpError ? error.code : signal?.aborted ? 'aborted' : status === 200 ? 'ingestion' : `http-${status}`
-      const result = this.db.feedFetch.complete(lease, now, { nextFetchAt, failures, lastStatus: status, lastError, retryAfterUntil: retryAfterTime(retryAfter, now),
+      const result = this.db.feedFetch.complete(lease, now, { nextFetchAt, failures, redirectsJson, lastStatus: status, lastError, retryAfterUntil: retryAfterTime(retryAfter, now),
         ...(discardValidators ? { etag: '', lastModified: '', validatorUrl: '' } : {}) }, () => {})
       return { kind: result.committed ? 'failed' : 'stale', ambiguous: 0 }
     }

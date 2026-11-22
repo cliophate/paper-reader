@@ -1,8 +1,9 @@
+import { migrateFeedMaintenance } from './feed-maintenance.js'
 import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
 import { migrateGreader } from './greader-schema.js'
-import { DATABASE_VERSION, migrateAuth } from './auth-schema.js'
+import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION, migrateAuth } from './auth-schema.js'
 import { AuthStore } from './auth-store.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import crypto from 'node:crypto'
@@ -231,6 +232,10 @@ export class PaperDatabase {
         if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < 20) {
           if (version > 0) this.backupBeforeMigration(20, 'briefing-delivery')
           migrateBriefingDelivery(this.db)
+        }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < FEED_MAINTENANCE_VERSION) {
+          if (version > 0) this.backupBeforeMigration(FEED_MAINTENANCE_VERSION, 'feed-maintenance')
+          migrateFeedMaintenance(this.db)
         }
       }
       this.retention = new RetentionStore(this.db, ids => { this.commitLocalEntryState(this.activeBackendId, ids, 'read', { origin: 'retention' }) })
@@ -852,8 +857,8 @@ export class PaperDatabase {
       const upsertFeed = this.db.prepare(`
         INSERT INTO feeds (
           id, title, url, site_url, icon_url, last_published_at, last_checked_at,
-          last_error_at, broken, active, synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+          last_error_at, broken, parsing_error_count, parsing_error_message, active, synced_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
         ON CONFLICT(id) DO UPDATE SET
           title = excluded.title,
           url = excluded.url,
@@ -863,6 +868,8 @@ export class PaperDatabase {
           last_checked_at = excluded.last_checked_at,
           last_error_at = excluded.last_error_at,
           broken = excluded.broken,
+          parsing_error_count = excluded.parsing_error_count,
+          parsing_error_message = excluded.parsing_error_message,
           active = 1,
           synced_at = excluded.synced_at
       `)
@@ -870,7 +877,7 @@ export class PaperDatabase {
         if (this.activeBackendId) this.identities.subscription(this.activeBackendId, feed.id, feed.id)
         upsertFeed.run(
           feed.id, feed.title, feed.url, feed.siteUrl, feed.iconUrl, feed.lastPublishedAt,
-          feed.lastCheckedAt, feed.lastErrorAt, feed.broken ? 1 : 0, now,
+          feed.lastCheckedAt, feed.lastErrorAt, feed.broken ? 1 : 0, feed.parsingErrorCount ?? null, feed.parsingErrorMessage || '', now,
         )
       }
 
@@ -1727,6 +1734,11 @@ export class PaperDatabase {
     }
   }
 
+  feedArticleCounts(): Record<string, number> {
+    const rows = this.db.prepare('SELECT feed_id, COUNT(*) AS total FROM entries GROUP BY feed_id').all()
+    return Object.fromEntries(rows.map(row => [String(row.feed_id), Number(row.total)]))
+  }
+
   entryCount(): number {
     const row = this.db.prepare('SELECT COUNT(*) AS count FROM entries').get() as { count: number }
     return Number(row.count || 0)
@@ -2238,6 +2250,8 @@ function feedFromRow(row: Record<string, string | number | null>, categories: st
     lastCheckedAt: row.last_checked_at ? String(row.last_checked_at) : null,
     lastErrorAt: row.last_error_at ? String(row.last_error_at) : null,
     broken: Boolean(row.broken),
+    ...(row.parsing_error_count != null ? { parsingErrorCount: Number(row.parsing_error_count) } : {}),
+    ...(row.parsing_error_message ? { parsingErrorMessage: String(row.parsing_error_message) } : {}),
   }
 }
 

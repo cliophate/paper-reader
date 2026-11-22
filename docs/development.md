@@ -33,6 +33,11 @@ Schema v20 adds briefing delivery jobs. The migration saves
 `paper.sqlite.before-briefing-delivery-v20` before upgrading. Delivery tests use
 a loopback SMTP relay with synthetic messages and credentials.
 
+Schema v21 records standalone redirect chains and publisher-declared addresses
+alongside the fetch lease. It also stores Miniflux parsing errors with cached
+feed metadata. The migration saves `paper.sqlite.before-feed-maintenance-v21`
+before upgrading.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh

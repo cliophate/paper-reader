@@ -1,4 +1,18 @@
+export interface FeedRedirect { status: number; url: string }
+export interface FeedMove {
+  redirects: FeedRedirect[]
+  declaredUrl: string
+  suggestedUrl: string
+}
+export type StaleDays = [number, number, number]
+export interface FeedMaintenance {
+  staleDays: StaleDays
+  articleCounts: Record<string, number>
+}
 export interface FeedCheckStatus {
+  finalUrl?: string
+  publisherSiteUrl?: string
+  move?: FeedMove
   feedId: string
   lastSuccessAt: number
   nextFetchAt: number

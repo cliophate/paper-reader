@@ -23,6 +23,7 @@ export interface ParsedFeedEntry {
   thumbnailUrl: string
 }
 export interface ParsedFeed {
+  declaredUrl?: string
   format: 'rss' | 'atom' | 'rdf' | 'json'
   title: string
   siteUrl: string
@@ -244,10 +245,11 @@ export function parseFeed(xml: string, responseUrl: string): ParsedFeed {
       thumbnailUrl: enclosure ? feedUrl(attribute(enclosure, 'url'), enclosure.base) : '',
     }
   })
-  return deduplicate({ format, title, siteUrl, entries, conflictingExternalIds: [] })
+  const declaredUrl = linkText(child(channel, 'new-feed-url', 'http://www.itunes.com/dtds/podcast-1.0.dtd'))
+  return deduplicate({ format, title, siteUrl, declaredUrl, entries, conflictingExternalIds: [] })
 }
 
-function deduplicate({ format, title, siteUrl, entries }: ParsedFeed): ParsedFeed {
+function deduplicate({ entries, ...metadata }: ParsedFeed): ParsedFeed {
   // A reused source ID cannot identify any of its conflicting items. Keep
   // distinct items for fingerprint matching and collapse exact deliveries.
   const seen = new Map<string, string>()
@@ -267,5 +269,5 @@ function deduplicate({ format, title, siteUrl, entries }: ParsedFeed): ParsedFee
   for (const entry of unique) {
     if (entry.externalId && conflicts.has(entry.externalId)) delete entry.externalId
   }
-  return { format, title, siteUrl, entries: unique, conflictingExternalIds: [...conflicts] }
+  return { ...metadata, entries: unique, conflictingExternalIds: [...conflicts] }
 }

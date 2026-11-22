@@ -629,6 +629,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .feed-search input { height: 34px; border: 0; padding: 0; }
 .feed-filters { min-width: 0; flex: 1; display: flex; gap: 3px; padding: 3px; border-radius: 8px; background: var(--soft); }
 .feed-filters button { flex: 1; min-width: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); padding: 7px 6px; cursor: pointer; font-size: 11px; white-space: nowrap; }
+.feed-filters select { min-width: 0; max-width: 11em; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; font-size: 12px; }
 .feed-filters button.active { background: var(--panel-strong); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / 9%); }
 .feed-manager-grid { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(390px, 1.12fr) minmax(330px, .88fr); }
 .feed-manager-list { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
@@ -900,7 +901,8 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
     overflow: visible;
   }
   .feed-filters button { min-width: 0; white-space: normal; }
-  .feed-filters button:first-child { grid-column: 1 / -1; }
+  .feed-filters select { max-width: none; min-height: 30px; }
+  .feed-manager.mobile-details-open .feed-thresholds { display: none; }
   .feed-manager-grid { grid-template-columns: 1fr; }
   .feed-manager-list { max-height: none; border: 0; }
   .feed-group-scroll { height: 100%; }
@@ -1288,3 +1290,9 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
 .access-settings code { overflow-wrap: anywhere; }
 .access-form .access-toggle { display: flex; align-items: center; }
 .access-form input[type="checkbox"] { width: auto; }
+
+.feed-thresholds form { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; }
+.feed-thresholds form label { margin: 0; }
+.feed-thresholds input { width: 8em; }
+.feed-comparison-note { padding: 0 12px; font-size: 12px; color: var(--muted); }
+.feed-move { overflow-wrap: anywhere; }

@@ -4,6 +4,7 @@ import { RetentionService } from './retention.js'
 import { retentionRouter } from './retention-routes.js'
 import { AuthConnections } from './auth-connections.js'
 import { authGate, authRoutes, cookie, trustedProxyHops } from './auth-routes.js'
+import { feedMove } from './feed-maintenance.js'
 import { feedCheckRouter } from './feed-check-routes.js'
 import { withRequestSignal } from './request-signal.js'
 import { AI_UNAVAILABLE, warnUnsafeAi } from './ai-client.js'
@@ -758,8 +759,14 @@ app.post('/api/feeds/preview', asyncRoute(async (request, response) => {
 app.post('/api/feeds/repair', asyncRoute(async (request, response) => {
   const id = String(request.body?.id || '')
   backend.validateFeedId(id, 'repair')
-  const preview = await previewFeed(String(request.body?.url || ''), config.trustedFeedOrigins)
-  await synchronizer.repairFeed(id, preview.url, String(request.body?.expectedUrl || ''))
+  const url = String(request.body?.url || '')
+  const preview = await previewFeed(url, config.trustedFeedOrigins)
+  const suggested = request.body?.suggested === true
+  if (suggested) {
+    const state = standalone && database.feedFetch.get(backend.identity.id, id)
+    if (!state || !url || feedMove(state)?.suggestedUrl !== url) throw new BackendValidationError('The suggested address changed. Check the feed details again.')
+  }
+  await synchronizer.repairFeed(id, suggested ? url : preview.url, String(request.body?.expectedUrl || ''))
   response.json({ ok: true })
 }))
 

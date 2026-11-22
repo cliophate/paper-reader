@@ -17,6 +17,7 @@ const iconBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAD
 let slowStarted = false, slowClosed = false, feedRequests = 0
 let slowIcons = false, slowIconStarted = false, slowIconClosed = false
 const fixture = http.createServer((request, response) => {
+  if (request.url === '/new.xml') return response.writeHead(302, { Location: '/mirror.xml' }).end()
   if (request.url === '/slow.xml') { slowStarted = true; response.on('close', () => { slowClosed = true }); return }
   if (request.url === '/') {
     return response.writeHead(200, { 'Content-Type': 'text/html' }).end('<head><link rel="icon" href="/icon.png"></head>')
@@ -27,7 +28,7 @@ const fixture = http.createServer((request, response) => {
   }
   feedRequests++
   response.setHeader('Content-Type', 'application/rss+xml')
-  response.end(`<rss version="2.0"><channel><title>Synthetic standalone feed</title><link>https://example.test</link><description>Disposable</description>
+  response.end(`<rss version="2.0"><channel xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><itunes:new-feed-url>/new.xml</itunes:new-feed-url><title>Synthetic standalone feed</title><link>https://example.test</link><description>Disposable</description>
   ${[1, 2].map(n => `<item><guid>standalone-${n}</guid><title>Standalone story ${n}</title><link>https://example.test/${n}</link><pubDate>${new Date().toUTCString()}</pubDate><description>Synthetic article content</description></item>`).join('')}</channel></rss>`)
 })
 fixture.listen(0, '127.0.0.1'); await once(fixture, 'listening')
@@ -127,7 +128,17 @@ try {
   const saved = (await request('/api/entries/item', { id: entry.id })).data.entry
   assert(saved.starred && !saved.read); assert.equal(saved.readingPosition, 0.42)
   assert.deepEqual(Buffer.from(await (await fetch(icon)).arrayBuffer()), iconBytes)
+  const move = (await request('/api/feed-checks')).data.feeds[0].move
+  assert.equal(move.suggestedUrl, feedOrigin + '/new.xml')
+  const repair = { id: feedId, expectedUrl: feedOrigin + '/feed.xml', suggested: true }
+  assert.equal((await request('/api/feeds/repair', { ...repair, url: feedOrigin + '/mirror.xml' })).status, 400)
+  assert.equal((await request('/api/feeds/repair', { ...repair, url: move.suggestedUrl })).status, 200)
   const current = (await request('/api/organization')).data
+  assert.equal(current.navigation.folders[0].title, 'Renamed folder')
+  assert.equal(current.navigation.folders[0].feeds[0].id, feedId)
+  assert.equal(current.navigation.folders[0].feeds[0].url, move.suggestedUrl)
+  const afterRepair = (await request('/api/entries/item', { id: entry.id })).data.entry
+  assert(afterRepair.starred && !afterRepair.read); assert.equal(afterRepair.readingPosition, 0.42)
   assert.equal((await request('/api/organization/commands', { expectedRevision: current.revision, commands: [{ type: 'unsubscribe', feedId }] })).data.results[0].status, 'applied')
   assert.equal((await request('/api/entries/item', { id: entry.id })).data.entry.id, entry.id)
   assert.equal((await request('/api/entries?kind=all&id=all&unread=0')).data.items.length, 2)

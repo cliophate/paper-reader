@@ -79,7 +79,8 @@ article pages follow upstream arrival IDs and Paper's existing remote search pat
 Refresh imports current Miniflux data. Miniflux owns publisher polling; Paper
 does not run the standalone collector in this mode. All categories and feeds,
 including hidden ones, are included so cached navigation and state use the same
-account scope. Feed health comes from Miniflux metadata. Missing icon and
+account scope. Manage feeds shows the last check and parsing error count supplied by Miniflux.
+When available, it also shows the error message with private details removed. Missing icon and
 publication-summary metadata use empty defaults. Protected feed icons are not
 fetched in the initial implementation.
 

@@ -84,11 +84,35 @@ FreshRSS manages its own upstream checks. Paper hides standalone controls and
 explains this in feed settings. Refresh continues importing from FreshRSS.
 `PAPER_SYNC_ENABLED=false` disables both scheduled and manual collection.
 
+### Reviewing subscriptions
+
+Open **Moved feeds** for the redirect status and destination of each hop.
+**Use new address** checks the publisher's declared replacement, or the last
+address in an unbroken series of permanent redirects from the subscribed URL.
+Temporary redirects appear in the details. The repair keeps the subscription
+ID, folders and article state. A new fetch updates the details.
+
+**Duplicates** groups subscriptions with matching feed or redirect destinations,
+or the same site address and title. Address comparisons ignore HTTP versus
+HTTPS, a leading `www.`, trailing slashes and common tracking parameters.
+Compare the folders, number of articles stored in Paper and last post, then
+select a feed and confirm **Unsubscribe** if you want to remove it.
+
+**Last post filters** sets three ages in days for all devices. The defaults are
+90, 182 and 365. Each band starts on the day you enter. Feeds without a known
+publication date stay outside the age bands. Only fetch failures count toward
+**Needs attention**.
+
 ### API
 
 - `GET /api/feed-checks` returns check status, global and per-feed intervals,
   folders, a settings revision and an organization revision. It omits validators,
-  lease tokens and URLs. FreshRSS returns a disabled view.
+  lease tokens and credential-bearing query parameters. Standalone responses
+  include observed redirect hops and the publisher's declared feed and site URLs.
+  FreshRSS and Miniflux return a disabled check view.
+- `GET /api/feed-checks/maintenance` returns the last-post bands and counts of
+  articles stored in Paper. `PATCH` saves three increasing day counts in
+  `staleDays` for any backend.
 - `POST /api/feed-checks/now` accepts either `feedId` or `folderId`, with `null`
   for Uncategorized. It returns per-feed admission results: `queued`, `running`,
   `cooldown`, `retry-after`, `unavailable` or `queue-full`, plus a fresh snapshot.

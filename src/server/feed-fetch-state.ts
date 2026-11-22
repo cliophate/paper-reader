@@ -18,6 +18,9 @@ export interface FeedFetchState {
   failures: number
   etag: string
   lastModified: string
+  redirectsJson: string
+  publisherSiteUrl: string
+  declaredUrl: string
   validatorUrl: string
   lastSuccessAt: number
   lastStatus: number
@@ -35,6 +38,9 @@ export interface FetchCompletion {
   lastError: string
   etag?: string
   lastModified?: string
+  redirectsJson?: string
+  publisherSiteUrl?: string
+  declaredUrl?: string
   validatorUrl?: string
   lastSuccessAt?: number
   ambiguous?: number
@@ -45,6 +51,7 @@ function host(url: string): string {
 const projection = `backend_id AS backendId, subscription_id AS subscriptionId,
   endpoint_generation AS endpointGeneration, endpoint_url AS url, host,
   next_fetch_at AS nextFetchAt, available_at AS availableAt, failures,
+  redirects_json AS redirectsJson, declared_url AS declaredUrl, publisher_site_url AS publisherSiteUrl,
   etag, last_modified AS lastModified, validator_url AS validatorUrl,
   last_success_at AS lastSuccessAt, last_status AS lastStatus, last_error AS lastError,
   retry_after_until AS retryAfterUntil, last_attempt_at AS lastAttemptAt, interval_minutes AS intervalMinutes,
@@ -94,7 +101,7 @@ export class FeedFetchStore {
       ON CONFLICT(backend_id, subscription_id) DO UPDATE SET
         endpoint_generation = excluded.endpoint_generation, endpoint_url = excluded.endpoint_url, host = excluded.host,
         next_fetch_at = 0, available_at = 0, retry_after_until = 0, last_attempt_at = 0, failures = 0, etag = '', last_modified = '', validator_url = '',
-        last_success_at = 0, last_status = 0, last_error = '', ambiguous = 0, lease_token = '', lease_until = 0
+        redirects_json = '[]', declared_url = '', publisher_site_url = '', last_success_at = 0, last_status = 0, last_error = '', ambiguous = 0, lease_token = '', lease_until = 0
       WHERE endpoint_url != excluded.endpoint_url`).run(backendId, subscriptionId, randomUUID(), url, host(url))
   }
 
@@ -133,10 +140,11 @@ export class FeedFetchStore {
       const value = commit()
       this.db.prepare(`UPDATE feed_fetch_state SET next_fetch_at = ?, available_at = ?, failures = ?,
         last_status = ?, last_error = ?, etag = ?, last_modified = ?, validator_url = ?,
-        last_success_at = ?, ambiguous = ?, retry_after_until = ?, lease_token = '', lease_until = 0
+        redirects_json = ?, declared_url = ?, publisher_site_url = ?, last_success_at = ?, ambiguous = ?, retry_after_until = ?, lease_token = '', lease_until = 0
         WHERE backend_id = ? AND subscription_id = ?`).run(update.nextFetchAt, update.nextFetchAt, update.failures,
           update.lastStatus, update.lastError, update.etag ?? lease.etag, update.lastModified ?? lease.lastModified,
-          update.validatorUrl ?? lease.validatorUrl, update.lastSuccessAt ?? lease.lastSuccessAt,
+          update.validatorUrl ?? lease.validatorUrl, update.redirectsJson ?? lease.redirectsJson, update.declaredUrl ?? lease.declaredUrl,
+          update.publisherSiteUrl ?? lease.publisherSiteUrl, update.lastSuccessAt ?? lease.lastSuccessAt,
           update.ambiguous ?? lease.ambiguous, update.retryAfterUntil ?? lease.retryAfterUntil, lease.backendId, lease.subscriptionId)
       const checkedAt = new Date(now).toISOString()
       if (update.failures > 0) {

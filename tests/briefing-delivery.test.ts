@@ -1,3 +1,4 @@
+import { DATABASE_VERSION } from '../src/server/auth-schema'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -241,7 +242,7 @@ it('backs up schema v19 privately before migration and preserves saved briefings
   try {
     expect(storage.database.getBriefing(briefing.id)).toEqual(briefing)
     expect(storage.database.briefingDelivery.history()).toEqual([])
-    expect(storage.database.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(20)
+    expect(storage.database.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
   } finally { storage.close() }
   const name = config.databasePath + '.before-briefing-delivery-v20'
   expect(fs.statSync(name).mode & 0o777).toBe(0o600)
