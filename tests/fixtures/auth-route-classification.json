@@ -74,6 +74,7 @@
   "POST /api/internal/briefings/generate": "token",
   "POST /api/notes": "session",
   "POST /api/organization/commands": "session",
+  "POST /api/playback": "session",
   "POST /api/pulse/feedback": "session",
   "POST /api/pulse/visit": "session",
   "POST /api/reading": "session",

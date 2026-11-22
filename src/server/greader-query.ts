@@ -1,5 +1,6 @@
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { portableUrl } from './opml.js'
+import { entryEnclosures } from './enclosure-store.js'
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite'
 import { ReaderError } from './greader-auth.js'
 import sanitizeHtml from 'sanitize-html'
@@ -93,7 +94,8 @@ export function item(db: DatabaseSync, row: Row) {
   let content: string
   if (Buffer.byteLength(body) > 65536) content = `<p>${escape(String(row.content_text).slice(0, 7000))}</p><p><a href="${escape(url)}">Read the article</a></p>`
   else { content = sanitizeHtml(body); if (Buffer.byteLength(content) > 65536) content = `<p>${escape(String(row.content_text).slice(0, 7000))}</p><p><a href="${escape(url)}">Read the article</a></p>` }
-  return { id: longId(BigInt(row.sequence as bigint)), title: String(row.title), author: String(row.author), published: Math.floor((Date.parse(String(row.published_at)) || Number(row.first_seen_at)) / 1000),
+  const enclosure = entryEnclosures(db, String(row.id)).map(file => ({ href: file.url, type: file.type, length: file.size }))
+  return { ...(enclosure.length ? { enclosure } : {}), id: longId(BigInt(row.sequence as bigint)), title: String(row.title), author: String(row.author), published: Math.floor((Date.parse(String(row.published_at)) || Number(row.first_seen_at)) / 1000),
     crawlTimeMsec: String(row.first_seen_at), timestampUsec: String(BigInt(row.first_seen_at as bigint) * 1000n), canonical: [{ href: url }], alternate: [{ href: url, type: 'text/html' }], summary: { content },
     origin: { streamId: `feed/${row.feed_number}`, title: displayFeedTitle(String(row.origin_title)), htmlUrl: safeUrl(displayFeedUrl(String(row.site_url))) },
     categories: [READING, ...categories(db, String(row.feed_id)), ...(Number(row.read) ? [`${STATE}read`] : []), ...(Number(row.starred) ? [`${STATE}starred`] : [])] }

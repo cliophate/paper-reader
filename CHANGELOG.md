@@ -12,6 +12,8 @@
 - Manage feeds groups possible duplicates and lets you set last-post filters in days.
   In standalone mode, review redirects and use a publisher's new feed address
   while keeping folders, articles and reading state.
+- Play podcast episodes and video attachments in the reader. Paper remembers
+  your place across devices and skips media files when you save articles offline.
 - Pulse ranks active collections by recent reporting and shows the first 25.
   New collections need three articles from at least two publications within a week.
   Collections whose newest article is over seven days old move to the archive under Quiet.

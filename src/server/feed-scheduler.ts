@@ -182,6 +182,7 @@ export class StandaloneFeedScheduler {
             if (redact.text(entry.publishedAt) !== entry.publishedAt) entry.publishedAt = ''
             if (entry.externalId) entry.externalId = redact.text(entry.externalId)
             entry.contentHtml = redact.html(entry.contentHtml)
+            entry.enclosures = entry.enclosures.filter(file => redact.text(file.url) === file.url)
           }
         }
         // Service pending requests between parsing and the synchronous ingestion transaction.

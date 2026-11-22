@@ -1,4 +1,6 @@
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
+import { mediaEnclosures } from './enclosures.js'
+import { feedUrl } from './feed-parser.js'
 import { setTimeout as delay } from 'node:timers/promises'
 import { abortable } from './abort.js'
 import type { Config } from './config.js'
@@ -37,7 +39,7 @@ interface GReaderItem {
   alternate?: Array<{ href?: string }>
   content?: { content?: string }
   summary?: { content?: string }
-  enclosure?: Array<{ href?: string; type?: string }>
+  enclosure?: Array<{ href?: string; type?: string; length?: number; duration?: number }>
 }
 
 interface FeedHealth {
@@ -421,6 +423,9 @@ function mapEntry(item: GReaderItem): Entry {
     starred: (item.categories || []).includes(STARRED),
     readingMinutes: readingMinutes(contentHtml),
     thumbnailUrl,
+    enclosures: mediaEnclosures(item.enclosure || [], file => ({
+      url: feedUrl(file.href || ''), type: file.type, size: file.length, duration: file.duration,
+    })),
     kind: detectKind(feedTitle, url, item.origin?.htmlUrl || ''),
   }
 }

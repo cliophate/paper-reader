@@ -35,7 +35,7 @@ const fixture = http.createServer((request, response) => {
   feedRequests++
   response.setHeader('Content-Type', 'application/rss+xml')
   response.end(`<rss version="2.0"><channel xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><itunes:new-feed-url>/new.xml?hash=fixture-declared</itunes:new-feed-url><title>Synthetic standalone feed</title><link>https://example.test</link><description>Disposable</description>
-  ${[1, 2].map(n => `<item><guid>standalone-${n}</guid><title>Standalone story ${n}</title><link>https://example.test/${n}</link><pubDate>${new Date().toUTCString()}</pubDate><description>Synthetic article content</description></item>`).join('')}</channel></rss>`)
+  ${[1, 2].map(n => `<item><guid>standalone-${n}</guid><title>Standalone story ${n}</title><link>https://example.test/${n}</link><pubDate>${new Date().toUTCString()}</pubDate><description>Synthetic article content</description><enclosure url="https://media.example.test/${n}.mp3" type="audio/mpeg" length="123"/></item>`).join('')}</channel></rss>`)
 })
 fixture.listen(0, '127.0.0.1'); await once(fixture, 'listening')
 const probe = http.createServer().listen(0, '127.0.0.1'); await once(probe, 'listening')
@@ -128,6 +128,15 @@ try {
   assert.equal((await request('/api/undo', { token: changed.data.undoToken })).status, 200)
   await request('/api/entries/state', { ids: [entry.id], operation: 'star' })
   await request('/api/reading', { id: entry.id, position: 0.42 })
+  const playback = { id: entry.id, url: entry.enclosures[0].url, position: 25.5, updatedAt: Date.now() }
+  assert.equal((await request('/api/playback', { ...playback, position: -1 })).status, 400)
+  assert.equal((await request('/api/playback', { ...playback, position: null })).status, 400)
+  assert.equal((await request('/api/playback', { ...playback, url: 'https://example.test/missing' })).status, 404)
+  assert.equal((await request('/api/playback', playback)).status, 200)
+  assert.equal((await request('/api/playback', { ...playback, updatedAt: null })).status, 400)
+  const stale = await request('/api/playback', { ...playback, position: 2.5, updatedAt: playback.updatedAt - 1 })
+  assert.equal(stale.status, 200)
+  assert.deepEqual(stale.data, { position: 25.5, updatedAt: playback.updatedAt })
   for (const route of ['/api/readwise', '/api/notes', '/api/discussion/message']) assert.equal((await request(route, {})).status, 503)
   const organization = (await request('/api/organization')).data
   assert.equal(organization.backend, 'standalone'); assert(organization.capabilities.multipleMemberships)
@@ -137,6 +146,7 @@ try {
   assert.equal((await request('/api/status')).data.backendInstance, initial.backendInstance)
   assert.equal((await request('/api/feed-checks')).data.intervalMinutes, 30)
   const saved = (await request('/api/entries/item', { id: entry.id })).data.entry
+  assert.deepEqual(saved.enclosures, [{ url: playback.url, type: 'audio/mpeg', size: 123, position: 25.5, updatedAt: playback.updatedAt }])
   assert(saved.starred && !saved.read); assert.equal(saved.readingPosition, 0.42)
   assert.deepEqual(Buffer.from(await (await fetch(icon)).arrayBuffer()), iconBytes)
   const move = (await request('/api/feed-checks')).data.feeds[0].move

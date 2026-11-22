@@ -1,3 +1,4 @@
+import { EnclosurePlayers } from './components/EnclosurePlayers'
 import { AccessSettings } from './components/AccessSettings'
 import { OrganizationSidebar } from './components/OrganizationSidebar'
 import { FeedMark } from './components/FeedMark'
@@ -6,9 +7,10 @@ import type { OrganizationView } from '../shared/organization'
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createArticleBoundaryStore, type ArticleBoundaryStore } from './articleBoundaryStore'
 import { createArticleNavigation } from './articleNavigation'
-import { api, ApiError } from './api'
+import { api, ApiError, playback } from './api'
 import { useDialogFocus, useMenuFocus } from './dialogFocus'
 import { useReadingProgress } from './readingProgress'
+import { MAX_ENCLOSURES } from '../server/enclosure-limits'
 import { clearOffline, offlineArticles, removeOffline, saveOffline } from './offline'
 import { fullTextMode, setFullTextMode, type FullTextMode } from './fullTextPreferences'
 import { FeedOverrides } from './components/FeedOverrides'
@@ -199,7 +201,12 @@ export default function App() {
   const preparedStreamLoad = useRef<StreamRef | null>(null)
   const readerChromeTap = useRef<(GesturePoint & { pointerId: number }) | null>(null)
 
-  const selected = entries.find(entry => entry.id === selectedId) || null
+  const listedEntry = entries.find(entry => entry.id === selectedId) || null
+  const refreshOffline = libraryMode === 'offline' && online
+  const [offlineMedia, setOfflineMedia] = useState<(Pick<Entry, 'id' | 'enclosures'> & { useCached?: boolean }) | null>(null)
+  const selected = useMemo(() => listedEntry && refreshOffline && offlineMedia?.id === listedEntry.id && !offlineMedia.useCached
+    ? { ...listedEntry, enclosures: offlineMedia.enclosures }
+    : listedEntry, [listedEntry, refreshOffline, offlineMedia])
   const readerGeneration = useRef(0)
   useLayoutEffect(() => { readerGeneration.current += 1 }, [view, stream.kind, stream.id, unreadOnly, query, libraryMode, searchStream.kind, searchStream.id, searchUnread, after, before, pulseContext?.id])
   const currentReader = useRef({ stream, selected, previousContinuation, entries })
@@ -630,14 +637,38 @@ export default function App() {
     return () => window.clearTimeout(timer)
   }, [stream.kind, stream.id, unreadOnly, query, loadEntries, pendingLocation])
 
+  const checkedOnOpen = useRef('')
+  useLayoutEffect(() => {
+    if (checkedOnOpen.current !== selectedId) checkedOnOpen.current = ''
+  }, [selectedId])
   useEffect(() => {
     if (pendingLocation || libraryMode === 'offline' || !online || !selectedId || entries.some(entry => entry.id === selectedId)) return
     let cancelled = false
     api.entry(selectedId).then(result => {
-      if (!cancelled && result.entry) setEntries(current => current.some(entry => entry.id === result.entry!.id) ? current : [result.entry!, ...current])
+      if (cancelled || !result.entry) return
+      checkedOnOpen.current = result.entry.id
+      setEntries(current => current.some(entry => entry.id === result.entry!.id) ? current : [result.entry!, ...current])
     }).catch(error => !cancelled && notify(error instanceof Error ? error.message : 'Paper could not open that article'))
     return () => { cancelled = true }
   }, [entries, notify, selectedId, libraryMode, online, pendingLocation])
+
+  const checkMediaId = listedEntry && online && (refreshOffline || listedEntry.enclosuresUnchecked && status.backend === 'freshrss')
+    ? listedEntry.id : ''
+  useEffect(() => {
+    setOfflineMedia(null)
+    if (!checkMediaId || (!refreshOffline && checkedOnOpen.current === checkMediaId)) return
+    let cancelled = false
+    void api.entry(checkMediaId).then(({ entry }) => {
+      if (cancelled || !entry) return
+      checkedOnOpen.current = entry.id
+      if (refreshOffline) setOfflineMedia({ id: entry.id, enclosures: entry.enclosures })
+      else setEntries(items => items.map(item => item.id === entry.id
+        ? { ...item, enclosures: entry.enclosures, enclosuresUnchecked: entry.enclosuresUnchecked } : item))
+    }).catch(() => {
+      if (!cancelled && refreshOffline) setOfflineMedia({ id: checkMediaId, useCached: true })
+    })
+    return () => { cancelled = true }
+  }, [checkMediaId, refreshOffline])
 
   useEffect(() => {
     const marker = loadMoreRef.current
@@ -661,9 +692,13 @@ export default function App() {
       const pulse = pendingLocation.collection || pendingLocation.collectionNumber ? await api.pulse() : undefined
       const collections = pulse?.collections || routeCollections.current
       let removalNotice = ''
+      let fetchedId = ''
       const missing = async (load: () => Promise<{ entry: Entry | null }>) => {
-        try { return (await load()).entry }
-        catch (error) {
+        try {
+          const { entry } = await load()
+          fetchedId = entry?.id || ''
+          return entry
+        } catch (error) {
           if (error instanceof ApiError && error.status === 410 && error.code === 'removed_by_retention') { removalNotice = error.message; return null }
           if (error instanceof ApiError && error.status === 404) return null
           throw error
@@ -674,6 +709,7 @@ export default function App() {
         id => online ? missing(() => api.entry(id)) : Promise.resolve(null))
       if (cancelled || generation !== readerGeneration.current) return
       const { location, entry, collection, notice } = result
+      if (fetchedId) checkedOnOpen.current = fetchedId
       routeCollections.current = collections
       if (entry) { routeEntries.current.set(entry.id, entry); setEntries(current => [entry, ...current.filter(item => item.id !== entry.id)]) }
       setView(location.view)
@@ -895,6 +931,24 @@ export default function App() {
     requestAnimationFrame(() => sourceListRef.current?.focus())
   }, [pushLocation])
 
+  useEffect(() => playback.subscribe(({ id, url, position, updatedAt }) => {
+    const update = (files: Entry['enclosures']) => files?.map(file => file.url === url && (file.updatedAt ?? 0) < updatedAt
+      ? { ...file, position, updatedAt } : file)
+    setEntries(current => current.map(entry => entry.id === id ? { ...entry, enclosures: update(entry.enclosures) } : entry))
+    setOfflineMedia(current => current?.id === id ? { ...current, enclosures: update(current.enclosures) } : current)
+  }), [])
+
+  const openedId = listedEntry?.id
+  useEffect(() => {
+    if (openedId) void playback.retry(openedId).catch(() => {})
+  }, [openedId])
+  useEffect(() => {
+    const reconnect = () => { void playback.retry().catch(() => {}) }
+    reconnect()
+    window.addEventListener('online', reconnect)
+    return () => window.removeEventListener('online', reconnect)
+  }, [])
+
   const openEntry = useCallback((entry: Entry) => {
     pushLocation({ selectedId: entry.id, mobilePane: 'article' })
     setSelectedId(entry.id)
@@ -907,6 +961,7 @@ export default function App() {
       const result = await api.entry(id)
       if (!result.entry) throw new Error('Paper could not find this article')
       const entry = result.entry
+      checkedOnOpen.current = entry.id
       setLibraryMode('stream'); setPulseContext(context || null); setLinkedCollection(context?.id)
       if (context) sessionStorage.setItem(`paper-collection:${context.id}`, JSON.stringify(context))
       setEntries(current => current.some(item => item.id === entry.id) ? current.map(item => item.id === entry.id ? entry : item) : [entry, ...current])
@@ -1415,7 +1470,7 @@ export default function App() {
       if (chooseSaveFor || discussionTarget || bulkPreview || reportEntry || selectionContext || entryContext) return
       const target = event.target instanceof Element ? event.target : document.body
       const typing = Boolean(target.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])'))
-      if (event.defaultPrevented || target.closest('[role="dialog"],[role="menu"],[data-organization-handle]')) return
+      if (event.defaultPrevented || target.closest('[role="dialog"],[role="menu"],[data-organization-handle],.enclosure-player')) return
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
         setOverlays({ ...closedOverlays, command: true })
@@ -1561,7 +1616,7 @@ export default function App() {
           <label>From<input type="date" value={after} onChange={event => setAfter(event.target.value)} /></label><label>Through<input type="date" value={before} onChange={event => setBefore(event.target.value)} /></label>
           <button onClick={() => { setQuery(''); setAfter(''); setBefore('') }}>Clear search</button>
         </div>}
-        {libraryMode === 'offline' && <div className="reader-status">Copies stay on this device. Videos need a connection. <button onClick={() => { if (window.confirm('Remove all offline articles and their saved images from this device?')) void clearOffline().then(() => loadEntries()) }}>Clear offline copies</button></div>}
+        {libraryMode === 'offline' && <div className="reader-status">Copies stay on this device. Audio and video need a connection. <button onClick={() => { if (window.confirm('Remove all offline articles and their saved images from this device?')) void clearOffline().then(() => loadEntries()) }}>Clear offline copies</button></div>}
         <div className="filter-row">
           {mobileLayout || starredView || libraryMode !== 'stream'
             ? <span className="story-filter-label">{libraryMode === 'stream' && streamUnreadOnly ? 'Unread' : 'All'}</span>
@@ -1610,6 +1665,7 @@ export default function App() {
           ref={articleRef}
           active={view === 'reader' && mobilePane === 'article'}
           entry={selected}
+          players={(!refreshOffline || offlineMedia?.id === selected.id) && <EnclosurePlayers entry={selected} />}
           feedIconUrl={feedIcons.get(selected.feedId) || ''}
           onBack={closeEntry}
           collectionTitle={pulseContext?.title || ''}
@@ -1870,6 +1926,7 @@ const ArticleView = forwardRef<HTMLElement, {
   active: boolean
   entry: Entry
   feedIconUrl: string
+  players: React.ReactNode
   onBack: () => void
   backLabel: string
   collectionTitle: string
@@ -1909,7 +1966,7 @@ const ArticleView = forwardRef<HTMLElement, {
   previousTitle: string
   nextTitle: string
   onSelectionContext: (state: SelectionContextState | null) => void
-}>(function ArticleView({ active, entry, feedIconUrl, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, saveLabel, saveCaption, saveDisabled, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onSave, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, selectionActionsConfigured, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext }, ref) {
+}>(function ArticleView({ active, entry, feedIconUrl, players, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, saveLabel, saveCaption, saveDisabled, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onSave, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, selectionActionsConfigured, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext }, ref) {
   const content = useRef<HTMLDivElement>(null)
   const chrome = useRef<HTMLDivElement>(null)
   const [hasSelection, setHasSelection] = useState(false)
@@ -1985,7 +2042,7 @@ const ArticleView = forwardRef<HTMLElement, {
     <div ref={content} className="article-scroll" onScroll={onScroll} onTouchEndCapture={() => onTouchEnd(false)} onTouchCancelCapture={() => onTouchEnd(true)} onContextMenu={openSelectionContext}>
       <ArticleEdgeZone direction="previous" title={previousTitle} available={previousAvailable} store={boundaryStore} />
       <div key={entry.id} className="article-document">
-        {entry.kind !== 'article' ? <SocialArticle entry={entry} feedIconUrl={feedIconUrl} /> : <StandardArticle entry={entry} feedIconUrl={feedIconUrl} />}
+        {entry.kind !== 'article' ? <SocialArticle entry={entry} feedIconUrl={feedIconUrl}>{players}</SocialArticle> : <StandardArticle entry={entry} feedIconUrl={feedIconUrl}>{players}</StandardArticle>}
       </div>
       <ArticleEdgeZone direction="next" title={nextTitle} available={nextAvailable} store={boundaryStore} />
     </div>
@@ -2018,11 +2075,12 @@ function selectedTextWithin(root: HTMLElement): string {
   return selection.toString().replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').trim()
 }
 
-function StandardArticle({ entry, feedIconUrl }: { entry: Entry; feedIconUrl: string }) {
+function StandardArticle({ entry, feedIconUrl, children }: { entry: Entry; feedIconUrl: string; children: React.ReactNode }) {
   return <div className="article-column">
     <ArticleHeader entry={entry} feedIconUrl={feedIconUrl} />
+    {children}
     <ArticleLeadImage entry={entry} />
-    <ArticleBody html={entry.contentHtml} />
+    <ArticleBody entry={entry} html={entry.contentHtml} />
   </div>
 }
 
@@ -2033,7 +2091,7 @@ function ArticleLeadImage({ entry }: { entry: Entry }) {
   return <figure className="article-lead-image"><img src={entry.thumbnailUrl} alt="" onError={() => setFailed(true)} /></figure>
 }
 
-function SocialArticle({ entry, feedIconUrl }: { entry: Entry; feedIconUrl: string }) {
+function SocialArticle({ entry, feedIconUrl, children }: { entry: Entry; feedIconUrl: string; children: React.ReactNode }) {
   const [thread, setThread] = useState<XThreadPost[] | null>(null)
   useEffect(() => {
     let cancelled = false
@@ -2058,7 +2116,8 @@ function SocialArticle({ entry, feedIconUrl }: { entry: Entry; feedIconUrl: stri
     <div className={`x-conversation ${thread?.length ? 'has-thread' : ''}`}>
       <article className="x-root-post">
         <div className="social-author"><FeedMark title={identity.name} url={entry.feedUrl || entry.url} iconUrl={feedIconUrl} /><div><strong>{identity.name}</strong>{identity.meta && <span>{identity.meta}</span>}</div></div>
-        <ArticleBody html={contentHtml} className="social-content" />
+        {children}
+        <ArticleBody entry={entry} html={contentHtml} className="social-content" />
         <a className="social-original" href={entry.url} target="_blank" rel="noopener noreferrer">View original <Icon name="external" /></a>
       </article>
       {thread && thread.length > 0 && <section className="x-thread" aria-label={`Thread with ${thread.length + 1} posts`}>
@@ -2080,8 +2139,9 @@ function SocialArticle({ entry, feedIconUrl }: { entry: Entry; feedIconUrl: stri
     <div className={`social-card network-${entry.kind}`}>
       <div className="social-author"><FeedMark title={identity.name} url={entry.feedUrl || entry.url} iconUrl={feedIconUrl} /><div><strong>{identity.name}</strong>{identity.meta && <span>{identity.meta}</span>}</div></div>
       {entry.kind === 'youtube' && <h1>{entry.title}</h1>}
+      {children}
       {videoId && <div className="youtube-frame"><iframe src={`https://www.youtube-nocookie.com/embed/${videoId}`} title={entry.title} loading="lazy" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowFullScreen /></div>}
-      <ArticleBody html={contentHtml} className="social-content" />
+      <ArticleBody entry={entry} html={contentHtml} className="social-content" />
       <a className="social-original" href={entry.url} target="_blank" rel="noopener noreferrer">View original <Icon name="external" /></a>
     </div>
   </div>
@@ -2126,16 +2186,42 @@ function youtubeVideoId(value: string): string {
   } catch { return '' }
 }
 
-function ArticleBody({ html, className = '' }: { html: string; className?: string }) {
+function ArticleBody({ html, entry, className = '' }: { html: string; entry?: Entry; className?: string }) {
   const ref = useRef<HTMLDivElement>(null)
   const renderedHtml = useRef('')
+  const contentHtml = useMemo(() => {
+    if (!entry || !/<video\b/i.test(html)) return html
+    // Parse inertly so embedded copies cannot preload before we remove them.
+    const template = document.createElement('template')
+    template.innerHTML = html
+    const urls = new Set(entry.enclosures?.slice(0, MAX_ENCLOSURES).map(file => file.url))
+    for (const media of template.content.querySelectorAll('video')) {
+      let removed = false
+      for (const source of [media, ...media.querySelectorAll('source[src]')]) {
+        const src = source.getAttribute('src')
+        if (src === null) continue
+        try {
+          const url = new URL(src, entry.url || undefined)
+          if (src.trim() && ['https:', 'http:'].includes(url.protocol) && !urls.has(url.href)) {
+            source.setAttribute('src', url.href)
+            continue
+          }
+        } catch { /* Drop a source without a usable article URL. */ }
+        if (source === media) media.removeAttribute('src')
+        else source.remove()
+        removed = true
+      }
+      if (removed && !media.hasAttribute('src') && !media.querySelector('source[src]')) media.remove()
+    }
+    return template.innerHTML
+  }, [html, entry?.enclosures, entry?.url])
 
   useLayoutEffect(() => {
     const root = ref.current
-    if (!root || renderedHtml.current === html) return
-    root.innerHTML = html
-    renderedHtml.current = html
-  }, [html])
+    if (!root || renderedHtml.current === contentHtml) return
+    root.innerHTML = contentHtml
+    renderedHtml.current = contentHtml
+  }, [contentHtml])
 
   useEffect(() => {
     const root = ref.current

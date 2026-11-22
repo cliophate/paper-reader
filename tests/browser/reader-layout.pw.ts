@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES } from '../../src/server/organization'
+import { MAX_ENCLOSURES } from '../../src/server/enclosure-limits'
 import type { Entry } from '../../src/client/types'
 
 const entry = (id: string, paragraphs = 40): Entry => ({
@@ -10,12 +11,19 @@ const entry = (id: string, paragraphs = 40): Entry => ({
   read: true, starred: false, readingMinutes: 5, thumbnailUrl: '', kind: 'article',
 })
 
-async function openReader(page: Page, short = false, crossFeeds = false) {
-  const items = [entry('a', short ? 1 : 40), entry('b')]
+async function openReader(page: Page, short = false, crossFeeds = false, episode?: Partial<Entry>) {
+  const items = [{ ...entry('a', short ? 1 : 40), ...episode }, entry('b')]
   const navigation = { unread: 0, starred: 0, uncategorized: [{ id: 'fixture', title: 'Synthetic feed', url: 'https://example.test/feed', unread: 0 }], folders: [] }
   if (crossFeeds) navigation.uncategorized.push({ id: 'second', title: 'Second synthetic feed', url: 'https://example.test/second', unread: 0 })
   await page.route('**/api/**', async route => {
     const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/playback') {
+      const { id, url, position, updatedAt } = route.request().postDataJSON()
+      const file = items.find(item => item.id === id)?.enclosures?.find(file => file.url === url)
+      if (!file) return route.fulfill({ status: 404, json: {} })
+      if (updatedAt > (file.updatedAt ?? 0)) Object.assign(file, { position, updatedAt })
+      return route.fulfill({ json: { position: file.position, updatedAt: file.updatedAt } })
+    }
     const json = pathname === '/api/organization' ? { backend: 'freshrss', revision: null, capabilities: FRESHRSS_ORGANIZATION_CAPABILITIES, navigation }
       : pathname === '/api/status' ? { backend: 'freshrss', backendInstance: 'fixture', discussionConfigured: false, readwiseConfigured: true, saveDestinations: [{ id: 'linkding', name: 'Linkding' }], kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } }
       : pathname === '/api/entries' ? { items, continuation: '' }
@@ -406,3 +414,67 @@ for (const viewport of [{ width: 820, height: 1180 }, { width: 1180, height: 820
     expect(chrome!.y).toBeGreaterThanOrEqual(header!.y + header!.height - 1)
   })
 }
+
+
+test('keeps alternate video sources without modern URL helpers and limits mounted players', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(URL, 'parse', { value: undefined }))
+  const url = 'https://example.test/clip.mp4'
+  const files = Array.from({ length: MAX_ENCLOSURES + 5 }, (_, i) => ({ url: i ? url + '?' + i : url, type: 'video/mp4' }))
+  await openReader(page, false, false, { enclosures: files, contentHtml: `
+    <video preload="none" src="/clip.mp4"><source src="/alternate.webm"></video>
+    <video preload="none"><source src="/clip.mp4"><source src="/alternate.webm"></video>
+    <video src="/clip.mp4"></video>` })
+  await expect(page.locator('.enclosure-player')).toHaveCount(MAX_ENCLOSURES)
+  const inline = page.locator('.article-content video')
+  await expect(inline).toHaveCount(2)
+  await expect(inline.locator('source')).toHaveCount(2)
+  expect(await inline.locator('source').evaluateAll(nodes => nodes.map(source => (source as HTMLSourceElement).src)))
+    .toEqual(['https://example.test/alternate.webm', 'https://example.test/alternate.webm'])
+  await expect(page.locator('.article-content [src="/clip.mp4"]')).toHaveCount(0)
+})
+
+test('plays attachments on demand and leaves them out of offline downloads', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 })
+  const url = 'https://media.example.test/episode.wav'
+  const video = 'https://media.example.test/clip.mp4'
+  const requests: string[] = []
+  // Eight seconds of silent mono PCM at 8 kHz.
+  const wave = Buffer.concat([Buffer.from('UklGRiT6AABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQD6AAA=', 'base64'), Buffer.alloc(64_000, 128)])
+  await page.route('https://media.example.test/**', async route => {
+    requests.push(route.request().url())
+    if (route.request().url() !== url) return route.abort()
+    const range = /^bytes=(\d+)-(\d*)$/.exec(route.request().headers().range || '')
+    const start = Number(range?.[1] || 0)
+    const end = Math.min(range?.[2] ? Number(range[2]) : wave.length - 1, wave.length - 1)
+    await route.fulfill({ contentType: 'audio/wav', status: range ? 206 : 200,
+      headers: { 'Accept-Ranges': 'bytes', ...(range && { 'Content-Range': `bytes ${start}-${end}/${wave.length}` }) },
+      body: wave.subarray(start, end + 1) })
+  })
+  await openReader(page, false, false, { enclosures: [{ url, type: 'audio/wav', position: 2.5 }, { url: video, type: 'video/mp4' }],
+    contentHtml: `<video controls preload="auto"><source src="${video}"></video><p>Episode notes.</p>` })
+  const audio = page.locator('.enclosure-player audio')
+  await expect(audio).toHaveAttribute('preload', 'none')
+  await expect(page.locator('.article-content video')).toHaveCount(0)
+  await expect(page.locator('.enclosure-player video')).toHaveAttribute('preload', 'none')
+  await page.getByText('Article options', { exact: true }).click()
+  await page.getByRole('button', { name: 'Save offline' }).click()
+  await expect(page.getByText('Saved for offline reading on this device')).toBeVisible()
+  expect(requests).toEqual([])
+  const play = page.getByRole('button', { name: 'Play audio 1 for Synthetic article a' })
+  await play.focus()
+  await play.press('Enter')
+  await expect.poll(() => requests).toContain(url)
+  expect(requests).not.toContain(video)
+  await expect.poll(() => audio.evaluate((el: HTMLAudioElement) => el.currentTime)).toBeGreaterThanOrEqual(2.5)
+  const saved = page.waitForRequest(request => request.url().endsWith('/api/playback') && request.postDataJSON().position >= 5)
+  await audio.evaluate((el: HTMLAudioElement) => { el.pause(); el.currentTime = 5 })
+  expect((await saved).postDataJSON()).toMatchObject({ id: 'a', url, position: 5, updatedAt: expect.any(Number) })
+  await page.getByRole('button', { name: 'Sources', exact: true }).click()
+  await page.getByRole('button', { name: 'Offline articles' }).click()
+  await page.locator('.story-row').filter({ hasText: 'Synthetic article a' }).click()
+  await audio.evaluate((el: HTMLAudioElement) => {
+    el.addEventListener('seeking', () => { el.dataset.resume = String(el.currentTime) }, { once: true })
+  })
+  await play.click()
+  await expect.poll(() => audio.getAttribute('data-resume').then(Number)).toBeCloseTo(5, 1)
+})

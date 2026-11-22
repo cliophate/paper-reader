@@ -1,8 +1,9 @@
+import { MAX_ENCLOSURES, MAX_ENCLOSURE_URL_BYTES } from '../src/server/enclosure-limits.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db.js'
 import { ingestFeed, successfulFeedFetch, type FeedEndpoint } from '../src/server/feed-ingestion.js'
 import { StandaloneBackend } from '../src/server/standalone-backend.js'
@@ -45,6 +46,59 @@ beforeEach(() => {
 afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
 
 describe('repeatable feed ingestion', () => {
+  it('backs up pre-enclosure articles and keeps positions across reordering and restart', () => {
+    const id = resolvedId(ingest())
+    db.saveReadingProgress(id, 0.4)
+    sql(c => c.exec('DROP TABLE article_enclosures; ALTER TABLE entries DROP COLUMN enclosures_checked; PRAGMA user_version = 22'))
+    reopen()
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(23)
+    const backup = new DatabaseSync(file + '.before-podcast-enclosures-v23', { readOnly: true })
+    try {
+      expect(backup.prepare('PRAGMA user_version').get()?.user_version).toBe(22)
+      expect(backup.prepare("SELECT name FROM sqlite_master WHERE name = 'article_enclosures'").get()).toBeUndefined()
+      expect(backup.prepare('SELECT position FROM reading_progress WHERE entry_id = ?').get(id)?.position).toBe(0.4)
+    } finally { backup.close() }
+    const feed = (urls: string[]) => rss(item().replace('</item>', urls.map(url => `<enclosure type="audio/mpeg" url="${url}"/>`).join('') + '</item>'))
+    const a = 'https://example.test/a.mp3', b = 'https://example.test/b.mp3'
+    ingest(feed([a, b]))
+    expect(db.savePlaybackPosition(id, b, 12.5, 100)).toEqual({ position: 12.5, updatedAt: 100 })
+    expect(db.savePlaybackPosition(id, b, 2.5, 99)).toEqual({ position: 12.5, updatedAt: 100 })
+    ingest(feed([b, a]))
+    reopen()
+    expect(db.localEntry(id)).toMatchObject({ readingPosition: 0.4, enclosures: [{ url: b, position: 12.5 }, { url: a, position: 0 }] })
+    ingest(feed([a]))
+    expect(db.savePlaybackPosition(id, b, 1, 101)).toBeUndefined()
+    expect(db.localEntry(id)!.enclosures!.map(file => file.url)).toEqual([a])
+    ingest(feed([a, b]))
+    expect(db.localEntry(id)!.enclosures![1]).toMatchObject({ url: b, position: 12.5, updatedAt: 100 })
+    expect(db.savePlaybackPosition(id, b, 65, 102)).toEqual({ position: 65, updatedAt: 102 })
+    expect(db.savePlaybackPosition(id, b, 20, 102)).toEqual({ position: 65, updatedAt: 102 })
+    expect(db.localEntry(id)!.enclosures![1]).toMatchObject({ url: b, position: 65, updatedAt: 102 })
+  })
+
+  it('caps a future playback timestamp at five minutes past the server clock', () => {
+    const url = 'https://example.test/future.mp3'
+    const id = resolvedId(ingest(rss(item().replace('</item>', `<enclosure type="audio/mpeg" url="${url}"/></item>`))))
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    try {
+      const stored = { position: 10, updatedAt: now + 300_000 }
+      expect(db.savePlaybackPosition(id, url, 10, now + 86_400_000)).toEqual(stored)
+      expect(db.localEntry(id)!.enclosures![0]).toMatchObject(stored)
+    } finally { clock.mockRestore() }
+  })
+
+  it('bounds the number and normalized URL bytes of stored enclosures', () => {
+    const long = 'https://example.test/' + 'é'.repeat(1700)
+    const urls = [long + 'a.mp3', long + 'b.mp3', ...Array.from({ length: 5000 }, (_, i) => `https://example.test/${i}.mp3`)]
+    const files = urls.map(url => `<enclosure url="${url}" type="audio/mpeg"/>`).join('')
+    const id = resolvedId(ingest(rss(item().replace('</item>', files + '</item>'))))
+    const stored = db.localEntry(id)!.enclosures!
+    expect(stored).toHaveLength(MAX_ENCLOSURES)
+    expect(stored.map(file => file.url)).toEqual([new URL(urls[0]).href, ...urls.slice(2, MAX_ENCLOSURES + 1)])
+    expect(sql(c => c.prepare('SELECT sum(length(CAST(url AS BLOB))) AS bytes FROM article_enclosures').get()?.bytes)).toBeLessThanOrEqual(MAX_ENCLOSURE_URL_BYTES)
+  })
+
   it('replaces an added feed URL title once and advances the organization revision', async () => {
     const standalone = new StandaloneBackend(db)
     await standalone.addFeed(url + '/untitled', '', 'Synthetic folder')

@@ -1,7 +1,12 @@
+import { playback } from './api'
 import type { Entry } from './types'
 let locked = false
 let generation = 0
-export function setOfflineLocked(value: boolean) { if (value !== locked) generation++; locked = value }
+export function setOfflineLocked(value: boolean) {
+  if (value !== locked) generation++
+  locked = value
+  playback.setLocked(value)
+}
 const ARTICLES = 'paper-offline-articles-v1'
 const MEDIA = 'paper-offline-media-v1'
 const key = (id: string) => new URL(`/_offline/articles/${encodeURIComponent(id)}`, location.origin).href
@@ -20,12 +25,14 @@ export async function saveOffline(entry: Entry) {
   if (locked || started !== generation) return
   await cache.put(key(entry.id), new Response(JSON.stringify(entry), { headers: { 'Content-Type': 'application/json' } }))
   if (locked || started !== generation) { await clearOffline(); return }
-  const document = new DOMParser().parseFromString(entry.contentHtml, 'text/html')
-  const images = [...new Set([entry.thumbnailUrl, ...[...document.querySelectorAll('img')].map(img => img.getAttribute('src') || '')])].filter(Boolean).slice(0, 30)
+  const template = document.createElement('template')
+  template.innerHTML = entry.contentHtml
+  const enclosureUrls = new Set(entry.enclosures?.map(file => file.url))
+  const images = [...new Set([entry.thumbnailUrl, ...[...template.content.querySelectorAll('img')].map(img => img.getAttribute('src') || '')])].filter(Boolean).slice(0, 30)
   const media = await caches.open(MEDIA)
   await Promise.allSettled(images.map(async source => {
     const url = new URL(source, entry.url)
-    if (!['https:', 'http:'].includes(url.protocol)) return
+    if (!['https:', 'http:'].includes(url.protocol) || enclosureUrls.has(url.href)) return
     const request = new Request(url, { mode: 'no-cors', credentials: 'omit' })
     const response = await fetch(request, { signal: AbortSignal.timeout(10000) })
     if (!locked && started === generation && (response.ok || response.type === 'opaque')) await media.put(request, response)
@@ -33,4 +40,7 @@ export async function saveOffline(entry: Entry) {
   if (locked || started !== generation) await clearOffline()
 }
 export async function removeOffline(id: string) { return (await caches.open(ARTICLES)).delete(key(id)) }
-export async function clearOffline() { if (!('caches' in window)) return; await Promise.all([caches.delete(ARTICLES), caches.delete(MEDIA)]) }
+export async function clearOffline() {
+  if (locked) playback.clear()
+  if ('caches' in window) await Promise.all([caches.delete(ARTICLES), caches.delete(MEDIA)])
+}

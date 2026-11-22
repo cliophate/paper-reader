@@ -4,7 +4,11 @@ import { SaxesParser, type SaxesAttributeNS } from 'saxes'
 import sanitizeHtml from 'sanitize-html'
 import { decodeHTMLStrict } from 'entities'
 import { cleanArticleHtml, escapeHtml, plainText } from './text.js'
+import type { Enclosure } from '../shared/enclosures.js'
+import { durationSeconds, mediaEnclosures } from './enclosures.js'
 
+const MEDIA = 'http://search.yahoo.com/mrss/'
+const ITUNES = 'http://www.itunes.com/dtds/podcast-1.0.dtd'
 const ATOM = 'http://www.w3.org/2005/Atom'
 const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#'
 const RSS1 = 'http://purl.org/rss/1.0/'
@@ -22,6 +26,7 @@ export interface ParsedFeedEntry {
   url: string
   publishedAt: string
   contentHtml: string
+  enclosures: Enclosure[]
   thumbnailUrl: string
 }
 export interface ParsedFeed {
@@ -122,6 +127,10 @@ function parseJsonFeed(body: string, url: string, rules?: ExtractionRules): Pars
       author: authors(item.authors) || string(record(item.author)?.name) || feedAuthor,
       url: feedUrl(string(item.url) || string(item.external_url), url),
       publishedAt: date(string(item.date_published) || string(item.date_modified)), contentHtml,
+      enclosures: mediaEnclosures(Array.isArray(item.attachments) ? item.attachments : [], attachment => {
+        const file = record(attachment)
+        return { url: feedUrl(string(file?.url), url), type: file?.mime_type, size: file?.size_in_bytes, duration: file?.duration_in_seconds }
+      }),
       thumbnailUrl: feedUrl(string(item.image) || string(item.banner_image), url),
     }
   })
@@ -197,6 +206,22 @@ function atomLink(node: Node): string {
 }
 function atomAuthor(node: Node): string { return value(child(node, 'author', ATOM) || node, 'name', ATOM) }
 
+function xmlEnclosures(item: Node): Enclosure[] {
+  const duration = durationSeconds(value(item, 'duration', ITUNES))
+  const files = [
+    ...children(item, 'enclosure'),
+    ...children(item, 'link', ATOM).filter(link => attribute(link, 'rel') === 'enclosure'),
+    ...children(item, 'content', MEDIA),
+    ...children(item, 'group', MEDIA).flatMap(group => children(group, 'content', MEDIA)),
+  ]
+  return mediaEnclosures(files, node => ({
+    url: feedUrl(attribute(node, node.name === 'link' ? 'href' : 'url'), node.base),
+    type: attribute(node, 'type'), medium: attribute(node, 'medium'),
+    size: attribute(node, node.ns === MEDIA ? 'fileSize' : 'length'),
+    duration: attribute(node, 'duration'),
+  })).map(file => ({ ...file, duration: file.duration ?? duration }))
+}
+
 export function parseFeed(xml: string, responseUrl: string, rules?: ExtractionRules): ParsedFeed {
   const url = feedUrl(responseUrl)
   if (!url) throw new Error('Feed response URL must use HTTP or HTTPS without credentials')
@@ -230,7 +255,7 @@ export function parseFeed(xml: string, responseUrl: string, rules?: ExtractionRu
         title: plainText(atomContent(child(item, 'title'))),
         author: atomAuthor(item) || atomAuthor(child(item, 'source') || channel) || atomAuthor(channel),
         url: atomLink(item), publishedAt: date(value(item, 'published') || value(item, 'updated')),
-        contentHtml, thumbnailUrl: '',
+        contentHtml, thumbnailUrl: '', enclosures: xmlEnclosures(item),
       }
     }
     const guid = child(item, 'guid')
@@ -244,6 +269,7 @@ export function parseFeed(xml: string, responseUrl: string, rules?: ExtractionRu
       url: linkText(child(item, 'link')) || (guid && attribute(guid, 'isPermaLink') !== 'false' ? linkText(guid) : '') || (about ? feedUrl(about, item.base) : ''),
       publishedAt: date(value(item, 'pubDate') || value(item, 'date', DC)),
       contentHtml: content ? safeHtml(text(content), content.base, rules) : '',
+      enclosures: xmlEnclosures(item),
       thumbnailUrl: enclosure ? feedUrl(attribute(enclosure, 'url'), enclosure.base) : '',
     }
   })

@@ -104,6 +104,90 @@ describe('mobile reader switching', () => {
     expect(container.textContent).toContain('Saved to Linkwarden. Paper shortened tags to fit the 50-character limit.')
   })
 
+  it('opens a numbered FreshRSS article once after an enclosure timeout and retries on a later open', async () => {
+    const article = { ...post('a'), kind: 'article' as const, enclosuresUnchecked: true }
+    initialPage.items[0] = article
+    history.replaceState(null, '', '/folder/1/instagram/a/' + article.linkNumber)
+    const navigation = await api.navigation()
+    navigation.folders[0].linkNumber = 1
+    vi.mocked(api.entryByNumber).mockResolvedValue({ entry: article })
+    vi.mocked(api.entry).mockResolvedValue({ entry: article })
+    await mount()
+    expect(container.querySelector('.article-header h1')?.textContent).toBe(article.title)
+    expect(api.entryByNumber).toHaveBeenCalledOnce()
+    expect(api.entry).not.toHaveBeenCalled()
+    for (const index of [1, 0]) await act(() => container.querySelectorAll<HTMLElement>('.story-row')[index].click())
+    expect(api.entry).toHaveBeenCalledExactlyOnceWith(article.id)
+  })
+
+  async function openEpisode() {
+    const file = { url: 'https://example.test/episode.mp3', type: 'audio/mpeg', position: 10, updatedAt: 1 }
+    const episode = { ...post('a'), kind: 'article' as const, enclosures: [file] }
+    initialPage.items[0] = episode
+    vi.mocked(api.entry).mockResolvedValue({ entry: episode })
+    await mount()
+    return async () => {
+      await act(() => container.querySelector<HTMLButtonElement>('.enclosure-player button')!.click())
+      const audio = container.querySelector<HTMLAudioElement>('.enclosure-player audio')!
+      Object.defineProperty(audio, 'duration', { value: 150, configurable: true })
+      audio.dispatchEvent(new Event('loadedmetadata'))
+      return audio
+    }
+  }
+
+  it.each(['reconnect', 'reopen'])('retries the last buffered pause on %s', async trigger => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
+    const connection = vi.spyOn(navigator, 'onLine', 'get')
+    const fetch = vi.fn(async (_url, init) => Response.json(JSON.parse(init.body)))
+    vi.stubGlobal('fetch', fetch)
+    try {
+      const start = await openEpisode()
+      const audio = await start()
+      connection.mockReturnValue(false)
+      await act(() => { window.dispatchEvent(new Event('offline')) })
+      for (const seconds of [20, 42]) {
+        vi.advanceTimersByTime(1)
+        audio.currentTime = seconds
+        await act(() => { audio.dispatchEvent(new Event('pause')) })
+      }
+      expect(fetch).not.toHaveBeenCalledWith('/api/playback', expect.anything())
+      if (trigger === 'reopen') {
+        await act(() => container.querySelectorAll<HTMLElement>('.story-row')[1].click())
+        connection.mockReturnValue(true)
+        await act(() => container.querySelectorAll<HTMLElement>('.story-row')[0].click())
+      } else {
+        connection.mockReturnValue(true)
+        await act(() => { window.dispatchEvent(new Event('online')) })
+      }
+      const writes = fetch.mock.calls.filter(([url]) => url === '/api/playback')
+      expect(writes).toHaveLength(1)
+      expect(JSON.parse(writes[0][1].body)).toMatchObject({ id: 'a', position: 42, updatedAt: Date.now() })
+    } finally { play.mockRestore(); connection.mockRestore() }
+  })
+
+  it.each([true, false])('leaves the listener in place after a delayed response, playing=%s', async playing => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
+    try {
+      const start = await openEpisode()
+      const audio = await start()
+      let respond!: (response: Response) => void
+      const fetch = vi.fn().mockReturnValueOnce(new Promise<Response>(resolve => { respond = resolve }))
+        .mockImplementation(async (_url, init) => Response.json(JSON.parse(init.body)))
+      vi.stubGlobal('fetch', fetch)
+      audio.currentTime = 20
+      await act(() => { audio.dispatchEvent(new Event('pause')) })
+      expect(fetch).toHaveBeenCalledTimes(1)
+      if (playing) {
+        Object.defineProperty(audio, 'paused', { value: false })
+        audio.dispatchEvent(new Event('playing'))
+        audio.currentTime = 33
+      }
+      await act(() => { respond(Response.json({ position: 65, updatedAt: Date.now() + 1 })) })
+      audio.dispatchEvent(new Event('loadedmetadata'))
+      expect(audio.currentTime).toBe(playing ? 33 : 20)
+    } finally { play.mockRestore() }
+  })
+
   it('navigates with j and k while Caps Lock is enabled', async () => {
     await mount()
     for (const [key, selectedId] of [['J', 'b'], ['K', 'a']]) {

@@ -405,6 +405,16 @@ app.post('/api/filters/preview', asyncRoute(async (request, response) => {
   response.json(await database.previewMuteFilter(phrase, scope as 'title' | 'content' | 'any', String(request.body?.feedId || '')))
 }))
 
+app.post('/api/playback', (request, response) => {
+  const { id, url, position, updatedAt } = request.body || {}
+  if (typeof id !== 'string' || typeof url !== 'string' || !Number.isFinite(position) || position < 0 || !Number.isSafeInteger(updatedAt) || updatedAt < 0) {
+    return response.status(400).json({ error: 'Invalid playback position' })
+  }
+  const result = database.savePlaybackPosition(id, url, position, updatedAt)
+  if (!result) return response.status(404).json({ error: 'Enclosure not found' })
+  response.json(result)
+})
+
 app.get('/api/reading', (_request, response) => response.json(database.recentReading()))
 app.post('/api/reading', (request, response) => {
   const position = Number(request.body?.position)
@@ -575,24 +585,45 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
   response.json(headlines.page({ items: database.numberEntries(items), continuation }))
 }))
 
+const enclosureChecks = new Map<string, Promise<void>>()
+async function openedEntry(entry: Entry, useLocal: boolean) {
+  if (!useLocal) return database.numberEntries([entry])[0]
+  if (!entry.enclosuresUnchecked || backend.identity.kind !== 'freshrss') return entry
+  let check = enclosureChecks.get(entry.id)
+  if (!check) {
+    check = backend.entry(entry.id, AbortSignal.timeout(5000)).then(remote => {
+      if (!remote || remote.id === entry.id) database.cacheUncheckedEnclosures(entry.id, remote?.enclosures || [])
+      enclosureChecks.delete(entry.id)
+    }).catch(() => {
+      // Share the failed lookup briefly, including across tabs and route requests.
+      setTimeout(() => enclosureChecks.delete(entry.id), 30_000).unref()
+    })
+    enclosureChecks.set(entry.id, check)
+  }
+  await check
+  return database.localEntry(entry.id) || entry
+}
+
 app.get('/api/entries/number/:number', asyncRoute(async (request, response) => {
   const number = Number(request.params.number)
   if (!/^[1-9][0-9]*$/.test(String(request.params.number)) || !Number.isSafeInteger(number)) return response.status(400).json({ error: 'Invalid article number' })
   const cached = database.entryByNumber(number)
-  const entry = cached && (localReadsActive ? cached : await entriesSource.entry(cached.id))
+  const useLocal = localReadsActive
+  const entry = cached && (useLocal ? cached : await entriesSource.entry(cached.id))
   if (!entry) {
     const removal = standalone && database.retention.removal(number)
     if (removal) return response.status(410).json({ code: 'removed_by_retention', removal,
       error: `This article was removed by your retention settings on ${new Date(removal.removedAt).toISOString().slice(0, 10)}.` })
     return response.status(404).json({ error: 'Article not found' })
   }
-  response.json({ entry: headlines.decorate(database.numberEntry(entry)) })
+  response.json({ entry: headlines.decorate(await openedEntry(entry, useLocal)) })
 }))
 
 app.post('/api/entries/item', asyncRoute(async (request, response) => {
+  const useLocal = localReadsActive
   const entry = await entriesSource.entry(String(request.body?.id || ''))
   if (!entry) return response.status(404).json({ error: 'Paper could not find this article' })
-  response.json({ entry: headlines.decorate(database.numberEntries([entry])[0]) })
+  response.json({ entry: headlines.decorate(await openedEntry(entry, useLocal)) })
 }))
 
 app.post('/api/entries/state', asyncRoute(async (request, response) => {

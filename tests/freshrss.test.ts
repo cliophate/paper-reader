@@ -46,6 +46,20 @@ describe('FreshRSS stream paths', () => {
     expect(url.searchParams.get('n')).toBe('80')
   })
 
+  it('reads media and image enclosures from the same stream response', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response('Auth=synthetic-token'))
+      .mockResolvedValueOnce(Response.json({ items: [{ id: '1', enclosure: [
+        { href: 'https://media.example.test/a.mp3', type: 'audio', length: 42 },
+        { href: 'https://media.example.test/cover.jpg', type: 'image/jpeg' },
+      ] }] }))
+    vi.stubGlobal('fetch', fetcher)
+    const client = new FreshRssClient({ baseUrl: 'http://freshrss', username: 'fixture', apiPassword: 'synthetic' })
+    const page = await client.entriesPage({ kind: 'feed', id: 'feed/42', title: 'Fixture' })
+    expect(page.items[0]).toMatchObject({ enclosures: [{ url: 'https://media.example.test/a.mp3', type: 'audio/mpeg', size: 42 }],
+      thumbnailUrl: 'https://media.example.test/cover.jpg' })
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
   it('uses the full Google Reader state path for starred entries', () => {
     expect(streamPath({ kind: 'starred', id: 'starred', title: 'Starred' })).toBe('user/-/state/com.google/starred')
   })

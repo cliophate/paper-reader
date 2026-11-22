@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite'
 import assert from 'node:assert/strict'
 import { startOpenaiFixture } from '../tests/fixtures/openai-provider.mjs'
 import { spawn, spawnSync } from 'node:child_process'
@@ -21,6 +22,8 @@ const rows = [1, 2].map(n => ({
   origin: { streamId: 'feed/1', title: 'Synthetic feed', htmlUrl: 'https://example.test/' },
   summary: { content: '<p>A compositor and its synthetic integration fixture.</p>' },
 }))
+const itemLookups = []
+let unresponsiveItem
 const fixture = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://fixture')
   const body = new URLSearchParams(await Array.fromAsync(req).then(chunks => Buffer.concat(chunks).toString()))
@@ -38,7 +41,11 @@ const fixture = http.createServer(async (req, res) => {
   if (url.pathname.endsWith('/unread-count')) return send({ unreadcounts: ['feed/1', 'user/-/state/com.google/reading-list'].map(id => ({ id, count: rows.filter(row => !row.categories.includes(readTag)).length })) })
   if (url.pathname.includes('/stream/items/ids')) return send({ itemRefs: selected().map(row => ({ id: String(parseInt(row.id.split('/').at(-1), 16)) })) })
   if (url.pathname.includes('/stream/contents/')) return send({ items: selected() })
-  if (url.pathname.includes('/stream/items/contents')) return send({ items: rows.filter(row => body.getAll('i').includes(row.id)) })
+  if (url.pathname.includes('/stream/items/contents')) {
+    itemLookups.push(body.getAll('i'))
+    if (body.getAll('i').includes(unresponsiveItem)) return
+    return send({ items: rows.filter(row => body.getAll('i').includes(row.id)) })
+  }
   if (url.pathname.endsWith('/token')) return send('synthetic-edit-token')
   if (url.pathname.endsWith('/edit-tag')) {
     for (const row of rows.filter(row => body.getAll('i').includes(row.id))) {
@@ -121,7 +128,27 @@ try {
   const id = page.items[0].id
   const articleNumber = page.items[0].linkNumber
   assert(Number.isSafeInteger(articleNumber) && articleNumber > 0)
-  assert.equal((await request(`/api/entries/number/${articleNumber}`)).data.entry.id, id)
+  // Simulate two cached articles imported before the enclosure migration.
+  const sqlite = new DatabaseSync(path.join(temporary, 'data', 'paper.sqlite'))
+  try { sqlite.exec('UPDATE entries SET enclosures_checked = 0') } finally { sqlite.close() }
+  const clip = 'https://media.example.test/upgrade.mp3'
+  rows.find(row => row.id === id).enclosure = [{ href: clip, type: 'audio/mpeg' }]
+  const beforeLookups = itemLookups.length
+  const episode = (await request(`/api/entries/number/${articleNumber}`)).data.entry
+  assert.equal(episode.id, id)
+  assert.equal(episode.enclosures[0].url, clip)
+  assert.equal((await request('/api/entries/item', { id })).data.entry.enclosures[0].url, clip)
+  const otherId = page.items[1].id
+  for (let i = 0; i < 2; i++) assert.equal((await request('/api/entries/item', { id: otherId })).data.entry.enclosures, undefined)
+  assert.deepEqual(itemLookups.slice(beforeLookups), [[id], [otherId]])
+  const outdated = new DatabaseSync(path.join(temporary, 'data', 'paper.sqlite'))
+  try { outdated.prepare('UPDATE entries SET enclosures_checked = 0 WHERE id = ?').run(otherId) } finally { outdated.close() }
+  unresponsiveItem = otherId
+  const beforeTimeout = itemLookups.length
+  assert.equal((await request(`/api/entries/number/${page.items[1].linkNumber}`)).data.entry.enclosuresUnchecked, true)
+  assert.equal((await request('/api/entries/item', { id: otherId })).data.entry.enclosuresUnchecked, true)
+  assert.deepEqual(itemLookups.slice(beforeTimeout), [[otherId]])
+  unresponsiveItem = undefined
   assert.equal((await request('/api/entries/number/999999999')).status, 404)
   assert.equal((await request('/api/entries/number/not-a-number')).status, 400)
   const numberedNavigation = (await request('/api/navigation')).data
