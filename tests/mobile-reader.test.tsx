@@ -96,6 +96,14 @@ describe('mobile reader switching', () => {
     expect(container.textContent).toContain('Linkding denied access.')
   })
 
+  it('shows the destination note when a save shortens a tag', async () => {
+    vi.mocked(api.status).mockResolvedValue({ ...(await api.status()), readwiseConfigured: false, saveDestinations: [{ id: 'linkwarden', name: 'Linkwarden' }] })
+    vi.mocked(api.saveArticle).mockResolvedValue({ ok: true, note: 'Paper shortened tags to fit the 50-character limit.' })
+    await mount()
+    await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q', bubbles: true })) })
+    expect(container.textContent).toContain('Saved to Linkwarden. Paper shortened tags to fit the 50-character limit.')
+  })
+
   it('navigates with j and k while Caps Lock is enabled', async () => {
     await mount()
     for (const [key, selectedId] of [['J', 'b'], ['K', 'a']]) {

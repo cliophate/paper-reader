@@ -28,6 +28,7 @@ const fixture = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/linkding/')) {
     if (req.headers.authorization !== 'Token synthetic-save-token') { res.statusCode = 401; return send({ error: 'Invalid fixture token' }) }
     if (req.method === 'GET' && url.pathname === '/linkding/api/user/profile/') return send({ theme: 'auto', private: 'synthetic-save-token' })
+    if (req.method === 'GET' && url.pathname === '/linkding/api/bookmarks/check/') return send({ bookmark: null })
     if (req.method === 'POST' && url.pathname === '/linkding/api/bookmarks/') return send({ id: 1 })
   }
   if (url.pathname.endsWith('/accounts/ClientLogin')) return send('Auth=fixture/synthetic-token\n')
@@ -154,6 +155,9 @@ try {
   assert(!JSON.stringify(configured.data).includes(destination.token))
   assert.deepEqual((await request('/api/status')).data.saveDestinations, [{ id: 'linkding', name: 'Linkding' }])
   assert.deepEqual(await request('/api/save/linkding', article), { status: 200, data: { ok: true } })
+  assert.deepEqual(await request('/api/save/linkding', { ...article, tags: ['x'.repeat(65)] }), {
+    status: 200, data: { ok: true, note: 'Paper shortened tags to fit the 64-character limit.' },
+  })
   assert.equal((await request('/api/save/linkding', article, { Origin: 'https://untrusted.example' })).status, 403)
   await patchSettings({ linkding: { enabled: false } })
   const initialSettings = await fetch(settingsUrl)

@@ -102,7 +102,8 @@ export async function boundedFetch(input: string, options: TextFetchOptions | By
   return fetchBounded(input, options)
 }
 
-interface ApiRequest {
+export interface ApiRequest {
+  method?: 'GET' | 'POST' | 'PATCH'
   authorization?: string
   body?: string
   contentType?: 'application/json' | 'application/x-www-form-urlencoded'
@@ -144,7 +145,7 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
         const lastModified = validLastModified(validators?.lastModified)
         const response = await new Promise<IncomingMessage>((resolve, reject) => {
           const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
-            method: api?.body === undefined ? 'GET' : 'POST', agent: false, signal, maxHeaderSize: 16 * 1024,
+            method: api?.method ?? (api?.body === undefined ? 'GET' : 'POST'), agent: false, signal, maxHeaderSize: 16 * 1024,
             lookup: (_hostname, lookupOptions, callback) => lookupOptions.all
               ? callback(null, [addresses[0]]) : callback(null, addresses[0].address, addresses[0].family),
             headers: { Accept: options.accept || 'application/rss+xml, application/atom+xml, application/feed+json, application/xml, text/xml, text/html',

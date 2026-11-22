@@ -1,10 +1,15 @@
 import type { DestinationSecret, DestinationUpdate, SaveDestinationId } from '../shared/connections.js'
-import { boundedApiRequest, FeedHttpError } from './feed-http.js'
+import { type ApiRequest, boundedApiRequest, FeedHttpError } from './feed-http.js'
 
 interface Article { url: string; title: string; tags: string[] }
 type JsonObject = Record<string, unknown>
 interface Service {
   name: string
+  maxTitle?: number
+  maxTag?: number
+  maxUrl?: number
+  countCodePoints?: boolean
+  commaSeparatedTags?: boolean
   profile: string
   validProfile: (data: JsonObject) => boolean
   save: string
@@ -12,29 +17,31 @@ interface Service {
   confirmed: (data: JsonObject, status: number) => boolean
 }
 
-function hasId(value: unknown): boolean {
+function hasId(value: unknown): value is JsonObject & { id: number } {
   return !!value && typeof value === 'object' && 'id' in value && typeof value.id === 'number'
 }
 
 const services: Record<SaveDestinationId, Service> = {
   linkding: {
-    name: 'Linkding', profile: 'api/user/profile/', validProfile: data => typeof data.theme === 'string',
+    name: 'Linkding', maxTitle: 512, maxTag: 64, maxUrl: 2048, countCodePoints: true, commaSeparatedTags: true,
+    profile: 'api/user/profile/', validProfile: data => typeof data.theme === 'string',
     save: 'api/bookmarks/', payload: ({ url, title, tags }) => ({ url, title, tag_names: tags }), confirmed: hasId,
   },
   wallabag: {
-    name: 'Wallabag', profile: 'api/user.json', validProfile: hasId,
+    name: 'Wallabag', commaSeparatedTags: true, profile: 'api/user.json', validProfile: hasId,
     save: 'api/entries.json', payload: ({ url, title, tags }) => new URLSearchParams({ url, title, tags: tags.join(',') }), confirmed: hasId,
   },
   readeck: {
-    name: 'Readeck', profile: 'api/profile', validProfile: data => !!data.user && typeof data.user === 'object',
+    name: 'Readeck', maxTitle: 1024, maxUrl: 1024, countCodePoints: true, profile: 'api/profile', validProfile: data => !!data.user && typeof data.user === 'object',
     save: 'api/bookmarks', payload: ({ url, title, tags }) => ({ url, title, labels: tags }), confirmed: (_data, status) => status === 202,
   },
   raindrop: {
-    name: 'Raindrop.io', profile: 'rest/v1/user', validProfile: data => data.result === true && !!data.user,
+    name: 'Raindrop.io', maxTitle: 1000, profile: 'rest/v1/user', validProfile: data => data.result === true && !!data.user,
     save: 'rest/v1/raindrop', payload: ({ url, title, tags }) => ({ link: url, title, tags }), confirmed: data => data.result === true,
   },
   linkwarden: {
-    name: 'Linkwarden', profile: 'api/v1/users/me', validProfile: data => hasId(data.response),
+    name: 'Linkwarden', maxTitle: 2048, maxTag: 50, maxUrl: 2048,
+    profile: 'api/v1/collections', validProfile: data => Array.isArray(data.response),
     save: 'api/v1/links', payload: ({ url, title, tags }) => ({ url, name: title, tags: tags.map(name => ({ name })) }),
     confirmed: data => hasId(data.response),
   },
@@ -55,7 +62,17 @@ function jsonObject(text: string) {
   return null
 }
 
+// Django and Readeck count code points. JavaScript validators count UTF-16 units.
+function shorten(value: string, limit: number | undefined, countCodePoints = false) {
+  if (limit === undefined || value.length <= limit) return value
+  if (countCodePoints) return Array.from(value).slice(0, limit).join('')
+  const prefix = value.slice(0, limit)
+  const last = prefix.charCodeAt(prefix.length - 1)
+  return last >= 0xd800 && last <= 0xdbff ? prefix.slice(0, -1) : prefix
+}
+
 export class DestinationClient {
+  private readonly pendingLinkdingSaves = new Map<string, Promise<string | undefined>>()
   private readonly service: Service
   private session?: { access: string; refresh?: string; expires: number }
   private refreshing?: Promise<string>
@@ -76,14 +93,13 @@ export class DestinationClient {
     return (this.id === 'raindrop' || !!this.settings.baseUrl) && secretFields(this.id).every(key => !!this.settings[key])
   }
 
-  private async request(path: string, authorization?: string, payload?: object | URLSearchParams) {
+  private async request(path: string, authorization?: string, payload?: object, method?: ApiRequest['method']) {
     if (!this.ready) throw new DestinationError(`Finish setting up ${this.service.name} in Reading & connections.`)
     const base = this.id === 'raindrop' ? 'https://api.raindrop.io' : this.settings.baseUrl!
-    const url = new URL(base)
-    url.pathname = url.pathname.replace(/\/+$/, '') + '/' + path
+    const url = new URL(path, base.replace(/\/+$/, '') + '/')
     const form = payload instanceof URLSearchParams
     try {
-      return await boundedApiRequest(url, this.trustedOrigins, { authorization, body: form ? payload.toString() : JSON.stringify(payload),
+      return await boundedApiRequest(url, this.trustedOrigins, { method, authorization, body: form ? payload.toString() : JSON.stringify(payload),
         contentType: form ? 'application/x-www-form-urlencoded' : 'application/json' })
     } catch (error) {
       if (error instanceof FeedHttpError && error.code === 'policy') throw new DestinationError('Use public HTTPS or ask the administrator to add the exact origin to PAPER_TRUSTED_SAVE_ORIGINS.')
@@ -122,13 +138,13 @@ export class DestinationClient {
     return this.refreshing
   }
 
-  private async authenticated(path: string, payload?: object) {
+  private async authenticated(path: string, payload?: object, method?: ApiRequest['method']) {
     const token = this.id === 'wallabag' ? await this.wallabagToken() : this.settings.token
     const scheme = this.id === 'linkding' ? 'Token' : 'Bearer'
-    let response = await this.request(path, `${scheme} ${token}`, payload)
+    let response = await this.request(path, `${scheme} ${token}`, payload, method)
     if (this.id === 'wallabag' && response.status === 401) {
       if (this.session && this.session.access === token) this.session.expires = 0
-      response = await this.request(path, `Bearer ${await this.wallabagToken()}`, payload)
+      response = await this.request(path, `Bearer ${await this.wallabagToken()}`, payload, method)
     }
     this.check(response.status)
     return response
@@ -138,12 +154,59 @@ export class DestinationClient {
     const response = await this.authenticated(this.service.profile)
     const profile = jsonObject(response.text)
     if (profile && this.service.validProfile(profile)) return
-    throw new DestinationError(`${this.name} returned an unexpected profile. Check the connection settings.`)
+    throw new DestinationError(`${this.name} returned an unexpected response. Check the connection settings.`)
+  }
+
+  private async existingLinkdingBookmark(url: string) {
+    const response = await this.authenticated(`api/bookmarks/check/?${new URLSearchParams({ url })}`)
+    const bookmark = jsonObject(response.text)?.bookmark
+    if (bookmark === null) return null
+    if (!hasId(bookmark) || !Number.isSafeInteger(bookmark.id) || bookmark.id <= 0 ||
+        !Array.isArray(bookmark.tag_names) || !bookmark.tag_names.every(tag => typeof tag === 'string')) {
+      throw new DestinationError('Linkding could not confirm whether this URL is already bookmarked.')
+    }
+    return { id: bookmark.id, tags: bookmark.tag_names }
   }
 
   async save(article: Article) {
-    const response = await this.authenticated(this.service.save, this.service.payload(article))
-    if (this.service.confirmed(jsonObject(response.text) ?? {}, response.status)) return
-    throw new DestinationError(`${this.service.name} did not confirm the save. Check the destination before trying again.`)
+    if (this.id !== 'linkding') return this.saveBookmark(article)
+    // Two saves of the same URL must each see the tags from the previous write.
+    const pending = this.pendingLinkdingSaves.get(article.url)
+    const save = async () => this.saveBookmark(article)
+    const next = pending ? pending.then(save, save) : save()
+    this.pendingLinkdingSaves.set(article.url, next)
+    try { return await next } finally {
+      if (this.pendingLinkdingSaves.get(article.url) === next) this.pendingLinkdingSaves.delete(article.url)
+    }
+  }
+
+  private async saveBookmark(article: Article) {
+    const { maxTitle, maxTag, maxUrl, countCodePoints, commaSeparatedTags } = this.service
+    if (shorten(article.url, maxUrl, countCodePoints) !== article.url) {
+      throw new DestinationError(`${this.name} accepts article URLs up to ${maxUrl} characters long.`)
+    }
+    const notes = new Set<string>()
+    const tags = article.tags.map(tag => {
+      const name = commaSeparatedTags ? tag.replace(/\s*,\s*/g, '-') : tag
+      const short = shorten(name, maxTag, countCodePoints)
+      if (short !== name) notes.add(`Paper shortened tags to fit the ${maxTag}-character limit.`)
+      return short
+    })
+    const existing = this.id === 'linkding' ? await this.existingLinkdingBookmark(article.url) : null
+    let response
+    if (existing) {
+      const merged = new Set(existing.tags)
+      if (tags.every(tag => merged.has(tag))) return [...notes].join(' ') || undefined
+      for (const tag of tags) merged.add(tag)
+      response = await this.authenticated(`api/bookmarks/${existing.id}/`, { tag_names: [...merged] }, 'PATCH')
+    } else {
+      const title = shorten(article.title, maxTitle, countCodePoints)
+      if (title !== article.title) notes.add(`Paper shortened the title to fit the ${maxTitle}-character limit.`)
+      response = await this.authenticated(this.service.save, this.service.payload({ ...article, title, tags: [...new Set(tags)] }))
+    }
+    if (!this.service.confirmed(jsonObject(response.text) ?? {}, response.status)) {
+      throw new DestinationError(`${this.name} did not confirm the save. Check the destination before trying again.`)
+    }
+    return [...notes].join(' ') || undefined
   }
 }

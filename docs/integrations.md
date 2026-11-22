@@ -45,7 +45,7 @@ it is absent. The integration test uses FreshRSS 1.30.4.
 Open **Settings > Reading & connections** and find the service you want to use.
 For self-hosted services, enter the installation URL, including any subpath.
 Use **Test connection** to check the credentials before enabling and saving.
-The test reads the account profile.
+The test reads your collections in Linkwarden or your account profile in the other services.
 
 | Service | Credentials |
 | --- | --- |
@@ -59,6 +59,17 @@ Use the bookmark button, **Article options** or `q` in the reader. Paper asks
 which service to use if you enabled more than one. These five services receive
 the article URL, title and feed folder names as tags. Readwise keeps its usual
 save location and receives the URL and title.
+
+Linkding keeps the title, description, notes and tags on an existing bookmark.
+Paper adds any missing folder tags. For Linkding and Wallabag, Paper replaces
+commas and their surrounding spaces with a hyphen. A folder named
+`Science, Technology` becomes one tag, `Science-Technology`.
+
+Paper shortens titles for Linkding (512 characters), Raindrop.io (1000),
+Readeck (1024) and Linkwarden (2048). It also shortens tag names for Linkding
+(64 characters) and Linkwarden (50). The save confirmation tells you when
+Paper shortened a title or tag. If the URL exceeds the destination's limit,
+Paper shows the limit and leaves the URL intact.
 
 Paper accepts public HTTPS by default. For a LAN, loopback or Docker address, add the
 exact origin to `PAPER_TRUSTED_SAVE_ORIGINS` in Paper's environment, for example

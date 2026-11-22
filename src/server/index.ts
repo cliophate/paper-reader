@@ -702,12 +702,18 @@ app.post('/api/save/:destination', asyncRoute(async (request, response) => {
   if (!articleUrl || !['http:', 'https:'].includes(articleUrl.protocol) || articleUrl.username || articleUrl.password) {
     return response.status(400).json({ error: 'A valid article URL is required.' })
   }
-  if (typeof title !== 'string' || title.length > 8192 || !Array.isArray(tags) || tags.length > 256 || tags.some(tag => typeof tag !== 'string' || tag.length > 1024)) {
-    return response.status(400).json({ error: 'Invalid article title or tags.' })
+  if (typeof title !== 'string' || title.length > 8192) {
+    return response.status(400).json({ error: 'Paper accepts article titles up to 8192 characters long.' })
+  }
+  if (!Array.isArray(tags) || tags.length > 256) {
+    return response.status(400).json({ error: 'Paper accepts a list of up to 256 tags per article.' })
+  }
+  if (tags.some(tag => typeof tag !== 'string' || tag.length > 1024)) {
+    return response.status(400).json({ error: 'Paper accepts tag names up to 1024 characters long.' })
   }
   try {
-    await client.save({ url, title, tags })
-    response.json({ ok: true })
+    const note = await client.save({ url, title, tags })
+    response.json({ ok: true, note })
   } catch (error) {
     response.status(502).json({ error: error instanceof DestinationError ? error.message : `Could not save to ${name}.` })
   }

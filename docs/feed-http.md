@@ -27,7 +27,7 @@ them. Redirects to another URL omit them. Malformed or oversized validators are
 ignored on send and receive. Feed requests carry no credentials, cookies or
 proxy environment settings.
 
-Save destinations use `boundedApiRequest` for authenticated GET and POST.
+Save destinations use `boundedApiRequest` for authenticated GET, POST and PATCH requests.
 It pins the resolved address, rejects redirects and caps responses at 1 MiB.
 Private addresses and HTTP require an exact origin in `PAPER_TRUSTED_SAVE_ORIGINS`.
 

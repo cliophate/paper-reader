@@ -1353,7 +1353,8 @@ export default function App() {
         updateEntry(entry.id, { readwiseSavedAt: result.savedAt })
       } else {
         const tags = uniqueFeeds(navigation).find(feed => feed.id === entry.feedId)?.categories ?? []
-        await api.saveArticle(destination.id, entry.url, entry.title, tags)
+        const { note } = await api.saveArticle(destination.id, entry.url, entry.title, tags)
+        if (note) return notify(`Saved to ${destination.name}. ${note}`)
       }
       notify(`Saved to ${destination.name}`)
     } catch (error) {

@@ -40,7 +40,7 @@ export const api = {
   testSaveDestination: (id: SaveDestinationId, settings: DestinationUpdate) =>
     request<{ ok: boolean }>(`/api/settings/connections/test-save/${id}`, { method: 'POST', body: JSON.stringify(settings) }),
   saveArticle: (id: SaveDestinationId, url: string, title: string, tags: string[]) =>
-    request<{ ok: boolean }>(`/api/save/${id}`, { method: 'POST', body: JSON.stringify({ url, title, tags }) }),
+    request<{ ok: boolean; note?: string }>(`/api/save/${id}`, { method: 'POST', body: JSON.stringify({ url, title, tags }) }),
   testAiConnection: (openai: ConnectionsUpdate['openai']) => request<{ available: boolean; message: string }>('/api/settings/connections/test-ai', { method: 'POST', body: JSON.stringify({ openai }) }),
   testSmtp: (smtp: SmtpUpdate) => request<{ message: string }>('/api/settings/connections/test-smtp', { method: 'POST', body: JSON.stringify({ smtp }) }),
   briefingDeliveryHistory: () => request<DeliveryHistoryItem[]>('/api/settings/connections/briefing-delivery'),
