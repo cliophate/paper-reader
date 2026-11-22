@@ -1,4 +1,4 @@
-import { portableUrl } from './opml.js'
+import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { privateFeedRef, migrateFeedMaintenance } from './feed-maintenance.js'
 import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
@@ -824,7 +824,11 @@ export class PaperDatabase {
   }
 
   numberNavigation(navigation: NavigationPayload): NavigationPayload {
-    const feed = (item: Feed): Feed => ({ ...item, linkNumber: this.linkNumber('feed', item.id) })
+    const feed = (item: Feed): Feed => {
+      const url = displayFeedUrl(item.url)
+      return { ...item, url, title: displayFeedTitle(item.title), siteUrl: displayFeedUrl(item.siteUrl),
+        ...(item.url !== url && { urlRef: privateFeedRef(item.id, item.url) }), linkNumber: this.linkNumber('feed', item.id) }
+    }
     return { ...navigation, uncategorized: navigation.uncategorized.map(feed),
       folders: navigation.folders.map(folder => ({ ...folder, linkNumber: this.linkNumber('folder', folder.id), feeds: folder.feeds.map(feed) })) }
   }
@@ -1286,10 +1290,9 @@ export class PaperDatabase {
       folderIdsByFeed.set(row.feed_id, ids)
     }
     const folderTitles = new Map(folderRows.map(row => [row.id, row.title]))
-    const standalone = !!this.activeBackendId && this.identities.backend(this.activeBackendId).kind === 'standalone'
     const feeds = new Map(feedRows.map(row => {
       const categories = (folderIdsByFeed.get(String(row.id)) || []).map(id => folderTitles.get(id) || '').filter(Boolean)
-      return [String(row.id), feedFromRow(row, categories, standalone)]
+      return [String(row.id), feedFromRow(row, categories)]
     }))
     const folders: Folder[] = folderRows.map(row => {
       const folderFeeds = membershipRows
@@ -1812,15 +1815,18 @@ export class PaperDatabase {
   activity(limit = 100): ActivityRecord[] {
     const rows = this.db.prepare('SELECT * FROM activity_events ORDER BY occurred_at DESC, id DESC LIMIT ?')
       .all(Math.min(Math.max(limit, 1), 500)) as Array<Record<string, string | number>>
-    return rows.map(row => ({
-      id: Number(row.id),
-      occurredAt: String(row.occurred_at),
-      kind: String(row.kind) as ActivityKind,
-      origin: String(row.origin),
-      summary: String(row.summary),
-      count: Number(row.event_count),
-      details: parseObject(String(row.details_json)),
-    }))
+    return rows.map(row => {
+      const details = parseObject(String(row.details_json))
+      let summary = String(row.summary)
+      if (row.kind === 'feed' && typeof details.url === 'string') {
+        const url = displayFeedUrl(details.url)
+        if (typeof details.title === 'string') details.title = displayFeedTitle(details.title)
+        details.url = url
+        if (summary.startsWith('Added ')) summary = `Added ${details.title || url}`
+      }
+      return { id: Number(row.id), occurredAt: String(row.occurred_at), kind: String(row.kind) as ActivityKind,
+        origin: String(row.origin), summary, count: Number(row.event_count), details }
+    })
   }
 
   async createMuteFilter(phrase: string, scope: MuteFilterScope, feedId = ''): Promise<MuteFilterRecord> {
@@ -1911,6 +1917,7 @@ export class PaperDatabase {
       const entry = snapshot.entry && typeof snapshot.entry === 'object' && !Array.isArray(snapshot.entry)
         ? snapshot.entry as Record<string, unknown>
         : {}
+      if (typeof entry.feedUrl === 'string') entry.feedUrl = displayFeedUrl(entry.feedUrl)
       return {
         id: String(row.id),
         entryId: String(row.entry_id),
@@ -2239,14 +2246,11 @@ function uniqueFeeds(navigation: NavigationPayload): Map<string, Feed> {
   return feeds
 }
 
-function feedFromRow(row: Record<string, string | number | null>, categories: string[], standalone: boolean): Feed {
-  const rawUrl = String(row.url)
-  const privateUrl = standalone && !!rawUrl && !portableUrl(rawUrl)
+function feedFromRow(row: Record<string, string | number | null>, categories: string[]): Feed {
   return {
     id: String(row.id),
     title: decodeHtmlText(String(row.title)),
-    url: privateUrl ? '' : rawUrl,
-    ...(privateUrl && { urlRef: privateFeedRef(String(row.id), rawUrl) }),
+    url: String(row.url),
     siteUrl: String(row.site_url),
     iconUrl: String(row.icon_url),
     categories,
@@ -2262,7 +2266,7 @@ function feedFromRow(row: Record<string, string | number | null>, categories: st
 
 function entryFromRow(row: Record<string, string | number>): Entry {
   const url = String(row.url)
-  const feedTitle = decodeHtmlText(String(row.feed_title))
+  const feedTitle = displayFeedTitle(decodeHtmlText(String(row.feed_title)))
   const storedContentHtml = String(row.content_html)
   const contentHtml = normalizeFeedContent({ contentHtml: storedContentHtml, feedTitle, url, title: decodeHtmlText(String(row.title)) })
   const contentChanged = contentHtml !== storedContentHtml.trim()
@@ -2270,7 +2274,7 @@ function entryFromRow(row: Record<string, string | number>): Entry {
     id: String(row.id),
     feedId: String(row.feed_id),
     feedTitle,
-    feedUrl: String(row.feed_url),
+    feedUrl: displayFeedUrl(String(row.feed_url)),
     title: normalizeFeedTitle({ title: decodeHtmlText(String(row.title)), contentHtml, url, feedTitle }),
     author: decodeHtmlText(String(row.author)),
     url,

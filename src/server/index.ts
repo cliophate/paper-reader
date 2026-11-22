@@ -1,3 +1,4 @@
+import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { GreaderAuth } from './greader-auth.js'
 import { greaderRoutes } from './greader-routes.js'
 import { RetentionService } from './retention.js'
@@ -34,6 +35,7 @@ import { KirbyPublisher } from './kirby.js'
 import { PaperRepository, switchingEntrySource } from './repository.js'
 import { requireAllowedHost, requireSameOrigin } from './request-origin.js'
 import { preventFraming } from './response-headers.js'
+import { subscriptionList } from './opml.js'
 import { previewFeed } from './feed-repair.js'
 import { FeedHttpError } from './feed-http.js'
 import { FeedIconService } from './feed-icons.js'
@@ -754,7 +756,8 @@ app.get('/api/x/media', asyncRoute(async (request, response) => {
 }))
 
 app.post('/api/feeds/preview', asyncRoute(async (request, response) => {
-  response.json(await previewFeed(String(request.body?.url || ''), config.trustedFeedOrigins))
+  const preview = await previewFeed(String(request.body?.url || ''), config.trustedFeedOrigins)
+  response.json({ ...preview, url: displayFeedUrl(preview.url), title: displayFeedTitle(preview.title) })
 }))
 app.post('/api/feeds/repair', asyncRoute(async (request, response) => {
   const id = String(request.body?.id || '')
@@ -766,8 +769,12 @@ app.post('/api/feeds/repair', asyncRoute(async (request, response) => {
   const preview = await previewFeed(repairRef === undefined ? String(request.body?.url || '') : suggestedAddress(), config.trustedFeedOrigins)
   // Recheck after network I/O. A poll or another repair can change the suggestion.
   const url = repairRef === undefined ? preview.url : suggestedAddress()
-  const current = state()
-  const expected = current && expectedUrl === privateFeedRef(id, current.url) ? current.url : String(expectedUrl || '')
+  let expected = String(expectedUrl || '')
+  if (expected && !/^https?:\/\//i.test(expected)) {
+    const current = standalone ? state()?.url : subscriptionList(await backend.navigation()).find(({ feed }) => feed.id === id)?.feed.url
+    if (!current || expected !== privateFeedRef(id, current)) throw new BackendValidationError('The feed URL changed. Reload subscriptions.')
+    expected = current
+  }
   await synchronizer.repairFeed(id, url, expected)
   response.json({ ok: true })
 }))

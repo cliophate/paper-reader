@@ -1,3 +1,4 @@
+import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import crypto from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { BackendValidationError, type ReaderBackend, type BackendPageOptions, type EntryOptions, type EntryPage, type EntryStateOperation, type FeedOperation, type ImportPageOptions } from './backend.js'
@@ -5,6 +6,7 @@ import { minifluxIdentity, type BackendIdentity } from './identity.js'
 import { minifluxBaseUrl } from './miniflux-url.js'
 import { MINIFLUX_ORGANIZATION_CAPABILITIES } from './organization.js'
 import type { OrganizationCommand } from '../shared/organization.js'
+import { privateFeedRef } from './feed-maintenance.js'
 import { portableUrl, subscriptionUrl } from './opml.js'
 import { cleanArticleHtml, decodeHtmlText, excerpt, firstImage, readingMinutes } from './text.js'
 import { normalizeFeedContent, normalizeFeedThumbnail } from './feed-content.js'
@@ -157,9 +159,10 @@ export class MinifluxClient implements ReaderBackend {
     const safeMessage = errors && !privateValues.some(value => typeof value === 'string' && value && message.includes(value))
       && !/authorization|bearer |cookie|password|token|api.?key/i.test(message)
       ? message.replace(/https?:\/\/[^\s"<>]+/gi, '[URL]').slice(0, 500) : ''
+    const id = this.id('feed', row.id), rawUrl = text(row.feed_url), url = displayFeedUrl(rawUrl)
     return {
-      id: this.id('feed', row.id), title: decodeHtmlText(text(row.title)),
-      url: portableUrl(text(row.feed_url)), siteUrl: portableUrl(text(row.site_url)), iconUrl: '',
+      id, title: displayFeedTitle(decodeHtmlText(text(row.title))),
+      url, ...(url !== rawUrl && { urlRef: privateFeedRef(id, rawUrl) }), siteUrl: displayFeedUrl(text(row.site_url)), iconUrl: '',
       categories: [text(category.title)], unread, lastPublishedAt: null, lastCheckedAt: checked,
       broken: Boolean(errors), parsingErrorCount: errors, parsingErrorMessage: safeMessage,
       lastErrorAt: null,

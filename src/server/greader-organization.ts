@@ -1,8 +1,8 @@
+import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import type { PaperDatabase } from './db.js'
 import type { OrganizationCommand } from './organization.js'
 import { ReaderError } from './greader-auth.js'
 import { LABEL, itemNumber } from './greader-query.js'
-import { portableUrl } from './opml.js'
 import { discoverFeeds, type DiscoveryTransport } from './feed-discovery.js'
 
 type Metadata = ReturnType<PaperDatabase['organization']['metadata']>
@@ -66,7 +66,7 @@ export class GreaderOrganization {
       })
     }
     const feed = sql.prepare('SELECT title, url FROM feeds WHERE id = ?').get(id)!
-    return { numResults: 1, query: portableUrl(String(feed.url)), streamId: `feed/${this.db.linkNumber('feed', id)}`, streamName: String(feed.title) }
+    return { numResults: 1, query: displayFeedUrl(String(feed.url)), streamId: `feed/${this.db.linkNumber('feed', id)}`, streamName: displayFeedTitle(String(feed.title)) }
   }
   async subscribe(p: URLSearchParams, authorize: () => void = () => {}, signal?: AbortSignal) {
     const sources = organizationSources(p)

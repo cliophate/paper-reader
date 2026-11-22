@@ -18,8 +18,8 @@ let privateRedirect = false, signedRepairRequests = 0
 let slowStarted = false, slowClosed = false, feedRequests = 0
 let slowIcons = false, slowIconStarted = false, slowIconClosed = false
 const fixture = http.createServer((request, response) => {
-  if (request.url === '/feed.xml' && privateRedirect) return response.writeHead(301, { Location: '/current.xml?token=fixture-redirect' }).end()
-  if (request.url === '/new.xml?sig=fixture-declared') {
+  if (request.url === '/feed.xml' && privateRedirect) return response.writeHead(301, { Location: '/current.xml?sig=fixture-redirect' }).end()
+  if (request.url === '/new.xml?hash=fixture-declared') {
     signedRepairRequests++
     return response.writeHead(302, { Location: '/mirror.xml' }).end()
   }
@@ -34,7 +34,7 @@ const fixture = http.createServer((request, response) => {
   }
   feedRequests++
   response.setHeader('Content-Type', 'application/rss+xml')
-  response.end(`<rss version="2.0"><channel xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><itunes:new-feed-url>/new.xml?sig=fixture-declared</itunes:new-feed-url><title>Synthetic standalone feed</title><link>https://example.test</link><description>Disposable</description>
+  response.end(`<rss version="2.0"><channel xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><itunes:new-feed-url>/new.xml?hash=fixture-declared</itunes:new-feed-url><title>Synthetic standalone feed</title><link>https://example.test</link><description>Disposable</description>
   ${[1, 2].map(n => `<item><guid>standalone-${n}</guid><title>Standalone story ${n}</title><link>https://example.test/${n}</link><pubDate>${new Date().toUTCString()}</pubDate><description>Synthetic article content</description></item>`).join('')}</channel></rss>`)
 })
 fixture.listen(0, '127.0.0.1'); await once(fixture, 'listening')
@@ -78,6 +78,10 @@ try {
   assert.equal(discovery.status, 200)
   const preview = (await request('/api/subscription-tools/preview-feed', { url: feedOrigin + '/feed.xml', title: 'Standalone fixture' })).data
   privateRedirect = true
+  const manualPreview = await request('/api/feeds/preview', { url: feedOrigin + '/feed.xml' })
+  assert.equal(manualPreview.status, 200)
+  assert.equal(manualPreview.data.url, feedOrigin + '/current.xml')
+  assert.doesNotMatch(JSON.stringify(manualPreview.data), /fixture-redirect/)
   const applied = (await request('/api/subscription-tools/apply', { token: preview.token, choices: [{ key: preview.rows[0].key, action: 'create', folders: ['Synthetic folder'] }] })).data
   assert.equal(applied.results[0].status, 'created')
   const feedId = applied.results[0].id
@@ -147,11 +151,22 @@ try {
   assert.equal(current.navigation.folders[0].title, 'Renamed folder')
   assert.equal(current.navigation.folders[0].feeds[0].id, feedId)
   assert.doesNotMatch(JSON.stringify(current), /fixture-declared/)
+  assert.equal(current.navigation.folders[0].feeds[0].url, feedOrigin + '/new.xml')
   assert(current.navigation.folders[0].feeds[0].urlRef)
+  const navigation = (await request('/api/navigation')).data
+  assert.equal(navigation.folders[0].feeds[0].url, feedOrigin + '/new.xml')
+  assert.doesNotMatch(JSON.stringify(navigation), /fixture-declared/)
   assert.equal((await request('/api/feeds/repair', { ...repair, repairRef: move.repairRef })).status, 400)
+  const checkedInput = feedOrigin + '/feed.xml'
+  assert.equal((await request('/api/feeds/repair', {
+    id: feedId, url: checkedInput, expectedUrl: current.navigation.folders[0].feeds[0].urlRef,
+  })).status, 200)
+  const manuallyRepaired = (await request('/api/navigation')).data.folders[0].feeds[0]
+  assert.equal(manuallyRepaired.url, manualPreview.data.url)
+  assert(manuallyRepaired.urlRef)
   const afterRepair = (await request('/api/entries/item', { id: entry.id })).data.entry
   assert(afterRepair.starred && !afterRepair.read); assert.equal(afterRepair.readingPosition, 0.42)
-  assert.equal((await request('/api/organization/commands', { expectedRevision: current.revision, commands: [{ type: 'unsubscribe', feedId }] })).data.results[0].status, 'applied')
+  assert.equal((await request('/api/organization/commands', { expectedRevision: (await request('/api/organization')).data.revision, commands: [{ type: 'unsubscribe', feedId }] })).data.results[0].status, 'applied')
   assert.equal((await request('/api/entries/item', { id: entry.id })).data.entry.id, entry.id)
   assert.equal((await request('/api/entries?kind=all&id=all&unread=0')).data.items.length, 2)
   slowIcons = true

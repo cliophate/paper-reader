@@ -5,7 +5,7 @@ import { PaperDatabase } from '../src/server/db'
 import { StandaloneBackend } from '../src/server/standalone-backend'
 import { StandaloneRuntime } from '../src/server/standalone-runtime'
 import { StandaloneFeedScheduler } from '../src/server/feed-scheduler'
-import { resolveFeedRepair } from '../src/server/feed-maintenance'
+import { feedMove, resolveFeedRepair } from '../src/server/feed-maintenance'
 import { feedCheckRouter } from '../src/server/feed-check-routes'
 import { requireSameOrigin } from '../src/server/request-origin'
 import type { FeedChecksView } from '../src/shared/feed-checks'
@@ -84,6 +84,23 @@ it('hides signed destinations and rejects a repair reference after the publisher
   const permanent = (await snapshot()).feeds[0].move!
   expect(permanent.suggestedUrl).toBe('https://publisher.test/rss')
   expect(resolveFeedRepair(state(), permanent.repairRef)).toBe(rawRedirect)
+})
+
+it('expires a signed repair reference even when the same address is suggested again', () => {
+  const state = db.feedFetch.get(backend.identity.id, feedId)!
+  state.declaredUrl = 'https://publisher.test/new?hash=fixture'
+  const start = Date.now()
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(start)
+  const ref = feedMove(state)!.repairRef!
+  clock.mockReturnValue(start + 60 * 60_000 - 1)
+  expect(resolveFeedRepair(state, ref)).toBe(state.declaredUrl)
+  const renewed = feedMove(state)!.repairRef!
+  expect(() => resolveFeedRepair(state, renewed.split('.')[0] + '.' + ref.split('.')[1])).toThrow(/refresh/i)
+  clock.mockReturnValue(start + 60 * 60_000)
+  expect(() => resolveFeedRepair(state, ref)).toThrow(/expired.*refresh/i)
+  expect(resolveFeedRepair(state, renewed)).toBe(state.declaredUrl)
+  state.lastAttemptAt++
+  expect(() => resolveFeedRepair(state, renewed)).toThrow(/changed.*refresh/i)
 })
 
 it('checks the chosen folder once per feed and returns safe schedule fields', async () => {

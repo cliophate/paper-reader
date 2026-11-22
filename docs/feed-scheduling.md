@@ -113,6 +113,7 @@ publication date stay outside the age bands. Only fetch failures count toward
   show redirect hops and declared feed addresses without their query strings.
   **Use new address** sends the repair reference back to the server, which
   checks the current destination before replacing the subscription URL.
+  References expire after one hour. Refresh feed details to get a new one.
   FreshRSS and Miniflux return a disabled check view.
 - `GET /api/feed-checks/maintenance` returns the last-post bands and counts of
   articles stored in Paper. `PATCH` saves three increasing day counts in

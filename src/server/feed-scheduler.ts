@@ -1,10 +1,11 @@
+import { displayFeedUrl } from './feed-url-display.js'
 import type { FeedCheckResult } from '../shared/feed-checks.js'
 import { MANUAL_CHECK_COOLDOWN_MS } from './feed-check-settings.js'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { PaperDatabase } from './db.js'
 import { boundedFetch, FeedHttpError, FEED_HTTP_DEFAULTS, validLastModified, type BoundedFetchOptions } from './feed-http.js'
 import type { FeedLease, FetchCompletion } from './feed-fetch-state.js'
-import { portableUrl, subscriptionUrl } from './opml.js'
+import { subscriptionUrl } from './opml.js'
 import { ingestFeed } from './feed-ingestion.js'
 
 export interface FeedSchedulerOptions {
@@ -161,7 +162,7 @@ export class StandaloneFeedScheduler {
         const ingested = ingestFeed(this.db, { backendId: this.backendId, subscriptionId: lease.subscriptionId,
           endpointGeneration: lease.endpointGeneration, xml: response.text, requestUrl: lease.url,
           responseUrl: response.url, fetchedAt: new Date(now).toISOString() })
-        update.publisherSiteUrl = ingested.feed.siteUrl.length <= 4096 ? portableUrl(ingested.feed.siteUrl) : ''
+        update.publisherSiteUrl = ingested.feed.siteUrl.length <= 4096 ? displayFeedUrl(ingested.feed.siteUrl) : ''
         const declared = ingested.feed.declaredUrl || ''
         update.declaredUrl = declared.length <= 4096 ? subscriptionUrl(declared) : ''
         update.ambiguous = ingested.ambiguous

@@ -46,7 +46,7 @@ function matchedGroups(feeds: Feed[], keysFor: (feed: Feed) => string[]) {
 
 export function duplicateFeedGroups(feeds: Feed[], checks: Map<string, Pick<FeedCheckStatus, 'endpointKeys' | 'publisherSiteUrl'>>) {
   const endpoints = new Map(feeds.map(feed => {
-    const url = feedUrlKeys(feed.url)
+    const url = !feed.urlRef && feedUrlKeys(feed.url)
     return [feed.id, checks.get(feed.id)?.endpointKeys ?? (url ? [url] : [])]
   }))
   const exact = matchedGroups(feeds, feed => endpoints.get(feed.id)!.map(url => url.exact))

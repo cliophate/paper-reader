@@ -1,3 +1,4 @@
+import { displayFeedUrl } from './feed-url-display.js'
 import type { DatabaseSync } from 'node:sqlite'
 import type { FeedMove, FeedRedirect, StaleDays } from '../shared/feed-checks.js'
 import type { FeedFetchState } from './feed-fetch-state.js'
@@ -63,30 +64,29 @@ function moveAddresses(state: FeedFetchState) {
   return { redirects, declaredUrl, suggestedUrl: declaredUrl || (permanentUrl !== current ? permanentUrl : '') }
 }
 
-function displayAddress(value: string) {
-  const url = subscriptionUrl(value)
-  return url.split('?')[0]
-}
-
-function repairReference(state: FeedFetchState, url: string) {
-  return reference('repair', state.subscriptionId, state.endpointGeneration, url)
+const REPAIR_REFERENCE_TTL_MS = 60 * 60_000
+function repairReference(state: FeedFetchState, url: string, expires: number) {
+  const mac = reference('repair', state.subscriptionId, state.endpointGeneration, String(state.lastAttemptAt), url, String(expires))
+  return `${expires}.${mac}`
 }
 
 export function feedMove(state: FeedFetchState): FeedMove | undefined {
   const { redirects, declaredUrl, suggestedUrl } = moveAddresses(state)
   if (!redirects.length && !declaredUrl) return
   return {
-    redirects: redirects.map(hop => ({ status: hop.status, url: displayAddress(hop.url) })),
-    declaredUrl: displayAddress(declaredUrl),
-    suggestedUrl: displayAddress(suggestedUrl),
-    ...(suggestedUrl && { repairRef: repairReference(state, suggestedUrl) }),
+    redirects: redirects.map(hop => ({ status: hop.status, url: displayFeedUrl(hop.url, true) })),
+    declaredUrl: displayFeedUrl(declaredUrl, true),
+    suggestedUrl: displayFeedUrl(suggestedUrl, true),
+    ...(suggestedUrl && { repairRef: repairReference(state, suggestedUrl, Date.now() + REPAIR_REFERENCE_TTL_MS) }),
   }
 }
 
 export function resolveFeedRepair(state: FeedFetchState | null, ref: unknown) {
   const url = state && moveAddresses(state).suggestedUrl
-  if (!state || !url || repairReference(state, url) !== ref) {
-    throw new BackendValidationError('The suggested address changed. Check the feed details again.')
+  const expires = typeof ref === 'string' ? Number(ref.split('.', 1)[0]) : NaN
+  if (!state || !url || !Number.isSafeInteger(expires) || repairReference(state, url, expires) !== ref) {
+    throw new BackendValidationError('The suggested address changed. Refresh feed details and try again.')
   }
+  if (expires <= Date.now()) throw new BackendValidationError('The suggested address expired. Refresh feed details and try again.')
   return url
 }

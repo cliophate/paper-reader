@@ -19,7 +19,7 @@ export class ImportConflictError extends Error {
 interface StoredPreview { value: ImportPreview; fingerprint: string; expires: number }
 const signature = (snapshot: ImportSnapshot) => createHash('sha256').update(JSON.stringify({
   revision: snapshot.revision,
-  feeds: subscriptionList(snapshot.navigation).map(({ feed, folders }) => [feed.id, feed.title, feed.url, [...folders].sort()]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+  feeds: subscriptionList(snapshot.navigation).map(({ feed, folders }) => [feed.id, feed.title, feed.urlRef ?? feed.url, [...folders].sort()]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
   folders: snapshot.navigation.folders.map(folder => [folder.id, folder.title]).sort(),
 })).digest('hex')
 
@@ -67,7 +67,7 @@ export class SubscriptionImporter {
           validateFolderNames(choice.folders, snapshot.navigation)
           if (choice.action === 'create') {
             if (choice.folders === null) throw new SubscriptionInputError('Choose a folder or Uncategorized for a new subscription.')
-            if (this.store.kind !== 'standalone' && subscriptionList(snapshot.navigation).some(({ feed }) => subscriptionUrl(feed.url) === row.url)) throw new SubscriptionInputError(`${this.store.kind === 'miniflux' ? 'Miniflux' : 'FreshRSS'} cannot create a distinct subscription at this URL. Choose an existing subscription explicitly or skip this row.`)
+            if (this.store.kind !== 'standalone' && subscriptionList(snapshot.navigation).some(({ feed }) => !feed.urlRef && subscriptionUrl(feed.url) === row.url)) throw new SubscriptionInputError(`${this.store.kind === 'miniflux' ? 'Miniflux' : 'FreshRSS'} cannot create a distinct subscription at this URL. Choose an existing subscription explicitly or skip this row.`)
             const created = await this.store.create(row, choice.folders, snapshot.revision)
             const id = typeof created === 'string' ? created : created?.id
             const warning = typeof created === 'object' ? created.refreshError : undefined

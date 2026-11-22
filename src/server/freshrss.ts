@@ -1,3 +1,4 @@
+import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { setTimeout as delay } from 'node:timers/promises'
 import { abortable } from './abort.js'
 import type { Config } from './config.js'
@@ -393,7 +394,7 @@ function mapEntry(item: GReaderItem): Entry {
     ? item.published * 1000
     : Number(item.crawlTimeMsec || 0) || Math.floor(Number(item.timestampUsec || 0) / 1000)
   const crawledAt = Number(item.crawlTimeMsec || 0) || Math.floor(Number(item.timestampUsec || 0) / 1000) || timestamp
-  const feedTitle = decodeHtmlText(item.origin?.title || '')
+  const feedTitle = displayFeedTitle(decodeHtmlText(item.origin?.title || ''))
   const sanitizedHtml = cleanArticleHtml(rawHtml)
   const contentHtml = normalizeFeedContent({ contentHtml: sanitizedHtml, feedTitle, url, title: decodeHtmlText(item.title || '') })
   const thumbnailUrl = normalizeFeedThumbnail({
@@ -407,7 +408,7 @@ function mapEntry(item: GReaderItem): Entry {
     sourceOrder: canonicalItemId(item.id || ''),
     feedId: item.origin?.streamId || '',
     feedTitle,
-    feedUrl: item.origin?.htmlUrl || '',
+    feedUrl: displayFeedUrl(item.origin?.htmlUrl || ''),
     title: decodeHtmlText(item.title || 'Untitled'),
     author: decodeHtmlText(item.author || ''),
     url,

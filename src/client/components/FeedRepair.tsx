@@ -37,7 +37,7 @@ export function FeedRepair({ feed, move, onChanged }: { feed: Feed; move?: FeedM
     <details><summary>Repair feed URL</summary><p>Check a replacement RSS or Atom endpoint, then replace the URL while keeping this subscription and its articles.</p>
       <label>Replacement URL<input type="url" value={url} disabled={busy} onChange={event => { setUrl(event.target.value); setPreview(null); setMessage('') }} placeholder="https://example.com/feed.xml" /></label>
       <button disabled={busy || !url.trim()} onClick={() => void check()}>{busy ? 'Working...' : 'Check replacement'}</button>
-      {preview && <div><strong>{preview.title || 'Feed preview'}</strong><p className="feed-url">{preview.url}</p>{preview.items.length ? <ol>{preview.items.map((item, index) => <li key={index}>{item.title}<small>{item.date}</small></li>)}</ol> : <p>The feed is valid but currently has no articles.</p>}<button disabled={busy} onClick={() => void repair({ url: preview.url })}>Replace feed URL</button></div>}
+      {preview && <div><strong>{preview.title || 'Feed preview'}</strong><p className="feed-url">{preview.url}</p>{preview.items.length ? <ol>{preview.items.map((item, index) => <li key={index}>{item.title}<small>{item.date}</small></li>)}</ol> : <p>The feed is valid but currently has no articles.</p>}<button disabled={busy} onClick={() => void repair({ url: url.trim() })}>Replace feed URL</button></div>}
     </details>
     {error && <p role="alert" className="form-error">{error}</p>}{message && <p role="status">{message}</p>}
   </section>

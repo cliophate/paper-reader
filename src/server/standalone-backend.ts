@@ -1,3 +1,4 @@
+import { displayFeedUrl } from './feed-url-display.js'
 import { BackendValidationError, type FeedOperation, type ReaderBackend, type EntryStateOperation } from './backend.js'
 import type { PaperDatabase } from './db.js'
 import { PaperRepository } from './repository.js'
@@ -33,7 +34,7 @@ export class StandaloneBackend extends PaperRepository implements ReaderBackend 
   async editEntries(ids: string[], operation: EntryStateOperation) { this.state.editEntries(ids, operation) }
   async addFeed(url: string, title = '', folder = '') {
     const store = localImportStore(this.database, this.identity.id)
-    await store.create({ title: title || url, url }, folder ? [folder] : [], this.database.organization.revision(this.identity.id))
+    await store.create({ title: title || displayFeedUrl(url), url }, folder ? [folder] : [], this.database.organization.revision(this.identity.id))
   }
   async editFeed(id: string, title: string, folder: string, currentFolder: string) {
     this.validateFeedId(id, 'edit')
