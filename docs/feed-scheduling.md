@@ -92,9 +92,11 @@ address in an unbroken series of permanent redirects from the subscribed URL.
 Temporary redirects appear in the details. The repair keeps the subscription
 ID, folders and article state. A new fetch updates the details.
 
-**Duplicates** groups subscriptions with matching feed or redirect destinations,
-or the same site address and title. Address comparisons ignore HTTP versus
-HTTPS, a leading `www.`, trailing slashes and common tracking parameters.
+In **Duplicates**, **Same feed address** compares the subscribed URL and the
+final URL of the last successful feed check. Paper ignores common tracking
+parameters and keeps the order of the remaining query parameters.
+**Possible duplicate** marks addresses that differ by scheme, a leading
+`www.` or a trailing slash. It also marks feeds with the same site and title.
 Compare the folders, number of articles stored in Paper and last post, then
 select a feed and confirm **Unsubscribe** if you want to remove it.
 
@@ -108,7 +110,9 @@ publication date stay outside the age bands. Only fetch failures count toward
 - `GET /api/feed-checks` returns check status, global and per-feed intervals,
   folders, a settings revision and an organization revision. It omits validators,
   lease tokens and credential-bearing query parameters. Standalone responses
-  include observed redirect hops and the publisher's declared feed and site URLs.
+  show redirect hops and declared feed addresses without their query strings.
+  **Use new address** sends the repair reference back to the server, which
+  checks the current destination before replacing the subscription URL.
   FreshRSS and Miniflux return a disabled check view.
 - `GET /api/feed-checks/maintenance` returns the last-post bands and counts of
   articles stored in Paper. `PATCH` saves three increasing day counts in

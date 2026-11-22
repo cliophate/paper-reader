@@ -10,6 +10,7 @@ export interface StreamRef {
 }
 
 export interface Feed {
+  urlRef?: string
   linkNumber?: number
   id: string
   title: string

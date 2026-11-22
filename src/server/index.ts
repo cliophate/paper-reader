@@ -4,7 +4,7 @@ import { RetentionService } from './retention.js'
 import { retentionRouter } from './retention-routes.js'
 import { AuthConnections } from './auth-connections.js'
 import { authGate, authRoutes, cookie, trustedProxyHops } from './auth-routes.js'
-import { feedMove } from './feed-maintenance.js'
+import { privateFeedRef, resolveFeedRepair } from './feed-maintenance.js'
 import { feedCheckRouter } from './feed-check-routes.js'
 import { withRequestSignal } from './request-signal.js'
 import { AI_UNAVAILABLE, warnUnsafeAi } from './ai-client.js'
@@ -759,14 +759,16 @@ app.post('/api/feeds/preview', asyncRoute(async (request, response) => {
 app.post('/api/feeds/repair', asyncRoute(async (request, response) => {
   const id = String(request.body?.id || '')
   backend.validateFeedId(id, 'repair')
-  const url = String(request.body?.url || '')
-  const preview = await previewFeed(url, config.trustedFeedOrigins)
-  const suggested = request.body?.suggested === true
-  if (suggested) {
-    const state = standalone && database.feedFetch.get(backend.identity.id, id)
-    if (!state || !url || feedMove(state)?.suggestedUrl !== url) throw new BackendValidationError('The suggested address changed. Check the feed details again.')
-  }
-  await synchronizer.repairFeed(id, suggested ? url : preview.url, String(request.body?.expectedUrl || ''))
+  if (request.body?.suggested === true) throw new BackendValidationError('Reload feed details before using the suggested address.')
+  const { repairRef, expectedUrl } = request.body ?? {}
+  const state = () => standalone ? database.feedFetch.get(backend.identity.id, id) : null
+  const suggestedAddress = () => resolveFeedRepair(state(), repairRef)
+  const preview = await previewFeed(repairRef === undefined ? String(request.body?.url || '') : suggestedAddress(), config.trustedFeedOrigins)
+  // Recheck after network I/O. A poll or another repair can change the suggestion.
+  const url = repairRef === undefined ? preview.url : suggestedAddress()
+  const current = state()
+  const expected = current && expectedUrl === privateFeedRef(id, current.url) ? current.url : String(expectedUrl || '')
+  await synchronizer.repairFeed(id, url, expected)
   response.json({ ok: true })
 }))
 

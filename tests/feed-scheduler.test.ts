@@ -7,6 +7,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { PaperDatabase } from '../src/server/db.js'
 import { StandaloneFeedScheduler, retryAfterTime } from '../src/server/feed-scheduler.js'
+import { endpointKeys, feedMove } from '../src/server/feed-maintenance.js'
+import { duplicateFeedGroups } from '../src/client/feedFilters'
 import { successfulFeedFetch } from '../src/server/feed-ingestion.js'
 
 const backend = { id: 'standalone:collector-fixture', kind: 'standalone' as const }
@@ -457,6 +459,29 @@ describe('schema v9 recovery', () => {
   })
 })
 
+it('only groups feeds by a final address after both have ingested a valid feed there', async () => {
+  let target = '/maintenance', status = 503
+  const origin = await server((req, res) => {
+    if (req.url === '/one' || req.url === '/two') res.writeHead(302, { Location: target }).end()
+    else res.writeHead(status).end(status === 200 ? rss() : '')
+  })
+  const ids = [save(origin + '/one'), save(origin + '/two')]
+  const groups = () => duplicateFeedGroups(db.localNavigation().uncategorized,
+    new Map(ids.map(id => [id, { endpointKeys: endpointKeys(state(id)) }])))
+  await scheduler(origin).runDue()
+  expect(ids.map(id => feedMove(state(id))?.redirects[0].url)).toEqual(ids.map(() => origin + target))
+  expect(groups()).toEqual([])
+  target = '/valid'; status = 200
+  for (const id of ids) due(id)
+  await scheduler(origin).runDue()
+  expect(groups().map(group => group.label)).toEqual(['Same feed address'])
+  target = '/maintenance'; status = 503
+  for (const id of ids) due(id)
+  await scheduler(origin).runDue()
+  expect(ids.map(id => state(id).validatorUrl)).toEqual(ids.map(() => origin + '/valid'))
+  expect(groups()).toHaveLength(1)
+})
+
 it('records mixed redirects and publisher moves across restart, 304, a new body and URL repair', async () => {
   let first = 301, second = 307, declared = true, status = 200
   const origin = await server((req, res) => {
@@ -469,9 +494,8 @@ it('records mixed redirects and publisher moves across restart, 304, a new body 
       (declared ? '<i:new-feed-url>new-feed</i:new-feed-url>' : '')))
   })
   const id = save(origin + '/old')
-  const { feedMove } = await import('../src/server/feed-maintenance')
   async function check() { due(id); await scheduler(origin).runDue(); return feedMove(state(id)) }
-  expect(await check()).toEqual({ declaredUrl: origin + '/new-feed', suggestedUrl: origin + '/new-feed',
+  expect(await check()).toMatchObject({ declaredUrl: origin + '/new-feed', suggestedUrl: origin + '/new-feed',
     redirects: [{ status: 301, url: origin + '/next' }, { status: 307, url: origin + '/final' }] })
   reopen(); status = 304
   expect((await check())?.declaredUrl).toBe(origin + '/new-feed')
@@ -506,4 +530,27 @@ it('backs up the previous schema and keeps schedules and subscriptions through t
     expect(backup.prepare('SELECT url FROM feeds WHERE id = ?').get(id)?.url).toBe(before.url)
     expect(backup.prepare("SELECT 1 FROM pragma_table_info('feed_fetch_state') WHERE name = 'declared_url'").get()).toBeUndefined()
   } finally { backup.close() }
+
+  const laterId = save('https://example.test/after-upgrade')
+  // Capture an idle WAL database before the last connection checkpoints it on close.
+  const restore = path.join(directory, 'restore.sqlite')
+  const archived = path.join(directory, 'upgraded.sqlite')
+  for (const suffix of ['', '-wal', '-shm']) fs.copyFileSync(file + suffix, restore + suffix)
+  db.close()
+  db = new PaperDatabase(':memory:')
+
+  for (const suffix of ['', '-wal', '-shm']) fs.copyFileSync(restore + suffix, archived + suffix)
+  fs.unlinkSync(restore + '-wal')
+  fs.unlinkSync(restore + '-shm')
+  fs.copyFileSync(`${file}.before-feed-maintenance-v${FEED_MAINTENANCE_VERSION}`, restore)
+  const restored = new DatabaseSync(restore, { readOnly: true })
+  try {
+    expect(restored.prepare('PRAGMA user_version').get()?.user_version).toBe(previousVersion)
+    expect(restored.prepare('SELECT url FROM feeds WHERE id = ?').get(id)?.url).toBe(before.url)
+    expect(restored.prepare('SELECT id FROM feeds WHERE id = ?').get(laterId)).toBeUndefined()
+  } finally { restored.close() }
+  const upgraded = new DatabaseSync(archived, { readOnly: true })
+  try {
+    expect(upgraded.prepare('SELECT id FROM feeds WHERE id = ?').get(laterId)?.id).toBe(laterId)
+  } finally { upgraded.close() }
 })

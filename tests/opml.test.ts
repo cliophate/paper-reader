@@ -62,9 +62,9 @@ describe('OPML parsing and portability', () => {
   })
 
   it('rejects embedded credentials and omits credential query parameters from export', () => {
-    const privateNav = { ...navigation, folders: [], uncategorized: [feed('feed/https://user:password@example.test/rss', 'https://user:password@example.test/rss'), feed('secret', 'https://example.test/rss?token=private-value')] }
+    const privateNav = { ...navigation, folders: [], uncategorized: [feed('feed/https://user:password@example.test/rss', 'https://user:password@example.test/rss'), feed('secret', 'https://example.test/rss?token=private-value'), feed('signed', 'https://example.test/rss?sig=private-value')] }
     const exported = exportOpml(privateNav, 'private-backend')
-    expect(exported.omitted).toBe(2)
+    expect(exported.omitted).toBe(3)
     expect(exported.xml).not.toMatch(/password|private-value|private-backend/)
     const rows = parseOpml(wrap('<outline xmlUrl="https://user:password@example.test/rss"/>')).subscriptions
     expect(rows[0].url).toBe('')

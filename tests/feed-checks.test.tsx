@@ -113,10 +113,10 @@ it('offers one-click repair for the suggested address and only displays a tempor
   await act(async () => root.render(<FeedRepair feed={feed} move={temporary} onChanged={changed} />))
   expect(container.textContent).toContain('Temporary redirect (HTTP 307)')
   expect(button('Use new address')).toBeUndefined()
-  const declared = { redirects: [], declaredUrl: next, suggestedUrl: next }
+  const declared = { redirects: [], declaredUrl: next, suggestedUrl: next, repairRef: 'fixture-reference' }
   await act(async () => root.render(<FeedRepair feed={feed} move={declared} onChanged={changed} />))
   expect(api.repairFeed).not.toHaveBeenCalled()
   await click('Use new address')
-  expect(api.repairFeed).toHaveBeenCalledExactlyOnceWith('feed-1', next, original, true)
+  expect(api.repairFeed).toHaveBeenCalledExactlyOnceWith('feed-1', { repairRef: declared.repairRef }, original)
   expect(changed).toHaveBeenCalledOnce()
 })

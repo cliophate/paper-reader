@@ -5,6 +5,7 @@ import { PaperDatabase } from '../src/server/db'
 import { StandaloneBackend } from '../src/server/standalone-backend'
 import { StandaloneRuntime } from '../src/server/standalone-runtime'
 import { StandaloneFeedScheduler } from '../src/server/feed-scheduler'
+import { resolveFeedRepair } from '../src/server/feed-maintenance'
 import { feedCheckRouter } from '../src/server/feed-check-routes'
 import { requireSameOrigin } from '../src/server/request-origin'
 import type { FeedChecksView } from '../src/shared/feed-checks'
@@ -58,6 +59,31 @@ it('validates interval bounds, optional overrides, and active subscriptions', as
   db.organization.apply(backend.identity.id, db.organization.snapshot(backend.identity.id).revision, [{ type: 'unsubscribe', feedId }])
   expect((await post('now', { ...revision(await snapshot()), feedId })).status).toBe(400)
   expect((await post('interval', { ...revision(await snapshot()), feedId, intervalMinutes: 15 })).status).toBe(400)
+})
+
+it('hides signed destinations and rejects a repair reference after the publisher rotates its signature', async () => {
+  await mount()
+  const rawRedirect = 'https://publisher.test/rss?token=redirect-secret'
+  const declared = 'https://publisher.test/new?sig=declared-secret'
+  const save = (address: string) => db.greaderDatabase.prepare(`UPDATE feed_fetch_state
+    SET redirects_json = ?, validator_url = ?, declared_url = ?, publisher_site_url = ?, last_success_at = 1
+    WHERE subscription_id = ?`).run(JSON.stringify([{ status: 301, url: rawRedirect }]), rawRedirect,
+      address, 'https://publisher.test/?sig=site-secret', feedId)
+  save(declared)
+  const view = await snapshot()
+  const move = view.feeds[0].move!
+  expect(move).toMatchObject({ redirects: [{ status: 301, url: 'https://publisher.test/rss' }],
+    declaredUrl: 'https://publisher.test/new', suggestedUrl: 'https://publisher.test/new', repairRef: expect.any(String) })
+  expect(JSON.stringify(view)).not.toMatch(/redirect-secret|declared-secret|site-secret/)
+  const state = () => db.feedFetch.get(backend.identity.id, feedId)!
+  expect(resolveFeedRepair(state(), move.repairRef)).toBe(declared)
+  save(declared + '-rotated')
+  expect(() => resolveFeedRepair(state(), move.repairRef)).toThrow(/changed/)
+  expect(resolveFeedRepair(state(), (await snapshot()).feeds[0].move!.repairRef)).toBe(declared + '-rotated')
+  save('')
+  const permanent = (await snapshot()).feeds[0].move!
+  expect(permanent.suggestedUrl).toBe('https://publisher.test/rss')
+  expect(resolveFeedRepair(state(), permanent.repairRef)).toBe(rawRedirect)
 })
 
 it('checks the chosen folder once per feed and returns safe schedule fields', async () => {

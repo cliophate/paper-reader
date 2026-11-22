@@ -1,6 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { FeedMove, FeedRedirect, StaleDays } from '../shared/feed-checks.js'
 import type { FeedFetchState } from './feed-fetch-state.js'
+import { createHmac, randomBytes } from 'node:crypto'
+import { BackendValidationError } from './backend.js'
+import { feedUrlKeys } from './feed-url-comparison.js'
 import { subscriptionUrl } from './opml.js'
 import { transaction } from './transaction.js'
 import { FEED_MAINTENANCE_VERSION } from './auth-schema.js'
@@ -29,15 +32,61 @@ export function validStaleDays(value: unknown): value is StaleDays {
     Number.isSafeInteger(day) && day > 0 && day <= 36500 && (!index || day > value[index - 1]))
 }
 
-export function feedMove(state: FeedFetchState): FeedMove | undefined {
+// References expire on restart. A fresh poll supplies new ones.
+const referenceKey = randomBytes(32)
+function reference(...parts: string[]) {
+  return createHmac('sha256', referenceKey).update(JSON.stringify(parts)).digest('base64url')
+}
+
+export function privateFeedRef(id: string, url: string) {
+  return reference('subscription', id, url)
+}
+
+export function endpointKeys(state: FeedFetchState) {
+  const urls = new Set([state.url])
+  if (state.lastSuccessAt && state.validatorUrl) urls.add(state.validatorUrl)
+  return [...urls].flatMap(url => {
+    const keys = feedUrlKeys(url)
+    return keys ? [{ exact: reference('exact', keys.exact), possible: reference('possible', keys.possible) }] : []
+  })
+}
+
+function moveAddresses(state: FeedFetchState) {
   const redirects: FeedRedirect[] = JSON.parse(state.redirectsJson)
   const current = subscriptionUrl(state.url)
   const declaredUrl = state.declaredUrl === current ? '' : state.declaredUrl
-  if (!redirects.length && !declaredUrl) return
   let permanentUrl = ''
   for (const hop of redirects) {
     if (hop.status !== 301 && hop.status !== 308) break
     permanentUrl = hop.url
   }
   return { redirects, declaredUrl, suggestedUrl: declaredUrl || (permanentUrl !== current ? permanentUrl : '') }
+}
+
+function displayAddress(value: string) {
+  const url = subscriptionUrl(value)
+  return url.split('?')[0]
+}
+
+function repairReference(state: FeedFetchState, url: string) {
+  return reference('repair', state.subscriptionId, state.endpointGeneration, url)
+}
+
+export function feedMove(state: FeedFetchState): FeedMove | undefined {
+  const { redirects, declaredUrl, suggestedUrl } = moveAddresses(state)
+  if (!redirects.length && !declaredUrl) return
+  return {
+    redirects: redirects.map(hop => ({ status: hop.status, url: displayAddress(hop.url) })),
+    declaredUrl: displayAddress(declaredUrl),
+    suggestedUrl: displayAddress(suggestedUrl),
+    ...(suggestedUrl && { repairRef: repairReference(state, suggestedUrl) }),
+  }
+}
+
+export function resolveFeedRepair(state: FeedFetchState | null, ref: unknown) {
+  const url = state && moveAddresses(state).suggestedUrl
+  if (!state || !url || repairReference(state, url) !== ref) {
+    throw new BackendValidationError('The suggested address changed. Check the feed details again.')
+  }
+  return url
 }

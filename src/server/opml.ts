@@ -30,7 +30,7 @@ export function portableUrl(value: string): string {
   const safe = subscriptionUrl(value)
   if (!safe) return ''
   const url = new URL(safe)
-  if ([...url.searchParams.keys()].some(key => /token|secret|password|passwd|api.?key|auth|signature|credential/i.test(key))) return ''
+  if ([...url.searchParams.keys()].some(key => /token|secret|password|passwd|api.?key|auth|signature|(?:^|[-_])sig(?:$|[-_])|credential|^key$/i.test(key))) return ''
   return safe
 }
 

@@ -4,7 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import type { PaperDatabase } from './db.js'
 import { boundedFetch, FeedHttpError, FEED_HTTP_DEFAULTS, validLastModified, type BoundedFetchOptions } from './feed-http.js'
 import type { FeedLease, FetchCompletion } from './feed-fetch-state.js'
-import { portableUrl } from './opml.js'
+import { portableUrl, subscriptionUrl } from './opml.js'
 import { ingestFeed } from './feed-ingestion.js'
 
 export interface FeedSchedulerOptions {
@@ -140,7 +140,7 @@ export class StandaloneFeedScheduler {
         validators: { url: lease.validatorUrl, etag: lease.etag, lastModified: lease.lastModified },
         acquire: (url, signal) => this.acquire(url, signal) })
       signal?.throwIfAborted()
-      redirectsJson = JSON.stringify(response.redirects.map(hop => ({ status: hop.status, url: portableUrl(hop.url) })))
+      redirectsJson = JSON.stringify(response.redirects.map(hop => ({ status: hop.status, url: subscriptionUrl(hop.url) })))
       status = response.status
       retryAfter = response.retryAfter
       if (status === 304 && (!response.conditional || !lease.lastSuccessAt)) {
@@ -163,7 +163,7 @@ export class StandaloneFeedScheduler {
           responseUrl: response.url, fetchedAt: new Date(now).toISOString() })
         update.publisherSiteUrl = ingested.feed.siteUrl.length <= 4096 ? portableUrl(ingested.feed.siteUrl) : ''
         const declared = ingested.feed.declaredUrl || ''
-        update.declaredUrl = declared.length <= 4096 ? portableUrl(declared) : ''
+        update.declaredUrl = declared.length <= 4096 ? subscriptionUrl(declared) : ''
         update.ambiguous = ingested.ambiguous
         return ingested.ambiguous
       })
@@ -176,7 +176,7 @@ export class StandaloneFeedScheduler {
       const nextFetchAt = Math.max(now + Math.round(backoff * (0.8 + Math.random() * 0.2)), retryAfterTime(retryAfter, now))
       const lastError = error instanceof FeedHttpError ? error.code : signal?.aborted ? 'aborted' : status === 200 ? 'ingestion' : `http-${status}`
       const result = this.db.feedFetch.complete(lease, now, { nextFetchAt, failures, redirectsJson, lastStatus: status, lastError, retryAfterUntil: retryAfterTime(retryAfter, now),
-        ...(discardValidators ? { etag: '', lastModified: '', validatorUrl: '' } : {}) }, () => {})
+        ...(discardValidators ? { etag: '', lastModified: '' } : {}) }, () => {})
       return { kind: result.committed ? 'failed' : 'stale', ambiguous: 0 }
     }
   }

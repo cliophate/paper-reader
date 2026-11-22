@@ -1,4 +1,5 @@
 import type { FeedCheckStatus, StaleDays } from '../shared/feed-checks'
+import { feedUrlKeys } from '../server/feed-url-comparison'
 import type { Feed } from './types'
 
 export type FeedFilter = 'all' | 'attention' | 'moved' | 'duplicates' | 'first' | 'second' | 'oldest'
@@ -13,20 +14,7 @@ export function feedMatchesAge(feed: Feed, filter: FeedFilter, days: StaleDays |
   return age >= days[2]
 }
 
-// Comparison only. Keep the subscribed address intact for fetching and repair.
-export function normalizedFeedUrl(input: string) {
-  try {
-    const url = new URL(input)
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return ''
-    for (const key of [...url.searchParams.keys()]) {
-      if (/^(utm_|fbclid$|gclid$|mc_cid$|mc_eid$)/i.test(key)) url.searchParams.delete(key)
-    }
-    url.searchParams.sort()
-    return url.host.replace(/^www\./, '') + url.pathname.replace(/\/+$/, '') + url.search
-  } catch { return '' }
-}
-
-export function duplicateFeedGroups(feeds: Feed[], checks: Map<string, Pick<FeedCheckStatus, 'move' | 'publisherSiteUrl' | 'finalUrl'>>): Feed[][] {
+function matchedGroups(feeds: Feed[], keysFor: (feed: Feed) => string[]) {
   const byKey = new Map<string, string>()
   const parents = new Map<string, string>()
   function root(id: string): string {
@@ -37,14 +25,7 @@ export function duplicateFeedGroups(feeds: Feed[], checks: Map<string, Pick<Feed
   }
 
   for (const feed of feeds) {
-    const check = checks.get(feed.id)
-    const endpoint = normalizedFeedUrl(feed.url)
-    const finalUrl = normalizedFeedUrl(check?.move?.redirects.at(-1)?.url ?? check?.finalUrl ?? '')
-    const site = normalizedFeedUrl(feed.siteUrl || check?.publisherSiteUrl || '')
-    const title = feed.title.trim().replace(/\s+/g, ' ').toLowerCase()
-    const keys = [endpoint, finalUrl].filter(Boolean).map(url => 'url:' + url)
-    if (site && title) keys.push(JSON.stringify([site, title]))
-    for (const key of keys) {
+    for (const key of keysFor(feed)) {
       const match = byKey.get(key)
       if (match === undefined) byKey.set(key, feed.id)
       else {
@@ -60,5 +41,25 @@ export function duplicateFeedGroups(feeds: Feed[], checks: Map<string, Pick<Feed
     if (group) group.push(feed)
     else groups.set(key, [feed])
   }
-  return [...groups.values()].filter(group => group.length > 1)
+  return { groups: [...groups.values()].filter(group => group.length > 1), root }
+}
+
+export function duplicateFeedGroups(feeds: Feed[], checks: Map<string, Pick<FeedCheckStatus, 'endpointKeys' | 'publisherSiteUrl'>>) {
+  const endpoints = new Map(feeds.map(feed => {
+    const url = feedUrlKeys(feed.url)
+    return [feed.id, checks.get(feed.id)?.endpointKeys ?? (url ? [url] : [])]
+  }))
+  const exact = matchedGroups(feeds, feed => endpoints.get(feed.id)!.map(url => url.exact))
+  const possible = matchedGroups(feeds, feed => {
+    const keys = endpoints.get(feed.id)!.map(url => 'url:' + url.possible)
+    const site = feedUrlKeys(feed.siteUrl || checks.get(feed.id)?.publisherSiteUrl || '')
+    const title = feed.title.trim().replace(/\s+/g, ' ').toLowerCase()
+    if (site && title) keys.push(JSON.stringify([site.possible, title]))
+    return keys
+  })
+  return [
+    ...exact.groups.map(feeds => ({ feeds, label: 'Same feed address' })),
+    ...possible.groups.filter(group => group.some(feed => exact.root(feed.id) !== exact.root(group[0].id)))
+      .map(feeds => ({ feeds, label: 'Possible duplicate' })),
+  ]
 }

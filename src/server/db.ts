@@ -1,4 +1,5 @@
-import { migrateFeedMaintenance } from './feed-maintenance.js'
+import { portableUrl } from './opml.js'
+import { privateFeedRef, migrateFeedMaintenance } from './feed-maintenance.js'
 import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
@@ -1285,9 +1286,10 @@ export class PaperDatabase {
       folderIdsByFeed.set(row.feed_id, ids)
     }
     const folderTitles = new Map(folderRows.map(row => [row.id, row.title]))
+    const standalone = !!this.activeBackendId && this.identities.backend(this.activeBackendId).kind === 'standalone'
     const feeds = new Map(feedRows.map(row => {
       const categories = (folderIdsByFeed.get(String(row.id)) || []).map(id => folderTitles.get(id) || '').filter(Boolean)
-      return [String(row.id), feedFromRow(row, categories)]
+      return [String(row.id), feedFromRow(row, categories, standalone)]
     }))
     const folders: Folder[] = folderRows.map(row => {
       const folderFeeds = membershipRows
@@ -2237,11 +2239,14 @@ function uniqueFeeds(navigation: NavigationPayload): Map<string, Feed> {
   return feeds
 }
 
-function feedFromRow(row: Record<string, string | number | null>, categories: string[]): Feed {
+function feedFromRow(row: Record<string, string | number | null>, categories: string[], standalone: boolean): Feed {
+  const rawUrl = String(row.url)
+  const privateUrl = standalone && !!rawUrl && !portableUrl(rawUrl)
   return {
     id: String(row.id),
     title: decodeHtmlText(String(row.title)),
-    url: String(row.url),
+    url: privateUrl ? '' : rawUrl,
+    ...(privateUrl && { urlRef: privateFeedRef(String(row.id), rawUrl) }),
     siteUrl: String(row.site_url),
     iconUrl: String(row.icon_url),
     categories,

@@ -4,8 +4,8 @@ import type { StandaloneRuntime } from './standalone-runtime.js'
 import type { BackendIdentity } from './identity.js'
 import type { FeedChecksView } from '../shared/feed-checks.js'
 import { OrganizationError } from './organization.js'
-import { portableUrl, subscriptionUrl } from './opml.js'
-import { DEFAULT_STALE_DAYS, feedMove, validStaleDays } from './feed-maintenance.js'
+import { portableUrl } from './opml.js'
+import { DEFAULT_STALE_DAYS, endpointKeys, feedMove, validStaleDays } from './feed-maintenance.js'
 import { MANUAL_CHECK_COOLDOWN_MS } from './feed-check-settings.js'
 
 export function feedCheckRouter(database: PaperDatabase, backend: BackendIdentity, runtime?: StandaloneRuntime) {
@@ -20,9 +20,7 @@ export function feedCheckRouter(database: PaperDatabase, backend: BackendIdentit
       feeds: feeds.flatMap(feed => {
         const state = database.feedFetch.get(backend.id, feed.id)
         if (!state) return []
-        // Before redirect history, the collector already kept the last successful response URL.
-        const finalUrl = state.validatorUrl && state.validatorUrl !== subscriptionUrl(state.url) ? portableUrl(state.validatorUrl) : ''
-        return [{ feedId: feed.id, move: feedMove(state), finalUrl: finalUrl || undefined, publisherSiteUrl: state.publisherSiteUrl || undefined,
+        return [{ feedId: feed.id, move: feedMove(state), endpointKeys: endpointKeys(state), publisherSiteUrl: portableUrl(state.publisherSiteUrl) || undefined,
           lastSuccessAt: state.lastSuccessAt, nextFetchAt: state.nextFetchAt,
           failures: state.failures, lastError: state.lastError, lastStatus: state.lastStatus,
           retryAfterUntil: state.retryAfterUntil, cooldownUntil: state.lastAttemptAt ? state.lastAttemptAt + MANUAL_CHECK_COOLDOWN_MS : 0,
