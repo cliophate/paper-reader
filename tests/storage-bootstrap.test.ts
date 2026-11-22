@@ -4,13 +4,15 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db.js'
 import { openCoordinatedStorage } from '../src/server/storage-bootstrap.js'
 import { acquireStateLock } from '../src/server/state-lock.js'
 
 let directory: string
 const children: ChildProcess[] = []
+// Two child processes load the server modules before bootstrap's own five-second lock deadline starts.
+const participantTestTimeout = 15_000
 beforeEach(() => { directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-bootstrap-')) })
 afterEach(async () => {
   await Promise.all(children.splice(0).map(async child => {
@@ -38,7 +40,7 @@ describe('coordinated storage bootstrap', () => {
     expect(starts.map(start => start.ready)).toEqual([true, true])
     expect(starts.reduce((count, start) => count + start.upgrades, 0)).toBe(1)
     expect(() => acquireStateLock(directory, 'exclusive')).toThrow(/in use/)
-  })
+  }, participantTestTimeout)
 
   it('lets an already-current briefing participant join a held server lock without exclusive bootstrap or DDL', async () => {
     const server = await participant()
@@ -47,7 +49,7 @@ describe('coordinated storage bootstrap', () => {
     const briefing = await participant()
     expect(briefing).toMatchObject({ ready: true, upgrades: 0 })
     expect(schemaVersion()).toBe(before)
-  })
+  }, participantTestTimeout)
 
   it('upgrades an old schema once under exclusive ownership and retains its pre-upgrade backup', async () => {
     const filename = path.join(directory, 'paper.sqlite')
@@ -66,6 +68,14 @@ describe('coordinated storage bootstrap', () => {
       .toEqual(expect.arrayContaining(['backend_id', 'expected_revisions_json']))
     expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE name GLOB 'migration_*'").all()).toEqual([])
     upgraded.close()
+  }, participantTestTimeout)
+
+  it('retries bootstrap when another process is recovering the WAL', async () => {
+    const onUpgrade = vi.fn().mockImplementationOnce(() => {
+      throw Object.assign(new Error('database is locked'), { errcode: 261 }) // SQLITE_BUSY_RECOVERY
+    })
+    const storage = await openCoordinatedStorage(directory, { onUpgrade })
+    try { expect(onUpgrade).toHaveBeenCalledTimes(2) } finally { storage.close() }
   })
 
   it('closes initialization failures before any application file exists', async () => {
