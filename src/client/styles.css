@@ -385,6 +385,12 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .article-content h2 { font-size: 29px; }
 .article-content h3 { font-size: 23px; }
 .article-content a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.enclosure-player { margin-block: 1em; }
+.enclosure-player button { padding: 8px 16px; min-height: 44px; border: 1px solid var(--line); border-radius: 6px; background: var(--soft); color: var(--ink); cursor: pointer; }
+.enclosure-player button:hover { background: var(--hover); }
+.enclosure-player audio, .enclosure-player video { width: 100%; max-width: 100%; }
+.enclosure-player video { max-height: 65vh; }
+
 .article-content img, .article-content video { display: block; max-width: 100%; height: auto; border-radius: 10px; margin: 2em auto; }
 .article-content iframe { display: block; width: 100%; min-height: min(56vw, 520px); border: 0; border-radius: 10px; margin: 2em auto; }
 .article-content figure { margin: 2em 0; }

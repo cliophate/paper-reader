@@ -49,6 +49,11 @@ Schema v22 adds per-feed fetch and extraction overrides. The migration saves
 with overrides use a separate cache key for each saved revision. Back up
 `secrets.json` with the database to preserve feed cookies.
 
+Schema v23 stores audio and video attachments and their playback positions.
+The migration saves `paper.sqlite.before-podcast-enclosures-v23`. Existing
+FreshRSS articles fetch missing attachment metadata once when opened. Other
+articles gain attachments when their feed or backend supplies them again.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh

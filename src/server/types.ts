@@ -1,3 +1,4 @@
+import type { Enclosure } from '../shared/enclosures.js'
 export type { BriefingSelection } from '../shared/briefings.js'
 
 export type StreamKind = 'all' | 'starred' | 'category' | 'feed'
@@ -41,6 +42,8 @@ export interface Entry {
   linkNumber?: number
   stateRevision?: number
   searchExcerpt?: string
+  enclosures?: Enclosure[]
+  enclosuresUnchecked?: boolean
   readingPosition?: number
   lastReadAt?: string
   readwiseSavedAt?: string

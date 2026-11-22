@@ -320,7 +320,7 @@ it('keeps the article foreign-key inventory explicit for future schema changes',
     const table = String(row.name)
     return sql.prepare(`PRAGMA foreign_key_list("${table.replaceAll('"', '""')}")`).all().some(key => key.table === 'entries') ? [table] : []
   }).sort()
-  expect(references).toEqual(['article_arrivals', 'article_urls', 'briefing_considered', 'coverage_cluster_entries', 'entry_search_rows',
+  expect(references).toEqual(['article_arrivals', 'article_enclosures', 'article_urls', 'briefing_considered', 'coverage_cluster_entries', 'entry_search_rows',
     'headline_cache', 'muted_entries', 'pulse_memberships', 'pulse_scanned', 'reading_progress', 'retention_auto_read'].sort())
 })
 

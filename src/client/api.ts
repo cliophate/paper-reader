@@ -1,4 +1,5 @@
 import type { FeedOverrideView, FeedOverrideUpdate } from '../shared/feed-overrides'
+import { PlaybackQueue, type PlaybackPosition } from './playback'
 import type { RetentionPolicy, RetentionPreview, RetentionView } from '../shared/retention'
 import type { FeedMaintenance, StaleDays, FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarget } from '../shared/feed-checks'
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
@@ -28,6 +29,10 @@ function sourceRequestSignal(signal?: AbortSignal): AbortSignal | undefined {
   return signal && typeof AbortSignal.any === 'function' && typeof AbortSignal.timeout === 'function'
     ? AbortSignal.any([signal, AbortSignal.timeout(90000)]) : signal
 }
+
+export const playback = new PlaybackQueue(item => request<PlaybackPosition>('/api/playback', {
+  method: 'POST', body: JSON.stringify(item), keepalive: true,
+}))
 
 export const api = {
   retention: () => request<RetentionView>('/api/retention'),
@@ -109,7 +114,10 @@ export const api = {
     return request<EntryPage>(`/api/entries?${params}`, { signal })
   },
   entryByNumber: (number: number) => request<{ entry: Entry }>(`/api/entries/number/${number}`),
-  entry: (id: string) => request<{ entry: Entry | null }>('/api/entries/item', { method: 'POST', body: JSON.stringify({ id }) }),
+  entry: async (id: string) => {
+    await playback.waitForArticle(id)
+    return request<{ entry: Entry | null }>('/api/entries/item', { method: 'POST', body: JSON.stringify({ id }) })
+  },
   editState: async (ids: string[], operation: 'read' | 'unread' | 'star' | 'unstar', origin: 'reader' | 'pulse' | 'automatic' = 'reader', options: { expectedRevisions?: Record<string, number>; undo?: boolean } = {}) => {
     const uniqueIds = [...new Set(ids)]
     const revisions: Record<string, number> = {}

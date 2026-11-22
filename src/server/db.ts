@@ -1,6 +1,7 @@
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { privateFeedRef, migrateFeedMaintenance } from './feed-maintenance.js'
 import { FeedOverrideStore, migrateFeedOverrides } from './feed-overrides.js'
+import { ENCLOSURE_SCHEMA_VERSION, entryEnclosures, migrateEnclosures, replaceEnclosures } from './enclosure-store.js'
 import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
@@ -243,6 +244,10 @@ export class PaperDatabase {
         if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < FEED_OVERRIDE_VERSION) {
           if (version > 0) this.backupBeforeMigration(FEED_OVERRIDE_VERSION, 'feed-overrides')
           migrateFeedOverrides(this.db)
+        }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version || 0) < ENCLOSURE_SCHEMA_VERSION) {
+          if (version > 0) this.backupBeforeMigration(ENCLOSURE_SCHEMA_VERSION, 'podcast-enclosures')
+          migrateEnclosures(this.db)
         }
       }
       this.retention = new RetentionStore(this.db, ids => { this.commitLocalEntryState(this.activeBackendId, ids, 'read', { origin: 'retention' }) })
@@ -845,6 +850,10 @@ export class PaperDatabase {
       const arrival = this.db.prepare('SELECT sequence FROM article_arrivals WHERE entry_id = ?')
       for (const entry of entries) {
         if (!arrival.get(entry.id)) this.upsertEntries([entry])
+        else if (entry.enclosures) {
+          this.markEnclosuresChecked(entry.id)
+          replaceEnclosures(this.db, entry.id, entry.enclosures)
+        }
       }
       return entries.map(entry => this.numberEntry(entry))
     })
@@ -852,7 +861,8 @@ export class PaperDatabase {
 
   numberEntry(entry: Entry): Entry {
     const row = this.db.prepare('SELECT sequence FROM article_arrivals WHERE entry_id = ?').get(entry.id)
-    return { ...entry, linkNumber: row ? Number(row.sequence) : undefined }
+    const enclosures = entryEnclosures(this.db, entry.id)
+    return { ...entry, enclosures: enclosures.length ? enclosures : undefined, linkNumber: row ? Number(row.sequence) : undefined }
   }
 
   entryByNumber(number: number): Entry | null {
@@ -913,8 +923,8 @@ export class PaperDatabase {
       INSERT INTO entries (
         id, feed_id, feed_title, feed_url, title, author, url, canonical_url,
         source_domain, content_html, content_text, excerpt, published_at, timestamp,
-        crawled_at, read, starred, reading_minutes, thumbnail_url, kind, synced_at, first_seen_at, source_order
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        crawled_at, read, starred, reading_minutes, thumbnail_url, kind, synced_at, first_seen_at, source_order, enclosures_checked
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         feed_id = excluded.feed_id,
         feed_title = excluded.feed_title,
@@ -931,6 +941,7 @@ export class PaperDatabase {
         published_at = excluded.published_at,
         timestamp = excluded.timestamp,
         crawled_at = excluded.crawled_at,
+        enclosures_checked = max(entries.enclosures_checked, excluded.enclosures_checked),
         source_order = CASE WHEN excluded.source_order = '' THEN entries.source_order ELSE excluded.source_order END,
         read = entries.read,
         starred = entries.starred,
@@ -953,8 +964,9 @@ export class PaperDatabase {
           plainText(entry.contentHtml), entry.excerpt, entry.publishedAt, entry.timestamp,
           entry.crawledAt || entry.timestamp,
           entry.read ? 1 : 0, entry.starred ? 1 : 0, entry.readingMinutes,
-          entry.thumbnailUrl, entry.kind, now, Date.parse(now), entry.sourceOrder || '',
+          entry.thumbnailUrl, entry.kind, now, Date.parse(now), entry.sourceOrder || '', entry.enclosures ? 1 : 0,
         )
+        if (entry.enclosures) replaceEnclosures(this.db, entry.id, entry.enclosures)
         const cached = hasCachedArticles && this.getArticleForEntry(entry.id)
         if (cached) this.db.prepare('UPDATE entries SET full_content_text = ? WHERE id = ?').run(plainText(cached.contentHtml), entry.id)
         const matches = new Set(muteRules.filter(rule => entryMatchesMuteFilter(entry, rule)).map(rule => rule.id))
@@ -1448,6 +1460,26 @@ export class PaperDatabase {
     const saved = this.db.prepare(`SELECT saved_at FROM readwise_saves WHERE url = ? OR url IN
       (SELECT url FROM article_urls WHERE entry_id = ?) ORDER BY saved_at DESC LIMIT 1`).get(entry.url, entry.id)
     return { ...this.numberEntry(entry), readingPosition: progress ? Number(progress.position) : undefined, lastReadAt: progress ? String(progress.updated_at) : undefined, readwiseSavedAt: saved ? String(saved.saved_at) : undefined }
+  }
+
+  private markEnclosuresChecked(id: string) {
+    return this.db.prepare('UPDATE entries SET enclosures_checked = 1 WHERE id = ? AND enclosures_checked = 0').run(id).changes > 0
+  }
+
+  cacheUncheckedEnclosures(id: string, files: NonNullable<Entry['enclosures']>) {
+    transaction(this.db, () => {
+      if (this.markEnclosuresChecked(id)) replaceEnclosures(this.db, id, files)
+    })
+  }
+
+  savePlaybackPosition(id: string, url: string, position: number, updatedAt: number) {
+    const timestamp = Math.min(updatedAt, Date.now() + 5 * 60_000)
+    const saved = this.db.prepare(`UPDATE article_enclosures SET position = ?, updated_at = ?
+      WHERE entry_id = ? AND url = ? AND ordinal IS NOT NULL AND updated_at < ?`).run(position, timestamp, id, url, timestamp)
+    if (saved.changes) return { position, updatedAt: timestamp }
+    const current = this.db.prepare(`SELECT position, updated_at FROM article_enclosures
+      WHERE entry_id = ? AND url = ? AND ordinal IS NOT NULL`).get(id, url)
+    return current ? { position: Number(current.position), updatedAt: Number(current.updated_at) } : undefined
   }
 
   saveReadingProgress(id: string, position: number) {
@@ -2299,6 +2331,7 @@ function entryFromRow(row: Record<string, string | number>): Entry {
     read: Boolean(row.read),
     starred: Boolean(row.starred),
     stateRevision: Number(row.state_revision),
+    enclosuresUnchecked: row.enclosures_checked === 0 || undefined,
     readingMinutes: contentChanged ? readingMinutes(contentHtml) : Number(row.reading_minutes),
     thumbnailUrl: normalizeFeedThumbnail({ url, thumbnailUrl: String(row.thumbnail_url), contentHtml, originalContentHtml: storedContentHtml }),
     kind: isEditorialLinkedFeed(String(row.feed_url)) ? 'article' : String(row.kind) as Entry['kind'],

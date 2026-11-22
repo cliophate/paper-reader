@@ -43,6 +43,14 @@ describe('native Miniflux connection and identity', () => {
       expect(new Headers(options?.headers).get('X-Auth-Token')).toBe('synthetic-miniflux-key')
     }
   })
+  it('reads enclosures from the entry response without fetching media', async () => {
+    const url = 'https://media.example.test/clip.mp4?signature=synthetic%2Bvalue&expires=9'
+    fixture.entries[0].enclosures = [url, 'https://user:pass@media.example.test/clip.mp4', 'file:///clip.mp4']
+      .map(url => ({ url, mime_type: 'video/mp4', size: 345, media_progression: 15 }))
+    const calls = fixture.calls.length
+    expect((await client.entry(id('entry', 1)))?.enclosures).toEqual([{ url, type: 'video/mp4', size: 345 }])
+    expect(fixture.calls).toHaveLength(calls + 1)
+  })
   it('binds to the account without binding to a key or username', async () => {
     const rotated = new MinifluxClient({ baseUrl: baseUrl.slice(0, -1), apiKey: 'synthetic-rotated-key' })
     await rotated.initialize(); expect(rotated.identity).toEqual(client.identity)

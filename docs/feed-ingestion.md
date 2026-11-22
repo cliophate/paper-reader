@@ -33,6 +33,18 @@ JSON Feed imports item IDs, URLs, HTML or plain text bodies, publication dates,
 images, and item or feed authors. Discovery and replacement previews use the same
 parser as collection.
 
+Paper keeps audio and video from RSS enclosures, Atom enclosure links, Media RSS
+content and JSON Feed attachments. It stores the media URL, type, byte length and
+duration in seconds when available. An item-level `itunes:duration` supplies the
+duration when an enclosure omits it.
+
+Each pause, seek or checkpoint carries the listener's timestamp. Paper keeps the
+newest position for each article and enclosure URL, capping future timestamps
+at five minutes ahead of the server clock. The player resumes once before play
+and retries the latest offline position when the article reopens or the device
+reconnects. A device whose clock runs fast can win over a
+later position from another device, up to that five-minute cap.
+
 Before strict XML parsing, Paper removes leading whitespace and invalid literal
 control characters, escapes bare ampersands, and converts known HTML entities to
 numeric references. It also removes an empty Cloudflare email decoder appended

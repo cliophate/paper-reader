@@ -3,7 +3,7 @@ import { transaction } from './transaction.js'
 
 export const FEED_MAINTENANCE_VERSION = 21
 export const FEED_OVERRIDE_VERSION = 22
-export const DATABASE_VERSION = FEED_OVERRIDE_VERSION
+export { ENCLOSURE_SCHEMA_VERSION as DATABASE_VERSION } from './enclosure-store.js'
 
 export function migrateAuth(db: DatabaseSync) {
   transaction(db, () => db.exec(`

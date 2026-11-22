@@ -25,7 +25,7 @@ beforeAll(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-greader-test-')); db = new PaperDatabase(path.join(dir, 'paper.sqlite'))
   backend = db.bindStandalone().id; feed = db.saveLocalSubscription(backend, { url: 'https://example.test/rss', title: 'Fixture' })
   ingestFeed(db, { backendId: backend, subscriptionId: feed, endpointGeneration: 'fixture', requestUrl: 'https://example.test/rss', responseUrl: 'https://example.test/rss', fetchedAt: new Date().toISOString(),
-    xml: `<rss version="2.0"><channel><title>Fixture</title>${Array.from({ length: 260 }, (_, i) => `<item><guid>${i}</guid><title>Article ${i}</title><link>https://example.test/${i}</link><description>${'Synthetic body. '.repeat(200)}</description><pubDate>2000-01-01T00:00:00Z</pubDate></item>`).join('')}</channel></rss>` })
+    xml: `<rss version="2.0"><channel><title>Fixture</title>${Array.from({ length: 260 }, (_, i) => `<item><guid>${i}</guid><enclosure url="https://media.example.test/${i}.mp3" type="audio/mpeg" length="87"/><title>Article ${i}</title><link>https://example.test/${i}</link><description>${'Synthetic body. '.repeat(200)}</description><pubDate>2000-01-01T00:00:00Z</pubDate></item>`).join('')}</channel></rss>` })
   password = (await db.auth.createApp('synthetic', null)).password
   auth = new GreaderAuth(db.greaderDatabase, db.auth, true, 'http://localhost')
   const app = express(); connections = new AuthConnections(db.auth)
@@ -67,6 +67,7 @@ it('clamps pages, binds signed continuations and freezes arrival high water', as
   expect((await call('stream/items/ids', [['s', `${STATE}starred`], ['c', first.continuation]])).status).toBe(400)
   const data = await (await call('stream/items/contents', [['i', first.itemRefs[0].id], ['i', longId(BigInt(first.itemRefs[0].id))]], 'POST')).json()
   expect(data.items).toHaveLength(1)
+  expect(data.items[0].enclosure).toEqual([{ href: expect.stringMatching(/^https:\/\/media\.example\.test\/\d+\.mp3$/), type: 'audio/mpeg', length: 87 }])
   expect(data.items[0]).toMatchObject({ id: longId(BigInt(first.itemRefs[0].id)), title: expect.any(String), author: expect.any(String), published: expect.any(Number), crawlTimeMsec: expect.any(String), timestampUsec: expect.any(String), summary: { content: expect.any(String) }, origin: { streamId: expect.stringMatching(/^feed\/\d+$/) }, categories: expect.any(Array) })
 })
 it('rejects expired continuations and keeps their signing key across restart', async () => {

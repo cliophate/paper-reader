@@ -1,4 +1,6 @@
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
+import { mediaEnclosures } from './enclosures.js'
+import { feedUrl } from './feed-parser.js'
 import crypto from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { BackendValidationError, type ReaderBackend, type BackendPageOptions, type EntryOptions, type EntryPage, type EntryStateOperation, type FeedOperation, type ImportPageOptions } from './backend.js'
@@ -205,6 +207,9 @@ export class MinifluxClient implements ReaderBackend {
       id: this.id('entry', row.id), feedId: feed.id, feedTitle: feed.title, feedUrl: feed.url,
       title, author: decodeHtmlText(text(row.author)), url, contentHtml, excerpt: excerpt(contentHtml, 260),
       publishedAt, timestamp: Date.parse(publishedAt), crawledAt: Date.parse(createdAt),
+      enclosures: mediaEnclosures(Array.isArray(row.enclosures) ? row.enclosures : [], file => ({
+        url: feedUrl(text(file?.url)), type: file?.mime_type, size: file?.size, duration: file?.duration,
+      })),
       sourceOrder: String(numericId(row.id)).padStart(20, '0'),
       read: row.status === 'read', starred: row.starred,
       readingMinutes: readingMinutes(contentHtml), thumbnailUrl: normalizeFeedThumbnail({ url, thumbnailUrl: firstImage(contentHtml), contentHtml, originalContentHtml: html }), kind,

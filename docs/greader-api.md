@@ -94,6 +94,10 @@ and undo keep their strict revision checks. An app change can invalidate a web
 undo. Repeated identical sets do not advance revisions. Article-label edits fail
 without applying any other changes in the request.
 
+Items with audio or video include a FreshRSS-style `enclosure` array. Each
+attachment has an `href`, a `type` and, when known, a numeric `length` in bytes.
+The URL points to the publisher's media file.
+
 Subscriptions may belong to several folders. An a-only move returns 409 when
 there is more than one current folder. Explicit a+r changes only those named
 memberships. Folder deletion retains subscriptions and history. Quickadd reuses
@@ -142,6 +146,6 @@ A backup can restore revoked credentials; run revoke-all after restoring it.
 A new database is a new identity domain. Recreate client accounts after starting
 with an empty database. See [recovery](recovery.md).
 
-Article labels, sharing, search, preferences, enclosures, and API OPML import or
+Article labels, sharing, search, preferences, and API OPML import or
 export are unsupported. Paper's web OPML tools remain available. Reeder, Unread
 and FocusReader require separate compatibility work.

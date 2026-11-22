@@ -77,6 +77,12 @@ Paper sends the cookie to the exact origin of the feed URL where you set it.
 If the publisher hosts articles elsewhere, you can enter that site's origin
 too. Settings shows whether a cookie is set and lets you replace or clear it.
 
+Choose **Play audio** or **Play video** to stream an attachment from its
+publisher. FreshRSS and Miniflux articles can also play inline video. Audio
+requires an enclosure. Paper remembers your place in attachments across
+devices. Offline copies include the article and its images. Playback needs a
+connection.
+
 Paper saves feed icons in the background. If you migrated from FreshRSS, keep
 it running until Paper has copied the icons you want to preserve. For a private
 FreshRSS address, include its exact origin in `PAPER_TRUSTED_FEED_ORIGINS` while

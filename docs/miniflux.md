@@ -54,6 +54,9 @@ That sweep resumes across restarts and eventually refreshes content-only edits
 throughout the archive. Each page and its continuation commit together.
 Interrupted imports resume the same window; repeated continuations fail the sync.
 
+Paper imports audio and video attachments from each entry. It saves playback
+positions in its own database, so resuming in Paper works across devices.
+
 Read and star writes use explicit set-state requests, serialized with sync.
 Repeated requests preserve the requested value. Paper validates all account IDs
 before sending bounded batches, without a per-article existence lookup. Miniflux

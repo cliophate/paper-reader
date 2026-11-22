@@ -10,15 +10,26 @@ describe('feed parsing', () => {
     const feed = parseFeed(fixture('rss'), base)
     expect(feed).toMatchObject({ format: 'rss', title: 'Synthetic & news', siteUrl: 'https://example.test/' })
     expect(feed.entries[0]).toMatchObject({ externalId: 'story-1', title: 'First & best', author: 'Ada', url: 'https://example.test/posts/one', publishedAt: '2024-01-01T12:00:00.000Z' })
+    expect(feed.entries[0].enclosures).toEqual([
+      { url: 'https://example.test/episode.mp3', type: 'audio/mpeg', size: 12345, duration: 3723 },
+      { url: 'https://example.test/clips/trailer.mp4', type: 'video/mp4', size: 678, duration: 24.5 },
+    ])
     expect(feed.entries[0].contentHtml).toContain('https://example.test/more')
     expect(feed.entries[0].contentHtml).toContain('https://example.test/image.jpg')
     expect(feed.entries[0].contentHtml).not.toMatch(/script|onerror|bad\(\)/)
     expect(feed.entries[1]).toMatchObject({ publishedAt: '', externalId: undefined, thumbnailUrl: 'https://example.test/cover.jpg' })
   })
+  it.each([['65', 65], ['02:05', 125], ['0:60:01', undefined]])('reads an iTunes duration of %s', (raw, duration) => {
+    const xml = rss(`<item xmlns:i="http://www.itunes.com/dtds/podcast-1.0.dtd">
+      <i:duration>${raw}</i:duration><enclosure url="one.mp3" length="-1"/>
+      <enclosure type="text/html" url="two.mp3"/></item>`)
+    expect(parseFeed(xml, base).entries[0].enclosures).toEqual([{ url: 'https://example.test/feeds/one.mp3', type: 'audio/mpeg', duration }])
+  })
   it('parses Atom text constructs, nested xml:base, alternate links and inherited authors', () => {
     const feed = parseFeed(fixture('atom'), base)
     expect(feed).toMatchObject({ format: 'atom', title: 'Synthetic Atom', siteUrl: 'https://example.test/root/' })
     expect(feed.entries[0]).toMatchObject({ externalId: 'urn:story:1', title: 'Plain <title>', author: 'Ada', url: 'https://example.test/root/posts/one', publishedAt: '2024-01-01T12:00:00.000Z' })
+    expect(feed.entries[0].enclosures).toEqual([{ url: 'https://example.test/root/posts/episode.mp3', type: 'audio/mpeg', size: 72 }])
     expect(feed.entries[0].contentHtml).toContain('https://example.test/root/images/one.jpg')
     expect(feed.entries[0].contentHtml).toContain('https://example.test/root/two')
     expect(feed.entries[1]).toMatchObject({ publishedAt: '2026-01-01T00:00:00.000Z', contentHtml: '&lt;script&gt;literal&lt;/script&gt;' })
@@ -100,12 +111,17 @@ describe('feed parsing', () => {
   it('parses JSON Feed 1 and 1.1 with safe HTML, inherited authors and conflicting IDs', () => {
     for (const version of ['1', '1.1']) {
       const body = JSON.stringify({ version: 'https://jsonfeed.org/version/' + version, title: 'JSON', home_page_url: '/', authors: [{ name: 'Ada' }], items: [
-        { id: 'a', title: 'One', url: '/one', date_published: '2024-01-01', content_html: '<p>Hello <a href="/source">source</a><script>bad()</script></p>' },
+        { id: 'a', title: 'One', url: '/one', attachments: [
+          { url: 'clip.webm', mime_type: 'video/webm', size_in_bytes: 1024, duration_in_seconds: 5.5 },
+          { url: '/poster.jpg', mime_type: 'image/jpeg' }, null,
+          { url: 'data:audio/mpeg,invalid', mime_type: 'audio/mpeg' },
+        ], date_published: '2024-01-01', content_html: '<p>Hello <a href="/source">source</a><script>bad()</script></p>' },
         { id: 'a', title: 'Two', external_url: 'javascript:bad()', content_text: '<script>literal</script>' },
       ] })
       const feed = parseFeed(body, base)
       expect(feed).toMatchObject({ format: 'json', title: 'JSON', siteUrl: 'https://example.test/', conflictingExternalIds: ['a'] })
       expect(feed.entries[0]).toMatchObject({ author: 'Ada', url: 'https://example.test/one', publishedAt: '2024-01-01T00:00:00.000Z' })
+      expect(feed.entries[0].enclosures).toEqual([{ url: 'https://example.test/feeds/clip.webm', type: 'video/webm', size: 1024, duration: 5.5 }])
       expect(feed.entries[0].contentHtml).toContain('href="https://example.test/source"')
       expect(feed.entries[0].contentHtml).not.toContain('bad()')
       expect(feed.entries[1]).toMatchObject({ url: '', contentHtml: '&lt;script&gt;literal&lt;/script&gt;' })
