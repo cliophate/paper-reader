@@ -1,10 +1,11 @@
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { privateFeedRef, migrateFeedMaintenance } from './feed-maintenance.js'
+import { FeedOverrideStore, migrateFeedOverrides } from './feed-overrides.js'
 import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
 import { migrateGreader } from './greader-schema.js'
-import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION, migrateAuth } from './auth-schema.js'
+import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION, FEED_OVERRIDE_VERSION, migrateAuth } from './auth-schema.js'
 import { AuthStore } from './auth-store.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import crypto from 'node:crypto'
@@ -190,6 +191,7 @@ export class PaperDatabase {
   readonly auth: AuthStore
   readonly identities: IdentityStore
   readonly organization: LocalOrganizationService
+  readonly feedOverrides: FeedOverrideStore
   readonly feedFetch: FeedFetchStore
   readonly feedIcons: FeedIconStore
   readonly briefingDelivery: BriefingDeliveryStore
@@ -238,11 +240,16 @@ export class PaperDatabase {
           if (version > 0) this.backupBeforeMigration(FEED_MAINTENANCE_VERSION, 'feed-maintenance')
           migrateFeedMaintenance(this.db)
         }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < FEED_OVERRIDE_VERSION) {
+          if (version > 0) this.backupBeforeMigration(FEED_OVERRIDE_VERSION, 'feed-overrides')
+          migrateFeedOverrides(this.db)
+        }
       }
       this.retention = new RetentionStore(this.db, ids => { this.commitLocalEntryState(this.activeBackendId, ids, 'read', { origin: 'retention' }) })
       this.auth = new AuthStore(this.db)
       this.identities = new IdentityStore(this.db)
       this.activeBackendId = String(this.db.prepare("SELECT value FROM sync_state WHERE key = 'active_backend_id'").get()?.value || '')
+      this.feedOverrides = new FeedOverrideStore(this.db, path.dirname(databasePath))
       this.feedFetch = new FeedFetchStore(this.db, id => this.assertLocalBackend(id))
       this.organization = new LocalOrganizationService(this.db, id => this.assertLocalBackend(id), () => this.localNavigation())
       this.feedIcons = new FeedIconStore(this.db, id => this.organization.subscriptionChanged(id), id => this.assertLocalBackend(id))
@@ -936,6 +943,7 @@ export class PaperDatabase {
     const clearMuteMatch = this.db.prepare('DELETE FROM muted_entries WHERE entry_id = ? AND filter_id = ?')
     const addMuteMatch = this.db.prepare('INSERT OR IGNORE INTO muted_entries (filter_id, entry_id) VALUES (?, ?)')
     transaction(this.db, () => {
+      const hasCachedArticles = Boolean(this.db.prepare('SELECT 1 FROM article_cache LIMIT 1').get())
       for (const entry of entries) {
         this.assertImportedIdentity(entry)
         const canonicalUrl = normalizeUrl(entry.url)
@@ -947,7 +955,7 @@ export class PaperDatabase {
           entry.read ? 1 : 0, entry.starred ? 1 : 0, entry.readingMinutes,
           entry.thumbnailUrl, entry.kind, now, Date.parse(now), entry.sourceOrder || '',
         )
-        const cached = this.getArticleForEntry(entry.id)
+        const cached = hasCachedArticles && this.getArticleForEntry(entry.id)
         if (cached) this.db.prepare('UPDATE entries SET full_content_text = ? WHERE id = ?').run(plainText(cached.contentHtml), entry.id)
         const matches = new Set(muteRules.filter(rule => entryMatchesMuteFilter(entry, rule)).map(rule => rule.id))
         for (const row of this.db.prepare('SELECT filter_id FROM muted_entries WHERE entry_id = ?').all(entry.id)) {
@@ -2012,7 +2020,8 @@ export class PaperDatabase {
   cachedEntryIds(): string[] {
     return (this.db.prepare(`
       SELECT DISTINCT entries.id
-      FROM entries JOIN article_cache ON article_cache.url = entries.url
+      FROM entries LEFT JOIN feed_overrides o ON o.feed_id = entries.feed_id
+      JOIN article_cache ON article_cache.url = COALESCE('paper-feed:' || o.revision || ':', '') || entries.url
       ORDER BY entries.id
     `).all() as Array<{ id: string }>).map(row => row.id)
   }
@@ -2026,12 +2035,12 @@ export class PaperDatabase {
     this.db.prepare("UPDATE entries SET full_content_text = '' WHERE full_content_text != ''").run()
   }
 
-  getArticle(url: string): ArticleCacheRecord | null {
+  getArticle(url: string, revision?: string): ArticleCacheRecord | null {
     try { const key = new URL(url); key.hash = ''; url = key.href } catch { return null }
-    const row = this.db.prepare('SELECT * FROM article_cache WHERE url = ?').get(url) as Record<string, string | number> | undefined
+    const row = this.db.prepare('SELECT * FROM article_cache WHERE url = ?').get(revision ? `paper-feed:${revision}:${url}` : url) as Record<string, string | number> | undefined
     if (!row) return null
     return {
-      url: String(row.url),
+      url,
       title: String(row.title),
       byline: String(row.byline),
       excerpt: String(row.excerpt),
@@ -2042,17 +2051,20 @@ export class PaperDatabase {
   }
 
   getArticleForEntry(id: string): ArticleCacheRecord | null {
-    const entry = this.db.prepare('SELECT url FROM entries WHERE id = ?').get(id)
+    const entry = this.db.prepare(`SELECT e.url, o.revision FROM entries e
+      LEFT JOIN feed_overrides o ON o.feed_id = e.feed_id WHERE e.id = ?`).get(id)
     if (!entry) return null
-    const current = this.getArticle(String(entry.url))
+    const revision = entry.revision ? String(entry.revision) : undefined
+    const current = this.getArticle(String(entry.url), revision)
     if (current) return current
     const historical = this.db.prepare('SELECT url FROM article_urls WHERE entry_id = ?').all(id)
-      .flatMap(row => { const article = this.getArticle(String(row.url)); return article ? [article] : [] })
+      .flatMap(row => { const article = this.getArticle(String(row.url), revision); return article ? [article] : [] })
     return historical.sort((left, right) => right.fetchedAt.localeCompare(left.fetchedAt))[0] || null
   }
 
-  cacheArticle(article: ArticleCacheRecord) {
+  cacheArticle(article: ArticleCacheRecord, revision?: string) {
     transaction(this.db, () => {
+      if (revision && !this.db.prepare('SELECT 1 FROM feed_overrides WHERE revision = ?').get(revision)) return
       this.db.prepare(`
         INSERT INTO article_cache (url, title, byline, excerpt, content_html, reading_minutes, fetched_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -2064,7 +2076,7 @@ export class PaperDatabase {
           reading_minutes = excluded.reading_minutes,
           fetched_at = excluded.fetched_at
       `).run(
-        article.url,
+        revision ? `paper-feed:${revision}:${article.url}` : article.url,
         article.title,
         article.byline,
         article.excerpt,
@@ -2072,9 +2084,10 @@ export class PaperDatabase {
         article.readingMinutes,
         article.fetchedAt,
       )
-      const entries = this.db.prepare(`SELECT id FROM entries WHERE url = ? OR canonical_url = ? OR id IN (
+      const entries = this.db.prepare(`SELECT e.id FROM entries e LEFT JOIN feed_overrides o ON o.feed_id = e.feed_id
+        WHERE o.revision IS ? AND (e.url = ? OR e.canonical_url = ? OR e.id IN (
         SELECT entry_id FROM article_urls WHERE url = ? OR substr(url, 1, instr(url || '#', '#') - 1) = ?
-      )`).all(article.url, normalizeUrl(article.url), article.url, article.url)
+      ))`).all(revision ?? null, article.url, normalizeUrl(article.url), article.url, article.url)
       const update = this.db.prepare('UPDATE entries SET full_content_text = ? WHERE id = ?')
       for (const entry of entries) {
         const preferred = this.getArticleForEntry(String(entry.id)) || article

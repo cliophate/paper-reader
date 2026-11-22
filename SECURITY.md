@@ -35,6 +35,11 @@ Tokens entered there are stored without encryption in data/connections.json with
 mode 0600. Treat the data directory and backups as credentials. Codex authentication
 remains in each CLI's separate login store.
 
+Paper encrypts saved feed cookies in SQLite with a key derived from
+`data/secrets.json`. Settings returns the configured origins and whether a
+cookie is set. Feed checks and article requests drop the cookie when a redirect
+changes origin.
+
 Feed/article HTML is sanitized before display. Private network checks reduce
 the risk from URL fetching but are not a complete network-isolation boundary.
 Do not grant an Internet-facing deployment unrestricted access to sensitive
@@ -42,7 +47,7 @@ internal services. Paper has not had an independent security audit.
 
 External article images and embeds can contact their publishers from the browser.
 Full-text extraction contacts the publisher and, if explicitly enabled, the
-Jina reader fallback. AI and other connections send data as described in
+Jina reader fallback. Feeds with overrides skip the fallback. AI and other connections send data as described in
 docs/integrations.md. The local database and offline browser copies contain
 private reading data. Anyone who can access a device's browser storage may be
 able to read saved offline articles even after proxy authentication expires.

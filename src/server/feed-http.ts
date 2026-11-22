@@ -1,3 +1,4 @@
+import { BackendValidationError } from './backend.js'
 import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { PassThrough, Transform, Writable } from 'node:stream'
@@ -21,6 +22,7 @@ export interface BoundedFetchOptions {
   maxRedirects?: number
   accept?: string
   userAgent?: string
+  cookie?: { origin: string; value: string }
   acceptLanguage?: string
   // Return response metadata with an empty body without reading these statuses.
   skipBodyStatuses?: readonly number[]
@@ -93,7 +95,12 @@ function decode(bytes: Buffer, contentType: string, max: number, fatal: boolean)
   }
 }
 
-// Feed requests carry no credentials. Authenticated API requests reject redirects.
+export function validateRequestHeader(value: unknown, label: string, limit: number): asserts value is string {
+  if (typeof value !== 'string' || value.length > limit || /[^\x20-\x7e]/.test(value)) {
+    throw new BackendValidationError(`Use at most ${limit} printable ASCII characters on one line for ${label.toLowerCase()}.`)
+  }
+}
+
 // DNS validation and connection lookup share the same resolved address.
 type TextFetchOptions = BoundedFetchOptions & { responseBody?: 'text-prefix' }
 type BytesFetchOptions = BoundedFetchOptions & { responseBody: 'bytes' }
@@ -124,12 +131,15 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
   for (const [key, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value < (key === 'maxRedirects' ? 0 : 1) || value > 2_147_483_647) throw new FeedHttpError('limit', 'Invalid HTTP limit.')
   }
+  if (options.userAgent !== undefined) validateRequestHeader(options.userAgent, 'User agent', 512)
+  if (options.cookie) validateRequestHeader(options.cookie.value, 'Cookie', 4096)
   const deadline = AbortSignal.timeout(limits.timeoutMs)
   const signal = options.signal ? AbortSignal.any([deadline, options.signal]) : deadline
   try {
     let url: URL
     try { url = new URL(input) } catch { throw new FeedHttpError('policy', 'Enter a complete HTTP or HTTPS URL.') }
     const redirects: BoundedFetchResult['redirects'] = []
+    let cookie = options.cookie?.origin === url.origin ? options.cookie : undefined
     for (let hop = 0; ; hop++) {
       signal.throwIfAborted()
       url.hash = ''
@@ -155,6 +165,7 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
               'Accept-Encoding': 'gzip, deflate, br', 'User-Agent': options.userAgent ?? 'Mozilla/5.0 (compatible; Paper/0.1; feed reader)',
               ...(api?.authorization ? { Authorization: api.authorization } : {}),
               ...(api?.body !== undefined ? { 'Content-Type': api.contentType ?? 'application/json', 'Content-Length': Buffer.byteLength(api.body) } : {}),
+              ...(cookie ? { Cookie: cookie.value } : {}),
               ...(options.acceptLanguage ? { 'Accept-Language': options.acceptLanguage } : {}),
               ...(etag ? { 'If-None-Match': etag } : {}), ...(lastModified ? { 'If-Modified-Since': lastModified } : {}) },
           }, resolve)
@@ -168,6 +179,7 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
           if (!location || hop >= limits.maxRedirects) throw new FeedHttpError('redirect', 'The response has an invalid or excessive redirect.')
           try { url = new URL(location, url) } catch { throw new FeedHttpError('redirect', 'The response has an invalid redirect URL.') }
           redirects.push({ status, url: url.href })
+          if (cookie?.origin !== url.origin) cookie = undefined
           continue
         }
         const result = { status, redirects, url: url.href, contentType: header(response, 'content-type'),

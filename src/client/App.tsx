@@ -11,6 +11,7 @@ import { useDialogFocus, useMenuFocus } from './dialogFocus'
 import { useReadingProgress } from './readingProgress'
 import { clearOffline, offlineArticles, removeOffline, saveOffline } from './offline'
 import { fullTextMode, setFullTextMode, type FullTextMode } from './fullTextPreferences'
+import { FeedOverrides } from './components/FeedOverrides'
 import { FeedRepair } from './components/FeedRepair'
 import { ArticleDiscussion } from './components/ArticleDiscussion'
 import { BackendSettings } from './components/BackendSettings'
@@ -1056,7 +1057,7 @@ export default function App() {
     setFullTextError(null)
     try {
       if (!target.fullText) feedVersions.current.set(target.id, target)
-      const article = await api.fullText(target.url, force)
+      const article = await api.fullText(target.url, force, target.id)
       const full = { ...target,
         contentHtml: article.contentHtml,
         excerpt: article.excerpt || target.excerpt,
@@ -2624,6 +2625,7 @@ function FeedManager({ backend, initialFeedId, navigation, onChanged, notify }: 
           <label><span>Title</span><input value={title} onChange={event => setTitle(event.target.value)} /></label>
           <label><span>Folder</span>{backend === 'miniflux' ? <select value={folder} onChange={event => setFolder(event.target.value)}>{folders.map(name => <option key={name} value={name}>{name}</option>)}</select> : <input list="paper-feed-folders" placeholder="Uncategorized" value={folder} onChange={event => setFolder(event.target.value)} />}</label>
           <p className="feed-editor-note">{backend === 'miniflux' ? 'Choose an existing Miniflux category. Manage category names and feed URL repair in Miniflux.' : 'Clear the folder to move this feed to Uncategorized. Enter a new name to create a folder.'}</p>
+          <FeedOverrides key={`overrides-${selected.id}`} feed={selected} backend={backend} />
           {backend !== 'miniflux' && <FeedRepair key={selected.id} feed={selected} move={feedChecks.get(selected.id)?.move} onChanged={onChanged} />}
           {selected.url && <button className="copy-feed-url" onClick={() => void navigator.clipboard.writeText(selected.url).then(() => notify('Feed URL copied'))}>Copy feed URL</button>}
           <div className="feed-editor-actions"><button className="primary" onClick={() => void save()} disabled={busy || !title.trim()}>Save changes</button><button className={confirmRemove ? 'danger confirming' : 'danger'} onClick={() => void remove()} disabled={busy}>{confirmRemove ? 'Confirm unsubscribe' : 'Unsubscribe'}</button></div>

@@ -554,3 +554,22 @@ it('backs up the previous schema and keeps schedules and subscriptions through t
     expect(upgraded.prepare('SELECT id FROM feeds WHERE id = ?').get(laterId)?.id).toBe(laterId)
   } finally { upgraded.close() }
 })
+
+it('uses the configured headers and rewrites feed HTML before sanitizing', async () => {
+  const seen: Array<[string | undefined, string | undefined]> = []
+  const origin = await server((req, res) => {
+    seen.push([req.headers['user-agent'], req.headers.cookie])
+    res.end(rss().replace('</item>', `<description><![CDATA[<div class="omit">Extra text</div><p>Keep this</p>
+      <img src="placeholder.jpg" data-lazy-src="photo.jpg" onerror="bad()"><script>bad()</script>
+      <a href="/story?id=3&amp;utm_source=mail">Story</a>]]></description></item>`))
+  })
+  const id = save(origin)
+  db.feedOverrides.save(id, { userAgent: 'Fixture reader', cookie: 'fixture=synthetic', expectedCookieOrigin: origin, contentSelector: '', removeSelectors: ['.omit'], lazyImages: true, stripTracking: true })
+  expect(await scheduler(origin).runDue()).toMatchObject({ fetched: 1 })
+  expect(seen).toEqual([['Fixture reader', 'fixture=synthetic']])
+  const html = db.localEntry(db.recentEntryIds(1)[0])!.contentHtml
+  expect(html).toContain('Keep this')
+  expect(html).toContain(origin + '/photo.jpg')
+  expect(html).toContain(origin + '/story?id=3"')
+  expect(html).not.toMatch(/Extra text|onerror|bad\(\)|utm_source/)
+})

@@ -24,12 +24,19 @@ cancelled, but its late result cannot start a request.
 `FeedValidators` contains `url`, `etag` and `lastModified`. Set `url` to the exact
 final URL that supplied those validators. Only a request to that URL can send
 them. Redirects to another URL omit them. Malformed or oversized validators are
-ignored on send and receive. Feed requests carry no credentials, cookies or
-proxy environment settings.
+ignored on send and receive. The transport ignores proxy environment settings.
 
 Save destinations use `boundedApiRequest` for authenticated GET, POST and PATCH requests.
 It pins the resolved address, rejects redirects and caps responses at 1 MiB.
 Private addresses and HTTP require an exact origin in `PAPER_TRUSTED_SAVE_ORIGINS`.
+
+Feed collection and full-text extraction accept a feed-specific user agent and
+cookie. Both must contain printable ASCII on one line. User agents have a
+512-character limit and cookies have a 4096-character limit. A cookie goes only
+to the saved feed origin or an explicit article origin. Adding a different
+article origin requires entering the cookie again. A cross-origin redirect drops it for
+the rest of the request. Address checks and size limits apply on every hop.
+Discovery, feed repair and icon lookups use their usual headers.
 
 Every hop requires HTTP or HTTPS without embedded credentials. Public DNS
 answers must all pass the address policy. The connection uses one validated
@@ -71,6 +78,23 @@ error message, without feed paths, credentials or query strings.
 fallback. A slot stays occupied until the work finishes or fails.
 
 The OpenAI-compatible adapter shares `network-policy.ts` and pins DNS results
-the same way. It uses a separate POST/SSE transport because feed requests never
-accept credentials or arbitrary headers. Its administrator allowlist is
+the same way. It uses a separate POST/SSE transport for model requests and streamed responses. Its administrator allowlist is
 `PAPER_TRUSTED_AI_ORIGINS`. See [AI providers](ai-providers.md) for its limits.
+
+
+## Per-feed extraction
+
+In **Settings > Feeds > Manage feeds**, open **Fetch and extraction overrides**.
+A content selector picks the first matching element on the publisher's page.
+Leave it empty for automatic extraction. Enter up to 12 removal selectors, one
+per line. Each selector can contain up to 256 characters. Prefer lazy-loaded
+images to use the publisher's deferred image in place of a placeholder.
+Link cleanup removes `utm_*`, `fbclid`, `gclid`, `dclid`, `msclkid`, `mc_cid`
+and `mc_eid`. Paper sanitizes the resulting HTML.
+
+Preview fetches the chosen article with the form's current values. It leaves
+saved settings, the full-text cache and the search index alone. Saved rules
+also rewrite HTML from later standalone feed checks. FreshRSS and Miniflux
+collect their own feeds. In those modes, the headers and extraction rules
+apply to full articles Paper fetches. Feeds with overrides fetch directly
+from the publisher and skip the third-party reader fallback.

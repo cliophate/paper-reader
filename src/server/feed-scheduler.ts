@@ -136,8 +136,11 @@ export class StandaloneFeedScheduler {
     let redirectsJson: string | undefined
     let discardValidators = false
     try {
+      const rules = this.db.feedOverrides.get(lease.subscriptionId)
       const response = await boundedFetch(lease.url, { ...this.options.http, timeoutMs: this.timeout,
         trustedOrigins: this.options.trustedOrigins, signal,
+        ...(rules?.userAgent ? { userAgent: rules.userAgent } : {}),
+        cookie: rules?.cookie ? { origin: rules.cookieOrigin, value: rules.cookie } : undefined,
         validators: { url: lease.validatorUrl, etag: lease.etag, lastModified: lease.lastModified },
         acquire: (url, signal) => this.acquire(url, signal) })
       signal?.throwIfAborted()

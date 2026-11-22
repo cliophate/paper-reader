@@ -1,0 +1,37 @@
+import { expect, test } from '@playwright/test'
+
+test('Manage feeds saves, redacts and resets full article overrides', async ({ page, request }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Feeds', exact: true }).click()
+  await page.getByPlaceholder('Find a feed').fill('Synthetic feed')
+  const panel = page.locator('details.feed-overrides')
+  await panel.locator('summary').click()
+  const agent = panel.getByLabel('User agent')
+  const cookie = 'fixture=synthetic-only'
+  await agent.fill('Synthetic reader')
+  await panel.getByLabel('Cookie (not set)', { exact: true }).fill(cookie)
+  await panel.getByLabel('Full article content selector').fill('.story')
+  await page.route('**/api/fulltext', route => {
+    const { preview, entryId } = route.request().postDataJSON()
+    expect(entryId).toBeTruthy()
+    expect(preview.overrides).toMatchObject({ userAgent: 'Synthetic reader', contentSelector: '.story', cookie })
+    return route.fulfill({ json: { contentHtml: '<p>Unsaved article preview</p>' } })
+  })
+  await panel.getByRole('button', { name: 'Preview article' }).click()
+  await expect(panel.frameLocator('iframe').getByText('Unsaved article preview')).toBeVisible()
+  const saving = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().includes('/api/feed-overrides/'))
+  await panel.getByRole('button', { name: 'Save overrides' }).click()
+  const saved = await saving
+  expect(saved.ok()).toBe(true)
+  expect(await saved.text()).not.toContain(cookie)
+  expect(await (await request.get(saved.url())).text()).not.toContain(cookie)
+  await expect(panel.getByLabel('Cookie (set)', { exact: true })).toHaveValue('')
+  await expect(agent).toHaveValue('Synthetic reader')
+  const malformed = await request.put(saved.url(), { data: '{"cookie":"' + cookie, headers: { 'Content-Type': 'application/json' } })
+  expect(malformed.status()).toBe(400)
+  expect(await malformed.text()).not.toContain(cookie)
+  await panel.getByRole('button', { name: 'Reset overrides' }).click()
+  await expect(panel.getByLabel('Cookie (not set)', { exact: true })).toHaveValue('')
+  await expect(agent).toHaveValue('')
+})

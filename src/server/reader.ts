@@ -1,8 +1,12 @@
+import type { ExtractionRules } from '../shared/feed-overrides.js'
+import { hasFeedOverrides, type SavedOverrides } from './feed-overrides.js'
+import { applyFeedRewrites } from './feed-rewrites.js'
+import { BackendValidationError } from './backend.js'
 import { boundedFetch, FeedHttpError } from './feed-http.js'
 import { Readability } from '@mozilla/readability'
 import { JSDOM } from 'jsdom'
 import type { ArticleCacheRecord, PaperDatabase } from './db.js'
-import { cleanArticleHtml, plainText, readingMinutes } from './text.js'
+import { cleanArticleHtml, excerpt, plainText, readingMinutes } from './text.js'
 
 const MAX_REDIRECTS = 5
 const MAX_HTML_BYTES = 5 * 1024 * 1024
@@ -16,23 +20,29 @@ export interface FullArticle extends ArticleCacheRecord {
 export class ReaderService {
   constructor(private readonly database: PaperDatabase, private readonly fallbackEnabled = false) {}
 
-  async fetch(urlInput: string, maxCacheAgeMs = CACHE_MAX_AGE_MS, signal?: AbortSignal): Promise<FullArticle> {
+  async fetch(urlInput: string, maxCacheAgeMs = CACHE_MAX_AGE_MS, signal?: AbortSignal,
+    entryId?: string, preview?: { feedId: string; overrides: unknown }): Promise<FullArticle> {
     signal?.throwIfAborted()
-    const url = normalizeUrl(urlInput)
-    const cached = this.database.getArticle(url.href)
+    const entry = entryId ? this.database.feedOverrides.article(entryId) : undefined
+    if (preview && (!entry || preview.feedId !== entry.feedId)) throw new BackendValidationError('Choose an article from this feed.')
+    const url = normalizeUrl(entry ? entry.url : urlInput)
+    const rules = preview ? this.database.feedOverrides.draft(preview.feedId, preview.overrides)
+      : entry ? this.database.feedOverrides.get(entry.feedId) : undefined
+    const cached = !preview && this.database.getArticle(url.href, rules?.revision)
     if (cached && Date.now() - Date.parse(cached.fetchedAt) < maxCacheAgeMs) return { ...cached, cached: true }
 
-    const { html, finalUrl } = await fetchHtml(url, this.fallbackEnabled, signal)
+    const fallback = this.fallbackEnabled && (!rules || !hasFeedOverrides(rules, rules.cookie))
+    const { html, finalUrl } = await fetchHtml(url, fallback, signal, rules)
     signal?.throwIfAborted()
     let extracted: Omit<ArticleCacheRecord, 'url' | 'fetchedAt'>
     try {
-      extracted = extractReadableArticle(html, finalUrl.href)
+      extracted = extractReadableArticle(html, finalUrl.href, rules)
     } catch (error) {
-      if (!this.fallbackEnabled) throw error
-      const fallback = await fetchReaderPage(finalUrl, signal).catch(() => null)
-      signal?.throwIfAborted()
       if (!fallback) throw error
-      extracted = extractReadableArticle(fallback.html, finalUrl.href)
+      const page = await fetchReaderPage(finalUrl, signal).catch(() => null)
+      signal?.throwIfAborted()
+      if (!page) throw error
+      extracted = extractReadableArticle(page.html, finalUrl.href)
     }
 
     const article: ArticleCacheRecord = {
@@ -40,22 +50,26 @@ export class ReaderService {
       ...extracted,
       fetchedAt: new Date().toISOString(),
     }
-    this.database.cacheArticle(article)
+    if (!preview) this.database.cacheArticle(article, rules?.revision)
     return { ...article, cached: false }
   }
 }
 
-export function extractReadableArticle(html: string, url: string): Omit<ArticleCacheRecord, 'url' | 'fetchedAt'> {
+export function extractReadableArticle(html: string, url: string, rules?: ExtractionRules): Omit<ArticleCacheRecord, 'url' | 'fetchedAt'> {
   const dom = new JSDOM(html, { url })
   try {
     const document = dom.window.document
     const pageImage = document.querySelector<HTMLMetaElement>('meta[property="og:image"], meta[name="twitter:image"]')?.content || ''
-    prepareDocument(document, url)
-    const parsed = new Readability(document).parse()
+    if (rules) applyFeedRewrites(document, url, rules)
+    const root = rules?.contentSelector ? document.querySelector(rules.contentSelector) : null
+    if (rules?.contentSelector && !root) throw new BackendValidationError('The content selector did not match this page.')
+    prepareDocument(document, url, !root)
+    const parsed = root ? { title: document.title, byline: '', excerpt: '', content: root.outerHTML }
+      : new Readability(document).parse()
     if (!parsed?.content) throw new Error('Paper could not find a readable article on this page')
 
     let contentHtml = cleanArticleHtml(parsed.content)
-    if (pageImage && !/<img\b/i.test(contentHtml)) {
+    if (!root && !rules?.removeSelectors.length && pageImage && !/<img\b/i.test(contentHtml)) {
       try {
         const imageUrl = new URL(pageImage, url)
         if (['http:', 'https:'].includes(imageUrl.protocol)) contentHtml = `<figure><img src="${escapeAttribute(imageUrl.href)}" alt=""></figure>${contentHtml}`
@@ -65,25 +79,28 @@ export function extractReadableArticle(html: string, url: string): Omit<ArticleC
     if (/This article is FREE/i.test(articleText) && /Log in or register/i.test(articleText)) {
       throw new Error('This publisher requires you to sign in to read the article')
     }
-    if (articleText.length < 240) throw new Error('The extracted page did not contain enough article text')
+    if (root && !articleText && !/<(?:img|video|iframe)\b/i.test(contentHtml)) throw new BackendValidationError('The selected element contains no readable content.')
+    if (!root && articleText.length < 240) throw new Error('The extracted page did not contain enough article text')
     return {
       title: parsed.title?.trim() || '',
       byline: parsed.byline?.trim() || '',
-      excerpt: parsed.excerpt?.trim() || '',
+      excerpt: root ? excerpt(contentHtml) : parsed.excerpt?.trim() || '',
       contentHtml,
       readingMinutes: readingMinutes(contentHtml),
     }
   } finally { dom.window.close() }
 }
 
-function prepareDocument(document: Document, url: string) {
-  for (const element of document.querySelectorAll([
-    'nav', 'footer', '[role="navigation"]', '[role="dialog"]',
-    '.newsletter', '.newsletter-signup', '.social-share', '.share-buttons',
-    '.copy-link', '.follow-button', '.comments', '#comments',
-    '.w-heading-options', '.action-bar-follow', '.qa-action-list', '.w-follow-btn',
-    '.article-date', '.w-article-header-author-img', '.article-header',
-  ].join(','))) element.remove()
+function prepareDocument(document: Document, url: string, removeChrome: boolean) {
+  if (removeChrome) {
+    for (const element of document.querySelectorAll([
+      'nav', 'footer', '[role="navigation"]', '[role="dialog"]',
+      '.newsletter', '.newsletter-signup', '.social-share', '.share-buttons',
+      '.copy-link', '.follow-button', '.comments', '#comments',
+      '.w-heading-options', '.action-bar-follow', '.qa-action-list', '.w-follow-btn',
+      '.article-date', '.w-article-header-author-img', '.article-header',
+    ].join(','))) element.remove()
+  }
 
   for (const image of document.querySelectorAll<HTMLImageElement>('img')) {
     const lazySource = image.getAttribute('data-large-file')
@@ -129,13 +146,14 @@ function normalizeUrl(input: string): URL {
   return url
 }
 
-export async function fetchHtml(startUrl: URL, fallbackEnabled = false, signal?: AbortSignal): Promise<{ html: string; finalUrl: URL }> {
+export async function fetchHtml(startUrl: URL, fallbackEnabled = false, signal?: AbortSignal, rules?: SavedOverrides): Promise<{ html: string; finalUrl: URL }> {
   let response
   try {
     response = await boundedFetch(startUrl.href, {
       signal,
       accept: 'text/html,application/xhtml+xml',
-      userAgent: 'Mozilla/5.0 (compatible; PaperReader/1.0; +https://github.com/cliophate/paper-reader)',
+      cookie: rules?.cookie ? { origin: rules.articleCookieOrigin === startUrl.origin ? startUrl.origin : rules.cookieOrigin, value: rules.cookie } : undefined,
+      userAgent: rules?.userAgent || 'Mozilla/5.0 (compatible; PaperReader/1.0; +https://github.com/cliophate/paper-reader)',
       acceptLanguage: 'en-US,en;q=0.8',
       skipBodyStatuses: [401, 403, 406, 429],
       fatalDecoding: false,

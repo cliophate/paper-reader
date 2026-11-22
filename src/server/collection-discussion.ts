@@ -45,7 +45,7 @@ export function collectionSources(db: PaperDatabase, collection: PulseCollection
   return ranked.sort((a, b) => b.score - a.score).slice(0, MAX_ARTICLES).flatMap(({ source }, index) => {
     const entry = db.localEntry(source.id)
     if (!entry) return []
-    const cached = db.getArticle(entry.url)
+    const cached = db.getArticleForEntry(entry.id)
     const html = cached?.contentHtml || entry.contentHtml || entry.excerpt
     const text = plainText(html.slice(0, 60_000)).slice(0, question ? 4000 : 1600)
     return [{ entryId: source.id, article: { id: `A${index + 1}`, title: source.title.slice(0, 400), publication: source.publication.slice(0, 200), text } }]

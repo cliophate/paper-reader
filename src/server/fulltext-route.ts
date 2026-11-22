@@ -13,7 +13,11 @@ export function fullTextRoute(reader: Pick<ReaderService, 'fetch'>) {
     response.once('close', disconnected)
     if (response.destroyed) controller.abort()
     try {
-      const article = await reader.fetch(String(request.body?.url || ''), request.body?.refresh === true ? 0 : undefined, controller.signal)
+      const { entryId, preview } = request.body || {}
+      if (entryId !== undefined && typeof entryId !== 'string' || preview !== undefined && (!preview || typeof preview.feedId !== 'string')) {
+        return response.status(400).json({ error: 'Choose an article from this feed.' })
+      }
+      const article = await reader.fetch(String(request.body?.url || ''), request.body?.refresh === true ? 0 : undefined, controller.signal, entryId, preview)
       if (!response.destroyed) response.json(article)
     } finally {
       response.removeListener('close', disconnected)

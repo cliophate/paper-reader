@@ -46,7 +46,7 @@ export function ingestFeed(db: PaperDatabase, input: FeedEndpoint & {
   const responseUrl = feedUrl(input.responseUrl)
   const fetchedTime = Date.parse(input.fetchedAt)
   if (!requestUrl || !responseUrl || !Number.isFinite(fetchedTime)) throw new Error('Invalid feed fetch metadata')
-  const parsed = parseFeed(input.xml, responseUrl)
+  const parsed = parseFeed(input.xml, responseUrl, db.feedOverrides.get(input.subscriptionId))
   // Conflicts belong to the subscription and survive endpoint repairs.
   const conflictsKey = `feed-conflicting-ids:v1:${JSON.stringify(input.subscriptionId)}`
   const savedConflicts = db.identities.checkpoint(input.backendId, conflictsKey)

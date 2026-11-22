@@ -156,3 +156,21 @@ describe('bounded feed HTTP transport', () => {
     expect(await previewFeed(origin, [origin])).toMatchObject({ title: 'Fixture', url: origin + '/' })
   })
 })
+
+it('drops the feed cookie on a cross-origin redirect, including a redirect back', async () => {
+  const seen: Array<string | undefined> = []
+  const other = await server((req, res) => {
+    seen.push(req.headers.cookie)
+    res.writeHead(302, { Location: origin + '/end' }); res.end()
+  })
+  const origin = await server((req, res) => {
+    seen.push(req.headers.cookie)
+    if (req.url === '/') res.writeHead(302, { Location: '/next' })
+    if (req.url === '/next') res.writeHead(302, { Location: other })
+    res.end(xml)
+  })
+  const options = { cookie: { origin, value: 'fixture=synthetic' }, trustedOrigins: [origin, other] }
+  await boundedFetch(origin, options)
+  expect(seen).toEqual([options.cookie.value, options.cookie.value, undefined, undefined])
+  await expect(boundedFetch(origin, { ...options, trustedOrigins: [origin] })).rejects.toMatchObject({ code: 'policy' })
+})

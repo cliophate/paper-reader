@@ -406,7 +406,7 @@ export class BriefingService {
     ])].slice(0, 32)
     for (const id of ids) {
       const entry = entries.get(id)
-      const cached = entry && this.db.getArticle(entry.url)
+      const cached = entry && this.db.getArticleForEntry(entry.id)
       if (entry && cached) entries.set(id, { ...entry, contentHtml: cached.contentHtml, excerpt: cached.excerpt || entry.excerpt })
     }
     const deadline = Date.now() + 30_000
@@ -421,7 +421,7 @@ export class BriefingService {
         const entry = id ? entries.get(id) : null
         if (!id || !entry) continue
         try {
-          const article = await beforeDeadline(abortable(() => this.reader!.fetch(entry.url, undefined, signal), signal), deadline)
+          const article = await beforeDeadline(abortable(() => this.reader!.fetch(entry.url, undefined, signal, entry.id), signal), deadline)
           signal.throwIfAborted()
           entries.set(id, {
             ...entry,

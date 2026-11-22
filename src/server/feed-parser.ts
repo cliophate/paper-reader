@@ -1,3 +1,5 @@
+import type { ExtractionRules } from '../shared/feed-overrides.js'
+import { rewriteFeedHtml } from './feed-rewrites.js'
 import { SaxesParser, type SaxesAttributeNS } from 'saxes'
 import sanitizeHtml from 'sanitize-html'
 import { decodeHTMLStrict } from 'entities'
@@ -96,7 +98,7 @@ function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
 }
 function string(value: unknown): string { return typeof value === 'string' ? value : '' }
-function parseJsonFeed(body: string, url: string): ParsedFeed {
+function parseJsonFeed(body: string, url: string, rules?: ExtractionRules): ParsedFeed {
   let parsed: unknown
   try { parsed = JSON.parse(body) } catch { throw new Error('Malformed JSON Feed') }
   const pending = [{ value: parsed, depth: 0 }]
@@ -114,7 +116,7 @@ function parseJsonFeed(body: string, url: string): ParsedFeed {
   const entries = feed.items.map(value => {
     const item = record(value)
     if (!item || typeof item.id !== 'string' || !item.id.trim()) throw new Error('JSON Feed items require a string ID')
-    const contentHtml = typeof item.content_html === 'string' ? safeHtml(item.content_html, url) : escapeHtml(string(item.content_text))
+    const contentHtml = typeof item.content_html === 'string' ? safeHtml(item.content_html, url, rules) : escapeHtml(string(item.content_text))
     return {
       externalId: item.id, title: plainText(string(item.title)),
       author: authors(item.authors) || string(record(item.author)?.name) || feedAuthor,
@@ -156,8 +158,8 @@ function parseXml(xml: string, url: string): Node {
   return root
 }
 
-function safeHtml(html: string, base: string): string {
-  return sanitizeHtml(cleanArticleHtml(html), {
+function safeHtml(html: string, base: string, rules?: ExtractionRules): string {
+  return sanitizeHtml(cleanArticleHtml(rewriteFeedHtml(html, base, rules)), {
     // Input has already passed the shared article allowlist. This pass only
     // rewrites URLs and removes unusable embeds.
     allowedTags: false, allowedAttributes: false, allowVulnerableTags: true,
@@ -167,7 +169,7 @@ function safeHtml(html: string, base: string): string {
         if (attribs[name]) attribs[name] = feedUrl(attribs[name], base)
       }
       // Avoid retaining unresolved candidates. The ordinary image src remains.
-      delete attribs.srcset
+      if (!rules?.lazyImages) delete attribs.srcset
       return { tagName, attribs }
     } },
   })
@@ -180,11 +182,11 @@ function xhtml(node: Node): string {
   }).join('')
   return `<${node.name}${attrs}>${node.children.map(c => typeof c === 'string' ? escapeHtml(c) : xhtml(c)).join('')}</${node.name}>`
 }
-function atomContent(node?: Node): string {
+function atomContent(node?: Node, rules?: ExtractionRules): string {
   if (!node || attribute(node, 'src')) return ''
   const type = attribute(node, 'type') || 'text'
-  if (type === 'xhtml') return safeHtml(children(node, 'div', XHTML).map(xhtml).join(''), node.base)
-  if (type === 'html' || type === 'text/html') return safeHtml(text(node), node.base)
+  if (type === 'xhtml') return safeHtml(children(node, 'div', XHTML).map(xhtml).join(''), node.base, rules)
+  if (type === 'html' || type === 'text/html') return safeHtml(text(node), node.base, rules)
   if (type === 'text' || type === 'text/plain') return escapeHtml(text(node))
   return ''
 }
@@ -195,11 +197,11 @@ function atomLink(node: Node): string {
 }
 function atomAuthor(node: Node): string { return value(child(node, 'author', ATOM) || node, 'name', ATOM) }
 
-export function parseFeed(xml: string, responseUrl: string): ParsedFeed {
+export function parseFeed(xml: string, responseUrl: string, rules?: ExtractionRules): ParsedFeed {
   const url = feedUrl(responseUrl)
   if (!url) throw new Error('Feed response URL must use HTTP or HTTPS without credentials')
   if (Buffer.byteLength(xml, 'utf8') > FEED_LIMITS.bytes) throw new Error('Feed exceeds the byte limit')
-  if (xml.trimStart().startsWith('{')) return parseJsonFeed(xml, url)
+  if (xml.trimStart().startsWith('{')) return parseJsonFeed(xml, url, rules)
   const root = parseXml(xml, url)
   let format: ParsedFeed['format']
   let channel: Node
@@ -222,7 +224,7 @@ export function parseFeed(xml: string, responseUrl: string): ParsedFeed {
   const siteUrl = format === 'atom' ? atomLink(channel) : linkText(child(channel, 'link'))
   const entries = items.map(item => {
     if (format === 'atom') {
-      const contentHtml = atomContent(child(item, 'content')) || atomContent(child(item, 'summary'))
+      const contentHtml = atomContent(child(item, 'content'), rules) || atomContent(child(item, 'summary'), rules)
       return {
         externalId: value(item, 'id') || undefined,
         title: plainText(atomContent(child(item, 'title'))),
@@ -241,7 +243,7 @@ export function parseFeed(xml: string, responseUrl: string): ParsedFeed {
       author: plainText(value(item, 'creator', DC) || value(item, 'author')),
       url: linkText(child(item, 'link')) || (guid && attribute(guid, 'isPermaLink') !== 'false' ? linkText(guid) : '') || (about ? feedUrl(about, item.base) : ''),
       publishedAt: date(value(item, 'pubDate') || value(item, 'date', DC)),
-      contentHtml: content ? safeHtml(text(content), content.base) : '',
+      contentHtml: content ? safeHtml(text(content), content.base, rules) : '',
       thumbnailUrl: enclosure ? feedUrl(attribute(enclosure, 'url'), enclosure.base) : '',
     }
   })
