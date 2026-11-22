@@ -1,4 +1,5 @@
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
+import { portableUrl } from './opml.js'
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite'
 import { ReaderError } from './greader-auth.js'
 import sanitizeHtml from 'sanitize-html'
@@ -150,7 +151,7 @@ export function metadata(db: DatabaseSync, kind: string, backend: string) {
   if (kind === 'subscription/list') {
     let bytes = 0
     const subscriptions = feeds.map(f => {
-      const value = { id: `feed/${f.number}`, title: displayFeedTitle(String(f.title)), url: safeUrl(displayFeedUrl(String(f.url))), htmlUrl: safeUrl(displayFeedUrl(String(f.site_url))), iconUrl: safeUrl(f.icon_url), categories: categories(db, String(f.id)).map(id => ({ id, label: id.slice(LABEL.length) })) }
+      const value = { id: `feed/${f.number}`, title: displayFeedTitle(String(f.title)), url: portableUrl(safeUrl(f.url)), htmlUrl: safeUrl(displayFeedUrl(String(f.site_url))), iconUrl: safeUrl(f.icon_url), categories: categories(db, String(f.id)).map(id => ({ id, label: id.slice(LABEL.length) })) }
       bytes += Buffer.byteLength(JSON.stringify(value)) + 1
       if (bytes > 4 * 1024 * 1024) throw new ReaderError('Response is too large.', 413)
       return value
