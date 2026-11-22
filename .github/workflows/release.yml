@@ -23,62 +23,124 @@ jobs:
       - run: npm run licenses && git diff --exit-code -- THIRD_PARTY_NOTICES.md licenses
       - name: Match tag to package version
         run: test "$GITHUB_REF_NAME" = "v$(node -p 'require("./package.json").version')"
-  publish:
+  build:
     if: github.repository == 'cliophate/paper-reader'
     needs: verify
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     permissions:
-      contents: write
+      contents: read
       packages: write
+    env:
+      IMAGE: ghcr.io/cliophate/paper-reader
+      ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      - name: Image version
-        id: version
-        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+      - name: Build reader by digest
+        id: reader
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           target: runtime
-          load: true
-          tags: paper-public:test
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           build-args: SOURCE_REVISION=${{ github.sha }}
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+      - name: Build worker by digest
+        id: worker
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           target: ai
-          load: true
-          tags: paper-public:ai-test
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           build-args: SOURCE_REVISION=${{ github.sha }}
+      - name: Pull images for installation checks
+        env:
+          READER: ${{ steps.reader.outputs.digest }}
+          WORKER: ${{ steps.worker.outputs.digest }}
+        run: |
+          docker pull "$IMAGE@$READER"
+          docker tag "$IMAGE@$READER" paper-public:test
+          docker pull "$IMAGE@$WORKER"
+          docker tag "$IMAGE@$WORKER" paper-public:ai-test
+          mkdir release
+          echo "$READER" > release/reader.digest
+          echo "$WORKER" > release/worker.digest
       - run: docker run --rm --network none paper-public:ai-test codex --version
       - run: python3 scripts/test-installation.py
       - run: python3 scripts/test-ai-worker.py --real
-      - name: Push verified images
-        env:
-          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+      - name: Save the reader archive
+        working-directory: release
+        shell: bash
         run: |
-          docker tag paper-public:test "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION"
-          docker tag paper-public:ai-test "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION-ai"
-          docker push "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION"
-          docker push "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION-ai"
-      - name: Publish public release archive
+          version=${GITHUB_REF_NAME#v}
+          archive="paper-reader-$version-linux-$ARCH.tar.gz"
+          docker tag paper-public:test "$IMAGE:$version"
+          docker save "$IMAGE:$version" | gzip -1 > "$archive"
+          sha256sum "$archive" > "$archive.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: release/
+          if-no-files-found: error
+          overwrite: true
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish both architectures under the release tags
+        shell: bash
+        env:
+          IMAGE: ghcr.io/cliophate/paper-reader
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          docker buildx imagetools create --tag "$IMAGE:$version" \
+            "$IMAGE@$(cat release-amd64/reader.digest)" "$IMAGE@$(cat release-arm64/reader.digest)"
+          docker buildx imagetools create --tag "$IMAGE:$version-ai" \
+            "$IMAGE@$(cat release-amd64/worker.digest)" "$IMAGE@$(cat release-arm64/worker.digest)"
+          for tag in "$version" "$version-ai"; do
+            docker buildx imagetools inspect --raw "$IMAGE:$tag" |
+              jq -e '[.manifests[].platform | select(.os == "linux").architecture] | sort == ["amd64", "arm64"]'
+          done
+      - name: Publish public release archives
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
-          archive="paper-reader-$RELEASE_VERSION-linux-amd64.tar.gz"
-          docker tag paper-public:test "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION"
-          docker save "ghcr.io/cliophate/paper-reader:$RELEASE_VERSION" | gzip -1 > "$archive"
-          sha256sum "$archive" > "$archive.sha256"
-          if [[ "$RELEASE_VERSION" == *-* ]]; then
+          version=${GITHUB_REF_NAME#v}
+          if [[ "$version" == *-* ]]; then
             release_flag=--prerelease
           else
             release_flag=--latest
           fi
-          gh release create "$GITHUB_REF_NAME" "$archive" "$archive.sha256" --verify-tag "$release_flag" --title "Paper $RELEASE_VERSION" --notes-file .github/release-notes.md
+          gh release create "$GITHUB_REF_NAME" release-*/*.tar.gz{,.sha256} --verify-tag "$release_flag" --title "Paper $version" --notes-file .github/release-notes.md

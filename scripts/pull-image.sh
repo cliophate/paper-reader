@@ -6,8 +6,12 @@ if docker pull "$image"; then
     exit 0
 fi
 
-printf '%s\n' 'Registry image unavailable. Downloading the release image archive.'
-archive="paper-reader-$version-linux-amd64.tar.gz"
+platform=$(docker version --format '{{.Server.Os}}/{{.Server.Arch}}')
+case "$platform" in
+    linux/amd64|linux/arm64) archive="paper-reader-$version-linux-${platform#linux/}.tar.gz";;
+    *) printf 'No release archive for %s.\n' "$platform" >&2; exit 1;;
+esac
+printf 'Registry image unavailable. Downloading %s.\n' "$archive"
 temporary=$(mktemp -d)
 trap 'rm -f "$temporary/$archive" "$temporary/$archive.sha256"; rmdir "$temporary"' EXIT HUP INT TERM
 download() {
