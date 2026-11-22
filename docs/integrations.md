@@ -365,3 +365,7 @@ proxy, automation must satisfy proxy authentication as well or use a restricted 
 Briefing confirmation links use PUBLIC_URL. Use your actual HTTPS reader URL
 and configure TZ for email dates. PAPER_BRIEFING_INCLUDE_READ_UNTIL normally
 stays blank, which keeps briefings limited to unread candidates.
+
+The internal generation endpoint counts as scheduled AI work. When scheduling
+the briefing CLI, pass `--scheduled` to apply the same daily limits and feed
+exclusions. See [AI activity and background controls](ai-providers.md#activity-and-background-controls).

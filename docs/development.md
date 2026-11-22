@@ -121,6 +121,16 @@ any stale `paper.sqlite-wal` and `paper.sqlite-shm` from the data directory,
 then start the previous release. Restoring `paper.sqlite.before-feed-maintenance-v21`
 instead discards everything saved since the v21 upgrade.
 
+Schema v28 adds the AI activity log and daily background request counts.
+Paper saves `paper.sqlite.before-ai-activity-v28` before upgrading. A SQLite
+write transaction reserves each background attempt so the service and briefing
+CLI share one allowance and quota time zone. Paper keeps the previous two days
+of counts even after trimming the log. Admission creates a running activity row.
+Completion updates the row with the outcome and any reported usage.
+To roll back v28, stop Paper and preserve the current data directory. Restore
+`paper.sqlite.before-ai-activity-v28` as `paper.sqlite` in a separate copy without
+the newer WAL and SHM files, then start the previous build against that copy.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh
@@ -322,18 +332,23 @@ The worker API listens only on `PAPER_AI_WORKER_SOCKET`, defaulting to
 - `GET /health` returns `{"status":"ok","cli":"ready"}` after a cached
   startup `codex --version` check, or HTTP 503 with category `spawn`.
 - `POST /v1/codex` accepts `model`, `instruction`, `input`, `schema`, and optional
-  `reasoningEffort`, either `low` or `medium`. It returns `{"result":...}`.
+  `reasoningEffort`, either `low` or `medium`. It returns `result` and optional input and output token counts in `usage`.
 - `POST /v1/discussion` accepts `model` and `input`. It streams NDJSON records
-  `{"type":"delta","text":"..."}`, followed by `{"type":"done"}`. A failed
+  `{"type":"delta","text":"..."}`, followed by a `done` record with optional `usage`. A failed
   stream ends with `{"type":"error","category":"...","requestId":"..."}`.
 
-Requests are limited to 2 MiB and 15 seconds to send the body. Two runs execute
+Background Codex requests first reserve a worker slot with a bodyless
+`GET /v1/slot`. Paper checks exclusions and quota before sending the batch
+with that slot's token. After checking folder membership, Paper confirms the
+slot with `PUT /v1/slot` before it counts the request. Paper releases a cancelled slot with
+`DELETE /v1/slot`. Unused tokens expire after 15 seconds. Requests are limited to 2 MiB and 15 seconds
+to send the body. Two runs execute
 at once and up to 16 wait in FIFO order for at most 300 seconds. A full queue or
 expired wait returns 503 with `Retry-After: 5` and category `busy`. Batch execution
 allows 300 seconds, discussions 120 seconds, starting after queue admission.
 The client allows 620 seconds for a batch and 440 for a discussion. Disconnects
 remove queued requests or abort the active CLI process group. Briefings share
-one generation per kind within the service. The ten-minute deadline covers all
+one generation per kind and trigger within the service. The ten-minute deadline covers all
 backend reads, pagination, coverage, model work and saving. Each caller can stop
 waiting independently. The last caller disconnecting, the deadline, or
 SIGINT/SIGTERM in the briefing CLI cancels and clears the job without waiting

@@ -40,7 +40,7 @@ function trustedOrigins(name: string): string[] {
   })
 }
 
-function timeZone(): string {
+export function configuredTimeZone(): string {
   const result = value('TZ', 'UTC')
   try { new Intl.DateTimeFormat('en', { timeZone: result }) }
   catch { throw new Error('TZ must be a supported IANA time zone') }
@@ -98,7 +98,7 @@ export function loadConfig(secrets?: { internalSecret: string; signingSecret: st
     port: Number(value('PORT', '8080')),
     host: value('HOST', '127.0.0.1'),
     readerFallbackEnabled: value('PAPER_READER_FALLBACK_ENABLED', 'false') === 'true',
-    timeZone: timeZone(),
+    timeZone: configuredTimeZone(),
     trustedSaveOrigins: trustedOrigins('PAPER_TRUSTED_SAVE_ORIGINS'),
     trustedFeedOrigins: trustedOrigins('PAPER_TRUSTED_FEED_ORIGINS'),
     openai: {

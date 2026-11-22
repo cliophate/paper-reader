@@ -23,7 +23,10 @@ if (args[0] === 'exec') {
   let input = ''
   for await (const chunk of process.stdin) input += chunk
   const output = result(input)
-  if (output) fs.writeFileSync(args[args.indexOf('--output-last-message') + 1], output)
+  if (output) {
+    fs.writeFileSync(args[args.indexOf('--output-last-message') + 1], output)
+    console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 26, output_tokens: 4 } }))
+  }
 } else if (args[0] === 'run') {
   const output = result(fs.readFileSync(args[args.indexOf('--file') + 1], 'utf8'))
   if (output) console.log(output)
@@ -45,6 +48,7 @@ if (args[0] === 'exec') {
       if (model === 'fail') { console.error('private article'); process.exit(1) }
       setTimeout(() => {
         send({ method: 'item/agentMessage/delta', params: { delta: 'reply.' } })
+        send({ method: 'thread/tokenUsage/updated', params: { tokenUsage: { total: { inputTokens: 20, outputTokens: 2 } } } })
         send({ method: 'turn/completed', params: { turn: { status: 'completed' } } })
       }, 10)
     }

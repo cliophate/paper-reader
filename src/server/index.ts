@@ -1,6 +1,7 @@
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { ReadingPreferenceConflict } from './reading-preference-store.js'
 import { validReadingWrite } from './reading-preference-values.js'
+import { AiLimitError, AiPolicyError } from './ai-activity.js'
 import { GreaderAuth } from './greader-auth.js'
 import { greaderRoutes } from './greader-routes.js'
 import { RetentionService } from './retention.js'
@@ -61,7 +62,7 @@ import { ArticleSearchEvaluator, usesFolder } from './search.js'
 import { BackendSynchronizer } from './sync.js'
 import { escapeHtml } from './text.js'
 import { TopicService } from './topics.js'
-import { PulseService, storedPulseCollections } from './pulse.js'
+import { PulseService, storedPulseCollections, type PulseModel } from './pulse.js'
 import { streamXMedia } from './x-media.js'
 import { XThreadService } from './x-thread.js'
 import { BackendValidationError, type EntryStateOperation } from './backend.js'
@@ -99,23 +100,27 @@ retention.start()
 const reader = new ReaderService(database, config.readerFallbackEnabled)
 const headlines = new HeadlineService(database, (url, entryId) => reader.fetch(url, 0, undefined, entryId), (stage, prompt, input, schema) =>
   runAiBatch(config, 'headlines', stage === 'write' ? config.headlines.writerModel : config.headlines.reviewerModel,
-    prompt, input, schema, 'medium'), providerConfigured(config) && config.headlines.enabled,
+    prompt, input, schema, 'medium', undefined, database.aiActivity), providerConfigured(config) && config.headlines.enabled,
   () => config.ai.provider === 'openai' ? `openai:${config.openai.baseUrl}:${config.openai.headlinesModel}` : `${config.headlines.writerModel}:${config.headlines.reviewerModel}`)
 const xThreads = new XThreadService(config.rssHub.baseUrl)
 let localReadsActive = Boolean(standalone) || config.sync.localReads && database.getSyncValue('backfill_complete') === 'true'
 const entriesSource = switchingEntrySource(() => localReadsActive, repository, backend)
 const webhooks = new Webhooks(database.webhooks, config.stateDir, config.trustedSaveOrigins, entriesSource.navigation)
-const pulse = new PulseService(database, (prompt, input, schema) => runAiBatch(config, 'grouping', config.collections.model, prompt, input, schema, 'medium'),
-  providerConfigured(config) && config.collections.enabled)
+database.aiActivity.navigation = signal => entriesSource.navigation(signal)
+const pulseModel = (feature: 'grouping' | 'catchUp'): PulseModel => (prompt, input, schema) =>
+  runAiBatch(config, 'grouping', config.collections.model, prompt, input, schema, 'medium', undefined, database.aiActivity, feature)
+const groupingModel = pulseModel('grouping')
+const pulse = new PulseService(database, groupingModel, providerConfigured(config) && config.collections.enabled,
+  Date.now, groupingModel, pulseModel('catchUp'))
 const topics = new TopicService(database, entriesSource, () => storedPulseCollections(database).collections)
 const briefings = new BriefingService(config, database, entriesSource, reader, topics)
 const briefingDelivery = new BriefingDelivery(config, database, briefings)
 const briefingLibrary = new BriefingLibraryService(database, ids => synchronizer.editEntries(ids, 'read', 'briefing'))
 const app = express()
-const discussions = new DiscussionService(database, createAiChatModel(config), {
+const discussions = new DiscussionService(database, createAiChatModel(config, database.aiActivity), {
   enabled: discussionEnabled,
   get: id => pulse.list().collections.find(collection => collection.id === id),
-  model: (prompt, input, schema, signal) => runAiBatch(config, 'discussion', config.codex.discussionModel, prompt, input, schema, 'low', signal),
+  model: (prompt, input, schema, signal, feature) => runAiBatch(config, 'discussion', config.codex.discussionModel, prompt, input, schema, 'low', signal, database.aiActivity, feature),
 })
 logMemory('services ready')
 
@@ -124,16 +129,20 @@ synchronizer.onSyncCompleted(() => {
   localReadsActive = Boolean(standalone) || config.sync.localReads && database.getSyncValue('backfill_complete') === 'true'
   // The worker also releases old batches if a concurrent writer holds the database.
   try { database.webhooks.finishBatch() } catch { console.error('Paper could not close the webhook batch after sync.') }
-  void headlines.run()
-  void pulse.refresh()
+  void headlines.run('sync')
+  void pulse.refresh('sync')
   topics.invalidate()
   void topics.refresh().catch(error => console.error('Coverage index refresh failed', error))
 })
+await database.aiActivity.recoverInterrupted()
 synchronizer.start()
 headlines.start()
 logMemory('headlines started')
 pulse.start()
 logMemory('pulse started')
+await database.aiActivity.pruneActivity()
+const activityTimer = setInterval(() => { void database.aiActivity.pruneActivity() }, 3_600_000)
+activityTimer.unref()
 const memoryTimer = setInterval(() => logMemory('running'), 60_000)
 memoryTimer.unref()
 
@@ -246,6 +255,7 @@ const collectionDiscussionRoute = (kind: 'suggestions' | 'answer') => asyncRoute
     if (!response.destroyed) response.json(result)
   } catch (error) {
     if (response.destroyed) return
+    if (error instanceof AiLimitError) return response.status(429).json({ error: error.message })
     if (error instanceof CollectionDiscussionError) return response.status(error.status).json({ error: error.message })
     response.status(502).json({ error: kind === 'suggestions' ? 'Paper could not get suggested questions. Try again.' : 'Paper could not answer right now. Try again.' })
   }
@@ -308,11 +318,26 @@ app.post('/api/settings/connections/test-ai', async (request, response) => {
   const cancel = () => controller.abort()
   response.once('close', cancel)
   try {
-    const result = await testOpenaiConnection(connectionSettings.openaiTestConfig(request.body?.openai ?? {}), controller.signal)
+    const settings = connectionSettings.openaiTestConfig(request.body?.openai ?? {})
+    const result = await testOpenaiConnection(settings, controller.signal, database.aiActivity.attempt('connection', 'openai', settings.discussionModel, controller.signal))
     response.json(result)
   } catch (error) {
     response.json({ available: false, message: error instanceof Error ? error.message : 'AI connection failed.' })
   } finally { response.off('close', cancel) }
+})
+
+app.get('/api/settings/ai/activity', (request, response) => {
+  response.set('Cache-Control', 'no-store').json(database.aiActivity.view(String(request.query.feature || ''), String(request.query.outcome || '')))
+})
+app.put('/api/settings/ai/controls', (request, response) => {
+  response.set('Cache-Control', 'no-store')
+  try {
+    database.aiActivity.savePolicy(request.body)
+    response.json({ ok: true })
+  } catch (error) {
+    if (error instanceof AiPolicyError) return response.status(400).json({ error: error.message })
+    throw error
+  }
 })
 
 app.get('/api/settings/connections/briefing-delivery', (_request, response) => {
@@ -954,7 +979,7 @@ app.post('/api/internal/briefings/generate', requireInternalSecret, asyncRoute(a
   if (!providerConfigured(config)) return response.status(503).json({ error: AI_UNAVAILABLE })
   if (!config.ai.briefingsEnabled || !aiEnabled(config)) return response.status(503).json({ error: 'Briefing generation is disabled. Enable it in Settings.' })
   const kind = request.body?.kind === 'evening' ? 'evening' : 'morning'
-  const briefing = await withRequestSignal(request, response, signal => briefings.generate(kind, false, signal))
+  const briefing = await withRequestSignal(request, response, signal => briefings.generate(kind, false, signal, 'scheduled'))
   response.json({
     id: briefing.id,
     subject: briefing.subject,
@@ -1023,6 +1048,7 @@ app.use((error: Error, request: Request, response: Response, _next: NextFunction
   if (error instanceof SearchSnapshotError) return response.status(409).json({ error: error.message })
   if (error instanceof SearchLimitError) return response.status(400).json({ error: error.message })
   if (error instanceof AnnotationError) return response.status(error.status).json({ error: error.message })
+  if (error instanceof AiLimitError) return response.status(429).json({ error: error.message })
   if (error instanceof SearchUnavailableError) return response.status(503).json({ error: error.message })
   if ((error as Error & { type?: string }).type === 'entity.too.large') return response.status(413).json({ error: 'Request body is too large.' })
   if (error instanceof ReadingPreferenceConflict) return response.status(409).json({ error: error.message, code: error.code, snapshot: error.snapshot })
@@ -1088,6 +1114,7 @@ async function shutdown() {
   const hooksStopped = webhooks.stop()
   const deliveryStopped = briefingDelivery.stop()
   await greader.close()
+  clearInterval(activityTimer)
   clearInterval(memoryTimer)
   // Native SQLite can delay both worker termination and process.exit(). At the
   // deadline, OS teardown kills every thread and releases its locks without

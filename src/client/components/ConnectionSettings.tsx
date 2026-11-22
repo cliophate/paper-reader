@@ -1,3 +1,4 @@
+import { AiActivity } from './AiActivity'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { api } from '../api'
 import type { AiSettings, ConnectionsSettings, ConnectionsUpdate, DestinationSecret, DestinationSettings, DestinationUpdate } from '../../shared/connections'
@@ -27,6 +28,7 @@ export function ConnectionSettings({ onChanged }: { onChanged: () => Promise<voi
     {!settings && !error && <p role="status">Loading connections...</p>}
     {settings && <>
       <AiConnection runtime={settings.aiRuntime} settings={settings.ai} openai={settings.openai} onSave={save} />
+      <AiActivity />
       <BriefingEmail settings={settings.briefingDelivery} onSave={save} />
       <TokenConnection kind="readwise" settings={settings} onSave={save} />
       {settings.saveDestinations?.map(destination => <SaveConnection key={destination.id} settings={destination} onSave={save} />)}

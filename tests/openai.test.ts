@@ -1,3 +1,4 @@
+import { PaperDatabase } from '../src/server/db.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startOpenaiFixture } from './fixtures/openai-provider.mjs'
 import { openaiBatch, openaiChat, testOpenaiConnection } from '../src/server/openai.js'
@@ -40,6 +41,25 @@ describe('OpenAI-compatible HTTP provider', () => {
     expect(fixture.requests[1].body.messages[0].content).toContain(JSON.stringify(schema))
   })
 
+  it('logs individual provider attempts without saving messages, article text or keys', async () => {
+    const db = new PaperDatabase(':memory:')
+    const log = db.aiActivity
+    try {
+      log.savePolicy({ ...log.policy(), daily: 1 })
+      const run = () => openaiBatch(config.openai, 'fallback', 'Synthetic private instruction', { article: 'Synthetic private article' }, schema,
+        undefined, log.attempt('grouping', 'openai', 'fallback'))
+      await expect(log.withTrigger('sync', run)).rejects.toThrow('Daily background AI limit')
+      expect(fixture.requests).toHaveLength(1)
+      expect(log.view().items.map(item => item.outcome)).toEqual(['limited', 'error'])
+      await run()
+      expect(fixture.requests).toHaveLength(3)
+      expect(log.view().items[0]).toMatchObject({ trigger: 'manual', outcome: 'ok', inputTokens: 30, outputTokens: 8 })
+      await openaiChat(config.openai, 'stream', '', {}, new AbortController().signal, () => {}, log.attempt('discussion', 'openai', 'stream'))
+      expect(log.view().items[0]).toMatchObject({ inputTokens: 25, outputTokens: 3 })
+      expect(JSON.stringify(db.greaderDatabase.prepare('SELECT * FROM ai_activity').all())).not.toMatch(/Synthetic private|synthetic-secret/)
+    } finally { db.close() }
+  })
+
   it('passes fallback results through existing batch validation', async () => {
     const result = await openaiBatch(config.openai, 'fallback-invalid', 'Group articles', {}, PULSE_SCHEMA)
     expect(() => validatePulseBatch(result, [], [])).toThrow()
@@ -52,6 +72,11 @@ describe('OpenAI-compatible HTTP provider', () => {
     expect(updates.at(-1)).toBe('Hello café 🌱')
     expect(fixture.requests[0].body.stream).toBe(true)
     expect(fixture.requests[0].body).not.toHaveProperty('tools')
+  })
+
+  it('streams without token reporting when a server rejects the usage option', async () => {
+    expect(await chat('legacy-stream')).toBe('Hello café 🌱')
+    expect(fixture.requests.map(call => call.body.stream_options)).toEqual([{ include_usage: true }, undefined])
   })
 
   it.each(['stream-error', 'stream-invalid', 'stream-truncated', 'stream-length', 'stream-tools'])('rejects %s without returning provider diagnostics', async model => {
@@ -97,6 +122,27 @@ describe('OpenAI-compatible HTTP provider', () => {
     expect(await Promise.all(running)).toEqual([expect.objectContaining({ category: 'cancelled' }), expect.objectContaining({ category: 'cancelled' })])
     expect(await batch('json')).toMatchObject({ groups: [] })
     expect(fixture.requests).toHaveLength(3)
+  })
+
+  it('rechecks exclusions after waiting for a slot and DNS without spending quota', async () => {
+    const db = new PaperDatabase(':memory:')
+    const active = [new AbortController(), new AbortController()]
+    const running = active.map(controller => batch('hang', controller.signal).catch(() => {}))
+    try {
+      await vi.waitFor(() => expect(fixture.requests).toHaveLength(2))
+      const dns = Promise.withResolvers<Array<{ address: string; family: number }>>()
+      const lookup = vi.spyOn(networkPolicy, 'resolveHttpUrl').mockReturnValue(dns.promise)
+      const log = db.aiActivity
+      const queued = log.withTrigger('sync', () => openaiBatch(config.openai, 'json', '', {}, schema, undefined, log.attempt('headlines', 'openai', 'json')))
+      expect(log.view().used).toEqual({})
+      active[0].abort()
+      await vi.waitFor(() => expect(lookup).toHaveBeenCalledOnce())
+      log.savePolicy({ ...log.policy(), feeds: ['new-exclusion'] })
+      dns.resolve([{ address: '127.0.0.1', family: 4 }])
+      await expect(queued).rejects.toMatchObject({ category: 'cancelled' })
+      expect(fixture.requests).toHaveLength(2)
+      expect(log.view().used).toEqual({})
+    } finally { active.forEach(controller => controller.abort()); await Promise.all(running); db.close() }
   })
 
   it('does not connect after a cancelled DNS lookup resolves late', async () => {

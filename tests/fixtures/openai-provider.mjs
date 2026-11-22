@@ -14,7 +14,7 @@ export async function startOpenaiFixture() {
     requests.push({ body, authorization: request.headers.authorization, path: request.url })
     response.on('close', () => closed.push(body.model))
     const json = (value, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(value)) }
-    const result = value => json({ choices: [{ message: { content: JSON.stringify(value) }, finish_reason: 'stop' }] })
+    const result = value => json({ usage: { prompt_tokens: 30, completion_tokens: 8 }, choices: [{ message: { content: JSON.stringify(value) }, finish_reason: 'stop' }] })
     if (body.model === 'hang') return
     if (body.model === 'slow-body') { response.writeHead(200); response.write('{'); return }
     if (body.model === 'redirect') { response.writeHead(307, { Location: '/stolen' }); response.end(); return }
@@ -29,6 +29,9 @@ export async function startOpenaiFixture() {
     if (body.model === 'fallback-invalid') { result({ groups: 'invalid' }); return }
     if (body.model === 'truncated') { json({ choices: [{ message: { content: '{}' }, finish_reason: 'length' }] }); return }
     if (body.model === 'refused') { json({ choices: [{ message: { content: '{}', refusal: 'synthetic-secret' }, finish_reason: 'stop' }] }); return }
+    if (body.model === 'legacy-stream' && body.stream_options) {
+      json({ error: { message: 'Unknown field stream_options' } }, 422); return
+    }
     if (body.stream) {
       response.writeHead(200, { 'Content-Type': 'text/event-stream' })
       const delta = (content, finish_reason = null) => `data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason }] })}\r\n\r\n`
@@ -39,7 +42,7 @@ export async function startOpenaiFixture() {
       if (body.model === 'stream-length') { response.end(delta('hello', 'length') + 'data: [DONE]\n\n'); return }
       if (body.model === 'stream-tools') { response.end('data: {"choices":[{"delta":{"tool_calls":[{}]}}]}\n\n'); return }
       if (body.model === 'stream-hang') { response.write(delta('hello')); return }
-      const wire = Buffer.from(': keepalive\r\n\r\n' + delta('Hello ') + delta('café 🌱') + delta('', 'stop') + 'data: [DONE]\r\n\r\n')
+      const wire = Buffer.from(': keepalive\r\n\r\n' + delta('Hello ') + delta('café 🌱') + delta('', 'stop') + 'data: {"choices":[],"usage":{"prompt_tokens":25,"completion_tokens":3}}\r\n\r\ndata: [DONE]\r\n\r\n')
       // Separate bytes exercise UTF-8 and SSE framing across chunks.
       for (let i = 0; i < wire.length; i += 3) response.write(wire.subarray(i, i + 3))
       response.end(); return

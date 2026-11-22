@@ -33,7 +33,7 @@ export class CollectionDiscussionError extends Error {
   constructor(readonly status: number, message: string) { super(message) }
 }
 
-export type CollectionDiscussionModel = (prompt: string, input: unknown, schema: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>
+export type CollectionDiscussionModel = (prompt: string, input: unknown, schema: Record<string, unknown>, signal: AbortSignal, feature: 'suggestions' | 'questions') => Promise<unknown>
 
 function words(text: string) {
   return new Set(text.toLowerCase().match(/[\p{L}\p{N}]{3,}|\d+/gu))

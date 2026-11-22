@@ -12,7 +12,7 @@ import type { Entry, NavigationPayload } from '../src/server/types.js'
 
 vi.mock('../src/server/codex.js', () => ({ runCodex: vi.fn() }))
 
-const config = { ai: { enabled: true, provider: 'codex', briefingsEnabled: true }, codex: { enabled: true, configDir: '/synthetic-profile' }, briefing: {}, publicUrl: 'http://fixture.test', timeZone: 'UTC' } as Config
+const config = { ai: { enabled: true, provider: 'codex', briefingsEnabled: true }, codex: { enabled: true, shortlistModel: 'fixture-shortlist', editorModel: 'fixture-editor', configDir: '/synthetic-profile' }, briefing: {}, publicUrl: 'http://fixture.test', timeZone: 'UTC' } as Config
 const navigation: NavigationPayload = { folders: [], uncategorized: [], unread: 0, starred: 0 }
 function pending<T>() {
   let resolve!: (value: T) => void
@@ -181,6 +181,33 @@ describe('briefing cancellation before model work', () => {
     expect(input.newsClusters.some(item => item.id === 'muted')).toBe(!enabled)
     if (enabled) expect(input.newsClusters[0]).toMatchObject({ id: 'followed', followed: true })
     expect(result.selection.worthNoticing.map(item => item.entryId)).toEqual(enabled ? ['followed1'] : ['followed1', 'muted1'])
+  })
+
+  it('applies remote folder exclusions to scheduled briefs and keeps manual generation available', async () => {
+    vi.spyOn(fs, 'readFile').mockResolvedValue('Synthetic editorial profile.')
+    const sourceFeed = { id: 'folder-feed' } as NavigationPayload['uncategorized'][number]
+    vi.mocked(source.navigation).mockResolvedValue({ ...navigation, folders: [{ id: 'private', title: 'Folder', feeds: [sourceFeed], unread: 0 }] })
+    const article = (id: string, feedId: string) => ({ id, feedId, kind: 'article', url: 'https://fixture.test/' + id,
+      title: id, contentHtml: '<p>' + id + '</p>', timestamp: Date.now(), feedUrl: '', thumbnailUrl: '' }) as Entry
+    vi.mocked(source.entries).mockResolvedValue([article('Synthetic private story', sourceFeed.id), article('Synthetic public story', 'other')])
+    db.aiActivity.savePolicy({ ...db.aiActivity.policy(), folders: ['private'] })
+    vi.mocked(runCodex).mockImplementation(async (_config, model) => model === 'fixture-shortlist'
+      ? { writerIds: [], newsClusterIds: [], newsGroups: [], socialIds: [] } : { intro: '', news: [], worthNoticing: [], social: [] })
+    await service.generateScheduled('morning', new AbortController().signal, () => {})
+    const inputs = () => JSON.stringify(vi.mocked(runCodex).mock.calls.map(call => call[3]))
+    expect(inputs()).not.toContain('Synthetic private story')
+    expect(inputs()).toContain('Synthetic public story')
+    expect(db.aiActivity.view().items.every(row => row.trigger === 'scheduled')).toBe(true)
+    vi.mocked(runCodex).mockClear()
+    db.aiActivity.savePolicy({ ...db.aiActivity.policy(), daily: 1 })
+    await expect(service.generateScheduled('evening', new AbortController().signal, () => {})).rejects.toThrow('Daily background AI limit')
+    expect(runCodex).not.toHaveBeenCalled()
+    await service.generate('evening', true)
+    expect(inputs()).toContain('Synthetic private story')
+    vi.mocked(runCodex).mockClear()
+    await expect(service.generate('evening', false, undefined, 'scheduled')).rejects.toThrow('Daily background AI limit')
+    expect(runCodex).not.toHaveBeenCalled()
+    expect(db.aiActivity.view('briefing', 'limited').items).toMatchObject([{ trigger: 'scheduled' }, { trigger: 'scheduled' }])
   })
 
   it('saves lead prose and short brief lines when the shortlist fails', async () => {

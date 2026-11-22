@@ -28,6 +28,36 @@ beforeEach(() => {
 afterEach(() => { service.stop(); db.close(); vi.restoreAllMocks() })
 
 describe('clear headlines', () => {
+  it('skips articles from an excluded folder before fetching full text', async () => {
+    db.replaceNavigation({ unread: 1, starred: 1, uncategorized: [], folders: [{ id: 'fixture-folder', title: 'Fixture folder', unread: 1,
+      feeds: [{ id: 'feed/ap', title: 'Fixture feed', url: entry().feedUrl, siteUrl: '', iconUrl: '', categories: [], unread: 1,
+        lastPublishedAt: null, lastCheckedAt: null, lastErrorAt: null, broken: false }] }] })
+    db.aiActivity.savePolicy({ ...db.aiActivity.policy(), folders: ['fixture-folder'] })
+    await service.run('sync')
+    expect(fetchArticle).not.toHaveBeenCalled()
+    expect(model).not.toHaveBeenCalled()
+  })
+
+  it('skips writing when a rewrite cannot be reviewed within the feature cap', async () => {
+    db.aiActivity.savePolicy({ ...db.aiActivity.policy(), featureLimits: { headlines: 1 } })
+    await service.run()
+    expect(model).not.toHaveBeenCalled()
+    expect(db.aiActivity.view('headlines').items).toMatchObject([{ outcome: 'limited' }])
+    expect(db.aiActivity.view().used).toEqual({})
+  })
+
+  it('uses remote navigation with an empty sync cache and skips work if it is unavailable', async () => {
+    const remote = { folders: [{ id: 'remote', feeds: [{ id: 'feed/ap' }] }] }
+    db.aiActivity.navigation = vi.fn().mockResolvedValueOnce(remote).mockRejectedValueOnce(new Error('Offline'))
+    db.aiActivity.savePolicy({ ...db.aiActivity.policy(), folders: ['remote'] })
+    await service.run('sync')
+    expect(model).not.toHaveBeenCalled()
+    expect(db.aiActivity.view().items).toEqual([])
+    await service.run('sync')
+    expect(fetchArticle).not.toHaveBeenCalled()
+    expect(db.aiActivity.view('headlines').items).toMatchObject([{ trigger: 'sync', outcome: 'limited' }])
+  })
+
   it('excludes old read unstarred articles using millisecond timestamps', () => {
     const old = Date.now() - 8 * 86400_000
     db.upsertEntries([

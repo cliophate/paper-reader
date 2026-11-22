@@ -3,6 +3,7 @@ import { privateFeedRef, migrateFeedMaintenance } from './feed-maintenance.js'
 import { FeedOverrideStore, migrateFeedOverrides } from './feed-overrides.js'
 import { ENCLOSURE_SCHEMA_VERSION, entryEnclosures, migrateEnclosures, replaceEnclosures } from './enclosure-store.js'
 import { ReadingPreferenceStore, migrateReadingPreferences, READING_PREFERENCES_VERSION } from './reading-preference-store.js'
+import { AI_ACTIVITY_VERSION, AiActivityStore, migrateAiActivity } from './ai-activity.js'
 import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
@@ -52,6 +53,7 @@ export interface BriefingRecord {
   status: string
   tokenHash: string
   selection: BriefingSelection
+  exclusionKey?: string
   createdAt: string
   deliveredAt: string | null
   acknowledgedAt: string | null
@@ -205,6 +207,7 @@ export class PaperDatabase {
   readonly feedIcons: FeedIconStore
   readonly readingPreferences: ReadingPreferenceStore
   readonly webhooks: WebhookStore
+  readonly aiActivity: AiActivityStore
   readonly briefingDelivery: BriefingDeliveryStore
   private activeBackendId = ''
   private closed = false
@@ -280,6 +283,20 @@ export class PaperDatabase {
           if (version > 0) this.backupBeforeMigration(STORY_CHOICES_VERSION, 'story-choices')
           migrateStoryChoices(this.db)
         }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < AI_ACTIVITY_VERSION) {
+          if (version > 0) this.backupBeforeMigration(AI_ACTIVITY_VERSION, 'ai-activity')
+          transaction(this.db, () => {
+            // Pre-release activity databases used the same versions as feed maintenance and overrides.
+            if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='ai_activity'").get()) {
+              if (!this.db.prepare("SELECT 1 FROM pragma_table_info('ai_activity') WHERE name='reason'").get()) {
+                migrateFeedMaintenance(this.db)
+                this.db.exec('ALTER TABLE ai_activity ADD COLUMN reason TEXT')
+              }
+              if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='feed_overrides'").get()) migrateFeedOverrides(this.db)
+            }
+            migrateAiActivity(this.db)
+          })
+        }
       }
       this.db.function('checked_url_match', { directOnly: true }, matched => {
         const now = performance.now()
@@ -300,6 +317,7 @@ export class PaperDatabase {
       this.feedIcons = new FeedIconStore(this.db, id => this.organization.subscriptionChanged(id), id => this.assertLocalBackend(id))
       this.readingPreferences = new ReadingPreferenceStore(this.db)
       this.webhooks = new WebhookStore(this.db)
+      this.aiActivity = new AiActivityStore(this.db, Date.now, options.readOnly)
       this.briefingDelivery = new BriefingDeliveryStore(this.db)
     } catch (error) {
       this.db.close()
@@ -1084,11 +1102,12 @@ export class PaperDatabase {
     const rows = this.db.prepare(`
       SELECT entries.* FROM entries
       WHERE kind = 'article' AND (timestamp >= ? OR first_seen_at >= ?) AND timestamp <= ?
+        AND feed_id NOT IN (SELECT value FROM json_each(?))
         AND ${scanned ? '' : 'NOT'} EXISTS (SELECT 1 FROM pulse_scanned WHERE entry_id = entries.id)
         AND NOT EXISTS (SELECT 1 FROM pulse_memberships WHERE entry_id = entries.id)
         AND NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = entries.id)
       ORDER BY timestamp DESC, id LIMIT ?
-    `).all(after, after, before, limit) as Array<Record<string, string | number>>
+    `).all(after, after, before, JSON.stringify([...this.aiActivity.excludedFeeds()]), limit) as Array<Record<string, string | number>>
     return rows.map(row => this.numberEntry(entryFromRow(row)))
   }
 
@@ -1099,10 +1118,11 @@ export class PaperDatabase {
     const query = words.map(word => `"${word}"`).join(' OR ')
     const rows = this.db.prepare(`SELECT entries.* FROM entries_fts JOIN entries ON entries.id = entries_fts.entry_id
       WHERE entries_fts MATCH ? AND entries.kind = 'article' AND entries.timestamp >= ? AND entries.timestamp <= ?
+      AND entries.feed_id NOT IN (SELECT value FROM json_each(?))
       AND EXISTS (SELECT 1 FROM pulse_scanned WHERE entry_id = entries.id)
       AND NOT EXISTS (SELECT 1 FROM pulse_memberships WHERE entry_id = entries.id)
       AND NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = entries.id)
-      ORDER BY bm25(entries_fts), entries.timestamp DESC, entries.id LIMIT ?`).all(query, now - 30 * 86_400_000, now + 60_000, limit) as Array<Record<string, string | number>>
+      ORDER BY bm25(entries_fts), entries.timestamp DESC, entries.id LIMIT ?`).all(query, now - 30 * 86_400_000, now + 60_000, JSON.stringify([...this.aiActivity.excludedFeeds()]), limit) as Array<Record<string, string | number>>
     return rows.map(row => this.numberEntry(entryFromRow(row)))
   }
 
@@ -1806,8 +1826,9 @@ export class PaperDatabase {
     const rows = this.db.prepare(`SELECT id FROM entries
       WHERE source_domain IN ('androidpolice.com', 'www.androidpolice.com', 'androidauthority.com', 'www.androidauthority.com')
       AND (timestamp > ? OR read = 0 OR starred = 1)
+      AND feed_id NOT IN (SELECT value FROM json_each(?))
       ORDER BY read ASC, timestamp DESC LIMIT 1000
-    `).all(Date.now() - 7 * 86400_000)
+    `).all(Date.now() - 7 * 86400_000, JSON.stringify([...this.aiActivity.excludedFeeds()]))
     // Finish the ID query before yielding so background work can checkpoint WAL.
     const lookup = this.db.prepare('SELECT * FROM entries WHERE id = ?')
     for (const candidate of rows) {
@@ -2357,7 +2378,7 @@ export class PaperDatabase {
         record.text,
         record.status,
         record.tokenHash,
-        JSON.stringify(record.selection),
+        JSON.stringify({ ...record.selection, exclusionKey: record.exclusionKey }),
         record.createdAt,
         record.deliveredAt,
         record.acknowledgedAt,
@@ -2371,6 +2392,7 @@ export class PaperDatabase {
   getBriefing(id: string): BriefingRecord | null {
     const row = this.db.prepare('SELECT * FROM briefings WHERE id = ?').get(id) as Record<string, string | null> | undefined
     if (!row) return null
+    const { exclusionKey, ...selection } = JSON.parse(String(row.selection_json))
     return {
       id: String(row.id),
       kind: row.kind as 'morning' | 'evening',
@@ -2381,7 +2403,7 @@ export class PaperDatabase {
       text: String(row.text),
       status: String(row.status),
       tokenHash: String(row.token_hash),
-      selection: JSON.parse(String(row.selection_json)) as BriefingSelection,
+      selection, exclusionKey,
       createdAt: String(row.created_at),
       deliveredAt: row.delivered_at,
       acknowledgedAt: row.acknowledged_at,
