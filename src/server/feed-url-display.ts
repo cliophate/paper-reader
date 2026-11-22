@@ -1,4 +1,4 @@
-function sensitiveParameter(key: string): boolean {
+export function sensitiveParameter(key: string): boolean {
   return /token|secret|password|passwd|auth|signature|credential|api.?key/i.test(key)
     || /(?:access|pass|private|signing)[-_.]?key|(?:^|[-_])(?:sig|hash|key|hmac)(?:$|[-_])/i.test(key)
     || /^(?:x-amz-|x-goog-)|^(?:awsaccesskeyid|googleaccessid|policy|jwt|hdnea|hdnts)$/i.test(key)

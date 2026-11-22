@@ -50,23 +50,13 @@ describe('reader extraction', () => {
 
   it('uses the opt-in reader fallback when the publisher returns 403', async () => {
     const articleHtml = '<html><body><article><h1>Blocked article</h1><p>The complete article body is available through the fallback reader.</p></article></body></html>'
-    vi.mocked(boundedFetch).mockResolvedValue(page(403))
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { html: articleHtml } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }))
-    vi.stubGlobal('fetch', fetchMock)
+    vi.mocked(boundedFetch).mockResolvedValueOnce(page(403))
+      .mockResolvedValueOnce({ ...page(200), text: JSON.stringify({ data: { html: articleHtml } }) })
 
     const sourceUrl = new URL('https://93.184.216.34/story')
     await expect(fetchHtml(sourceUrl, true)).resolves.toEqual({ html: articleHtml, finalUrl: sourceUrl })
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(String(fetchMock.mock.calls[0][0])).toBe('https://r.jina.ai/https://93.184.216.34/story')
-    expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
-      Accept: 'application/json',
-      DNT: '1',
-      'X-Return-Format': 'html',
-    })
+    expect(boundedFetch).toHaveBeenNthCalledWith(2, 'https://r.jina.ai/https://93.184.216.34/story',
+      expect.objectContaining({ accept: 'application/json', readerHtml: true, maxRedirects: 0 }))
   })
 
   it('does not proxy ordinary not-found responses', async () => {
@@ -80,11 +70,8 @@ describe('reader extraction', () => {
 
   it.each([401, 403, 406, 429])('uses the reader fallback for status %s', async status => {
     const articleHtml = '<html><body><article><h1>Fallback article</h1><p>The fallback returned enough readable text for Paper to display this blocked article in its own reader view.</p></article></body></html>'
-    vi.mocked(boundedFetch).mockResolvedValue(page(status))
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { html: articleHtml } }), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
-
+    vi.mocked(boundedFetch).mockResolvedValueOnce(page(status))
+      .mockResolvedValueOnce({ ...page(200), text: JSON.stringify({ data: { html: articleHtml } }) })
     await expect(fetchHtml(new URL('https://93.184.216.34/story'), true)).resolves.toMatchObject({ html: articleHtml })
   })
 })
@@ -121,15 +108,15 @@ it('passes cancellation through the reader to the bounded transport without cach
 })
 
 it.each(['blocked', 'unreadable'])('cancels the optional fallback for a %s page', async reason => {
-  vi.mocked(boundedFetch).mockResolvedValue({ ...page(reason === 'blocked' ? 403 : 200), text: '<p>Short.</p>' })
+  vi.mocked(boundedFetch).mockResolvedValueOnce({ ...page(reason === 'blocked' ? 403 : 200), text: '<p>Short.</p>' })
   const controller = new AbortController()
   let fallbackSignal: AbortSignal | undefined
   const started = Promise.withResolvers<void>()
-  vi.stubGlobal('fetch', vi.fn((_url, options: RequestInit) => new Promise((_resolve, reject) => {
-    fallbackSignal = options.signal!
+  vi.mocked(boundedFetch).mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
+    fallbackSignal = options!.signal!
     fallbackSignal.addEventListener('abort', () => reject(fallbackSignal!.reason), { once: true })
     started.resolve()
-  })))
+  }))
   const database = { getArticle: () => null, cacheArticle: vi.fn() } as unknown as PaperDatabase
   const work = new ReaderService(database, true).fetch('https://example.test/story', 0, controller.signal)
   await started.promise

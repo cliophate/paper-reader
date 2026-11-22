@@ -23,6 +23,7 @@ export interface BoundedFetchOptions {
   accept?: string
   userAgent?: string
   cookie?: { origin: string; value: string }
+  readerHtml?: boolean
   acceptLanguage?: string
   // Return response metadata with an empty body without reading these statuses.
   skipBodyStatuses?: readonly number[]
@@ -124,6 +125,23 @@ export function boundedApiRequest(url: URL, trustedOrigins: readonly string[], r
     maxResponseBytes: MiB, maxDecompressedBytes: MiB, maxDecodedBytes: MiB }, request) as Promise<BoundedFetchResult>
 }
 
+function cookieValues(cookie: string): string[] {
+  const values = cookie.split(';').flatMap(pair => {
+    const equals = pair.indexOf('=')
+    if (equals < 0) return []
+    const value = pair.slice(equals + 1).trim().replace(/^"(.*)"$/, '$1')
+    return value.length >= 8 ? [value] : []
+  })
+  return [...new Set(values)].sort((a, b) => b.length - a.length)
+}
+
+function reflectsCookie(location: string, values: string[]): boolean {
+  // Cookie headers are ASCII. Decode each percent-encoded byte independently so a
+  // malformed escape elsewhere in the Location cannot hide an encoded value.
+  const decoded = location.replace(/%([a-f\d]{2})/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+  return values.some(value => location.includes(value) || decoded.includes(value))
+}
+
 async function fetchBounded(input: string, options: TextFetchOptions | BytesFetchOptions, api?: ApiRequest): Promise<BoundedFetchResult | BoundedBytesResult> {
   // A text prefix closes the response at maxDecompressedBytes.
   const textPrefix = options.responseBody === 'text-prefix'
@@ -140,6 +158,10 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
     try { url = new URL(input) } catch { throw new FeedHttpError('policy', 'Enter a complete HTTP or HTTPS URL.') }
     const redirects: BoundedFetchResult['redirects'] = []
     let cookie = options.cookie?.origin === url.origin ? options.cookie : undefined
+    const secrets = cookieValues(options.cookie?.value || '')
+    const reflectedValues = secrets.length
+      ? new RegExp(secrets.map(value => value.replace(/[.*+?^$(){}|[\]\\]/g, '\\$&')).join('|'), 'g')
+      : undefined
     for (let hop = 0; ; hop++) {
       signal.throwIfAborted()
       url.hash = ''
@@ -166,6 +188,7 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
               ...(api?.authorization ? { Authorization: api.authorization } : {}),
               ...(api?.body !== undefined ? { 'Content-Type': api.contentType ?? 'application/json', 'Content-Length': Buffer.byteLength(api.body) } : {}),
               ...(cookie ? { Cookie: cookie.value } : {}),
+              ...(options.readerHtml ? { DNT: '1', 'X-Return-Format': 'html' } : {}),
               ...(options.acceptLanguage ? { 'Accept-Language': options.acceptLanguage } : {}),
               ...(etag ? { 'If-None-Match': etag } : {}), ...(lastModified ? { 'If-Modified-Since': lastModified } : {}) },
           }, resolve)
@@ -178,6 +201,9 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
           response.destroy()
           if (!location || hop >= limits.maxRedirects) throw new FeedHttpError('redirect', 'The response has an invalid or excessive redirect.')
           try { url = new URL(location, url) } catch { throw new FeedHttpError('redirect', 'The response has an invalid redirect URL.') }
+          if (secrets.length && (reflectsCookie(location, secrets) || reflectsCookie(url.href, secrets))) {
+            throw new FeedHttpError('redirect', 'The redirect contains a feed cookie value.')
+          }
           redirects.push({ status, url: url.href })
           if (cookie?.origin !== url.origin) cookie = undefined
           continue
@@ -214,7 +240,8 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
         if (options.responseBody === 'bytes') return { ...result, bytes }
         const text = decode(bytes, result.contentType, limits.maxDecodedBytes, options.fatalDecoding ?? true)
         signal.throwIfAborted()
-        return { ...result, text }
+        // A short marker cannot reproduce a protected value or expand the decoded body.
+        return { ...result, text: reflectedValues ? text.replace(reflectedValues, '[*****]') : text }
       } finally { release() }
     }
   } catch (error) {

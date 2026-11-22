@@ -2,13 +2,17 @@ import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import type { IncomingMessage, RequestOptions } from 'node:http'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { extractReadableArticle, fetchHtml } from '../src/server/reader.js'
+import type { PaperDatabase } from '../src/server/db.js'
+import { ReaderService, extractReadableArticle, fetchHtml } from '../src/server/reader.js'
 
-const transport = vi.hoisted(() => ({ lookup: vi.fn(), request: vi.fn() }))
+const transport = vi.hoisted(() => ({ lookup: vi.fn(), request: vi.fn(), https: vi.fn() }))
 vi.mock('node:dns/promises', () => ({ lookup: transport.lookup }))
 vi.mock('node:http', async importOriginal => ({ ...await importOriginal<typeof import('node:http')>(), request: transport.request }))
 
+vi.mock('node:https', async original => ({ ...await original<typeof import('node:https')>(), request: transport.https }))
+
 beforeEach(() => {
+  transport.https.mockReset()
   transport.lookup.mockReset()
   transport.request.mockReset()
   // A direct global fetch must never bypass the pinned transport.
@@ -60,15 +64,20 @@ it.each([
       }
     } }))
   const html = '<p>Synthetic fallback article</p>'
-  vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ data: { html } })))
+  transport.https.mockImplementation((_url, _options, respond) => Object.assign(new EventEmitter(), { end() {
+    const body = Object.assign(new PassThrough(), { statusCode: 200, headers: {} })
+    respond(body)
+    body.end(JSON.stringify({ data: { html } }))
+  } }))
 
   await expect(fetchHtml(new URL('http://publisher.test/start'), true)).resolves.toEqual({
     html, finalUrl: new URL('http://publisher.test/blocked'),
   })
   expect(response.destroyed).toBe(true)
   expect(read).not.toHaveBeenCalled()
-  expect(fetch).toHaveBeenCalledOnce()
-  expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe('https://r.jina.ai/http://publisher.test/blocked')
+  expect(fetch).not.toHaveBeenCalled()
+  expect(transport.https.mock.calls[0][1].headers).toMatchObject({ DNT: '1', 'X-Return-Format': 'html' })
+  expect(String(transport.https.mock.calls[0][0])).toBe('https://r.jina.ai/http://publisher.test/blocked')
 })
 
 it('refuses private DNS answers before connecting or resolving again', async () => {
@@ -102,4 +111,43 @@ it('pins the checked public address at connection time despite a private second 
     'Accept-Language': 'en-US,en;q=0.8',
   })
   expect(fetch).not.toHaveBeenCalled()
+})
+
+it('rejects a redirect from the fallback before resolving or contacting the target', async () => {
+  transport.lookup.mockResolvedValue([{ address: '8.8.8.8', family: 4 }])
+  for (const [request, statusCode] of [[transport.request, 403], [transport.https, 302]] as const) {
+    request.mockImplementation((_url, _options, respond) => Object.assign(new EventEmitter(), { end() {
+      const body = Object.assign(new PassThrough(), { statusCode, headers: { location: 'http://redirect.test/' } })
+      respond(body)
+      body.end()
+    } }))
+  }
+  await expect(fetchHtml(new URL('http://publisher.test/article'), true)).rejects.toMatchObject({ code: 'redirect' })
+  expect(transport.lookup.mock.calls.map(call => call[0])).toEqual(['publisher.test', 'r.jina.ai'])
+  expect(fetch).not.toHaveBeenCalled()
+})
+
+it('keeps reflected cookie values out of the preview and the article passed to the cache', async () => {
+  const url = 'http://publisher.test/story'
+  const rules = { userAgent: '', articleCookieOrigin: '', contentSelector: '', removeSelectors: [], lazyImages: false,
+    stripTracking: false, cookie: 'session=fixtureAlpha; preference=fixtureBeta', cookieOrigin: 'http://publisher.test', revision: 'fixture' }
+  const database = {
+    getArticle: () => null, cacheArticle: vi.fn(),
+    feedOverrides: { article: () => ({ url, feedId: 'feed' }), draft: () => rules, get: () => rules },
+  }
+  transport.lookup.mockResolvedValue([{ address: '8.8.8.8', family: 4 }])
+  transport.request.mockImplementation((_url, options, respond) => Object.assign(new EventEmitter(), { end() {
+    expect(options.headers.Cookie).toBe(rules.cookie)
+    const response = Object.assign(new PassThrough(), { statusCode: 200, headers: { 'content-type': 'text/html' } })
+    respond(response)
+    response.end('<title>fixtureAlpha</title><article><p>' + 'Article fixtureAlpha and fixtureBeta. '.repeat(30) + '</p></article>')
+  } }))
+  const reader = new ReaderService(database as unknown as PaperDatabase)
+  const preview = await reader.fetch(url, 0, undefined, 'article', { feedId: 'feed', overrides: rules })
+  expect(database.cacheArticle).not.toHaveBeenCalled()
+  await reader.fetch(url, 0, undefined, 'article')
+  for (const article of [preview, database.cacheArticle.mock.calls[0][0]]) {
+    expect(article.contentHtml).toContain('[*****]')
+    expect(JSON.stringify(article)).not.toMatch(/fixtureAlpha|fixtureBeta/)
+  }
 })

@@ -1,7 +1,9 @@
 import { displayFeedUrl } from './feed-url-display.js'
+import { parseFeed } from './feed-parser.js'
+import { extractionRules, extractWithOverrides } from './feed-extraction.js'
 import type { FeedCheckResult } from '../shared/feed-checks.js'
 import { MANUAL_CHECK_COOLDOWN_MS } from './feed-check-settings.js'
-import { setTimeout as delay } from 'node:timers/promises'
+import { setImmediate, setTimeout as delay } from 'node:timers/promises'
 import type { PaperDatabase } from './db.js'
 import { boundedFetch, FeedHttpError, FEED_HTTP_DEFAULTS, validLastModified, type BoundedFetchOptions } from './feed-http.js'
 import type { FeedLease, FetchCompletion } from './feed-fetch-state.js'
@@ -152,6 +154,17 @@ export class StandaloneFeedScheduler {
         throw new Error('Unexpected conditional response')
       }
       if (status !== 200 && status !== 304) throw new Error('Unsuccessful HTTP response')
+      const extraction = rules && extractionRules(rules, 'feed')
+      let parsed: ReturnType<typeof parseFeed> | undefined
+      if (status === 200) {
+        parsed = rules && extraction
+          ? await extractWithOverrides({ kind: 'feed', body: response.text, url: response.url }, extraction,
+            reason => this.db.feedOverrides.warn(rules.revision, reason), signal)
+          : parseFeed(response.text, response.url)
+        // Service pending requests between parsing and the synchronous ingestion transaction.
+        await setImmediate(undefined, { signal })
+      }
+      signal?.throwIfAborted()
       const now = Date.now()
       const interval = this.interval ?? ((this.db.feedFetch.get(this.backendId, lease.subscriptionId)?.intervalMinutes
         ?? this.db.feedFetch.settings(this.backendId).intervalMinutes) * 60_000)
@@ -161,9 +174,9 @@ export class StandaloneFeedScheduler {
         etag: response.etag ?? (status === 304 ? lease.etag : ''),
         lastModified: response.lastModified ?? (status === 304 ? lease.lastModified : ''), validatorUrl: response.url }
       const result = this.db.feedFetch.complete(lease, now, update, () => {
-        if (status === 304) return 0
+        if (!parsed) return 0
         const ingested = ingestFeed(this.db, { backendId: this.backendId, subscriptionId: lease.subscriptionId,
-          endpointGeneration: lease.endpointGeneration, xml: response.text, requestUrl: lease.url,
+          endpointGeneration: lease.endpointGeneration, parsed, requestUrl: lease.url,
           responseUrl: response.url, fetchedAt: new Date(now).toISOString() })
         update.publisherSiteUrl = ingested.feed.siteUrl.length <= 4096 ? displayFeedUrl(ingested.feed.siteUrl) : ''
         const declared = ingested.feed.declaredUrl || ''

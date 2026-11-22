@@ -155,6 +155,7 @@ export interface CoverageFeedback {
 }
 
 export interface FullArticle {
+  overrideWarning?: string
   url: string
   title: string
   byline: string

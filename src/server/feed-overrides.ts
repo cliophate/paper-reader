@@ -1,5 +1,7 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID } from 'node:crypto'
+import { domainToASCII } from 'node:url'
 import type { DatabaseSync } from 'node:sqlite'
+import { supportedSelector } from './feed-rewrites.js'
 import { JSDOM } from 'jsdom'
 import type { FeedOverrideOptions, FeedOverrideUpdate, FeedOverrideView } from '../shared/feed-overrides.js'
 import { BackendValidationError } from './backend.js'
@@ -26,6 +28,13 @@ export function validateOverrides(input: unknown): FeedOverrideUpdate {
   if (cookie !== undefined && cookie !== null) validateRequestHeader(cookie, 'Cookie', 4096)
   if (typeof lazyImages !== 'boolean' || typeof stripTracking !== 'boolean') throw new BackendValidationError('Choose valid rewrite settings.')
   if (typeof contentSelector !== 'string' || !Array.isArray(removeSelectors) || removeSelectors.length > 12) throw new BackendValidationError('Use at most 12 removal selectors.')
+  const hosts = rules.trackingExcludedHosts ?? []
+  if (!Array.isArray(hosts) || hosts.length > 32) throw new BackendValidationError('Enter at most 32 hosts for link cleanup.')
+  const trackingExcludedHosts = [...new Set(hosts.map(host => {
+    const name = typeof host === 'string' && host.length <= 253 && !/[\s\\/?#@*%]/.test(host) && domainToASCII(host)
+    if (!name) throw new BackendValidationError('Enter one hostname per line for link cleanup.')
+    return name.replace(/\.$/, '')
+  }))]
   let articleCookieOrigin = ''
   if (rules.articleCookieOrigin !== undefined && rules.articleCookieOrigin !== '') {
     const value = rules.articleCookieOrigin
@@ -43,9 +52,10 @@ export function validateOverrides(input: unknown): FeedOverrideUpdate {
     if (!selector.trim()) continue
     count += selector.split(',').length
     if (count > 12 + Number(Boolean(contentSelector.trim()))) throw new BackendValidationError('Use at most 12 removal selectors and one content selector.')
+    if (!supportedSelector(selector)) throw new BackendValidationError('Use simple CSS selectors without escapes, comments or functional pseudo-classes such as :has().')
     try { fragment.querySelector(selector) } catch { throw new BackendValidationError('Enter a valid CSS selector.') }
   }
-  return { userAgent: userAgent.trim(), articleCookieOrigin, expectedCookieOrigin, cookie: cookie?.trim() || (cookie === undefined ? undefined : null),
+  return { trackingExcludedHosts, userAgent: userAgent.trim(), articleCookieOrigin, expectedCookieOrigin, cookie: cookie?.trim() || (cookie === undefined ? undefined : null),
     contentSelector: contentSelector.trim(), removeSelectors: removeSelectors.map(value => value.trim()).filter(Boolean), lazyImages, stripTracking }
 }
 
@@ -92,6 +102,10 @@ export class FeedOverrideStore {
     return { ...options, revision: String(row.revision), cookie, cookieOrigin }
   }
 
+  warn(revision: string, reason: string) {
+    this.db.prepare("UPDATE feed_overrides SET options = json_set(options, '$.overrideWarning', ?) WHERE revision = ?").run(reason, revision)
+  }
+
   article(entryId: string) {
     return this.db.prepare('SELECT url, feed_id AS feedId FROM entries WHERE id = ?').get(entryId) as
       { url: string; feedId: string } | undefined
@@ -112,8 +126,11 @@ export class FeedOverrideStore {
   }
 
   draft(feedId: string, input: unknown): SavedOverrides {
+    return this.resolveDraft(feedId, validateOverrides(input))
+  }
+
+  private resolveDraft(feedId: string, { cookie, expectedCookieOrigin, ...options }: FeedOverrideUpdate): SavedOverrides {
     const url = this.feedUrl(feedId)
-    const { cookie, expectedCookieOrigin, ...options } = validateOverrides(input)
     const saved = cookie === undefined ? this.get(feedId) : undefined
     if (saved?.cookie && options.articleCookieOrigin && options.articleCookieOrigin !== saved.articleCookieOrigin) {
       throw new BackendValidationError('Enter the cookie again to send it to a different article site.')
@@ -128,11 +145,15 @@ export class FeedOverrideStore {
   }
 
   save(feedId: string, input: unknown) {
+    const inputRules = validateOverrides(input)
     transaction(this.db, () => {
-      const { cookie, cookieOrigin, revision: _, ...rules } = this.draft(feedId, input)
+      const { cookie, cookieOrigin, revision: _, ...rules } = this.resolveDraft(feedId, inputRules)
       const previous = this.db.prepare('SELECT revision FROM feed_overrides WHERE feed_id = ?').get(feedId)
       this.db.prepare('DELETE FROM feed_overrides WHERE feed_id = ?').run(feedId)
-      if (previous) this.db.prepare('DELETE FROM article_cache WHERE url GLOB ?').run(`paper-feed:${previous.revision}:*`)
+      if (previous) {
+        this.db.prepare('DELETE FROM article_cache WHERE url GLOB ?').run(`paper-feed:${previous.revision}:*`)
+        this.db.prepare("UPDATE entries SET full_content_text = '' WHERE feed_id = ? AND full_content_text != ''").run(feedId)
+      }
       if (hasFeedOverrides(rules, cookie)) {
         this.db.prepare('INSERT INTO feed_overrides (feed_id, revision, options, cookie, cookie_origin) VALUES (?, ?, ?, ?, ?)')
           .run(feedId, randomUUID(), JSON.stringify(rules), cookie ? this.seal(feedId, cookieOrigin, rules.articleCookieOrigin, cookie) : '', cookieOrigin)

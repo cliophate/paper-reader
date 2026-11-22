@@ -174,3 +174,19 @@ it('drops the feed cookie on a cross-origin redirect, including a redirect back'
   expect(seen).toEqual([options.cookie.value, options.cookie.value, undefined, undefined])
   await expect(boundedFetch(origin, { ...options, trustedOrigins: [origin] })).rejects.toMatchObject({ code: 'policy' })
 })
+
+it('redacts each reflected cookie value and refuses redirects containing one before the next request', async () => {
+  const destinations: string[] = []
+  const origin = await server((req, res) => {
+    destinations.push(req.url!)
+    if (req.url === '/body') res.end('Article fixtureAlpha fixtureBeta== fixtureAlpha short')
+    else {
+      res.writeHead(302, { Location: '/next?echo=fixtureBeta%3D%3D' })
+      res.end()
+    }
+  })
+  const options = { trustedOrigins: [origin], cookie: { origin, value: 'a=fixtureAlpha; b="fixtureBeta=="; c=short' } }
+  expect((await boundedFetch(origin + '/body', options)).text).toBe('Article [*****] [*****] [*****] short')
+  await expect(boundedFetch(origin, options)).rejects.toMatchObject({ code: 'redirect' })
+  expect(destinations).toEqual(['/body', '/'])
+})

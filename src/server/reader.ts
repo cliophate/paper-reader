@@ -1,12 +1,11 @@
-import type { ExtractionRules } from '../shared/feed-overrides.js'
+import { extractReadableArticle } from './article-extraction.js'
+import { extractionRules, extractWithOverrides } from './feed-extraction.js'
 import { hasFeedOverrides, type SavedOverrides } from './feed-overrides.js'
-import { applyFeedRewrites } from './feed-rewrites.js'
 import { BackendValidationError } from './backend.js'
 import { boundedFetch, FeedHttpError } from './feed-http.js'
-import { Readability } from '@mozilla/readability'
-import { JSDOM } from 'jsdom'
 import type { ArticleCacheRecord, PaperDatabase } from './db.js'
-import { cleanArticleHtml, excerpt, plainText, readingMinutes } from './text.js'
+
+export { extractReadableArticle }
 
 const MAX_REDIRECTS = 5
 const MAX_HTML_BYTES = 5 * 1024 * 1024
@@ -14,6 +13,7 @@ const CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 const JINA_READER_ORIGIN = 'https://r.jina.ai/'
 
 export interface FullArticle extends ArticleCacheRecord {
+  overrideWarning?: string
   cached: boolean
 }
 
@@ -35,8 +35,15 @@ export class ReaderService {
     const { html, finalUrl } = await fetchHtml(url, fallback, signal, rules)
     signal?.throwIfAborted()
     let extracted: Omit<ArticleCacheRecord, 'url' | 'fetchedAt'>
+    const extraction = rules && extractionRules(rules, 'article')
+    let overrideWarning: string | undefined
     try {
-      extracted = extractReadableArticle(html, finalUrl.href, rules)
+      if (rules && extraction) {
+        extracted = await extractWithOverrides({ kind: 'article', body: html, url: finalUrl.href }, extraction, reason => {
+          overrideWarning = reason
+          if (!preview) this.database.feedOverrides.warn(rules.revision, reason)
+        }, signal)
+      } else extracted = extractReadableArticle(html, finalUrl.href)
     } catch (error) {
       if (!fallback) throw error
       const page = await fetchReaderPage(finalUrl, signal).catch(() => null)
@@ -50,91 +57,10 @@ export class ReaderService {
       ...extracted,
       fetchedAt: new Date().toISOString(),
     }
+    signal?.throwIfAborted()
     if (!preview) this.database.cacheArticle(article, rules?.revision)
-    return { ...article, cached: false }
+    return { ...article, cached: false, overrideWarning }
   }
-}
-
-export function extractReadableArticle(html: string, url: string, rules?: ExtractionRules): Omit<ArticleCacheRecord, 'url' | 'fetchedAt'> {
-  const dom = new JSDOM(html, { url })
-  try {
-    const document = dom.window.document
-    const pageImage = document.querySelector<HTMLMetaElement>('meta[property="og:image"], meta[name="twitter:image"]')?.content || ''
-    if (rules) applyFeedRewrites(document, url, rules)
-    const root = rules?.contentSelector ? document.querySelector(rules.contentSelector) : null
-    if (rules?.contentSelector && !root) throw new BackendValidationError('The content selector did not match this page.')
-    prepareDocument(document, url, !root)
-    const parsed = root ? { title: document.title, byline: '', excerpt: '', content: root.outerHTML }
-      : new Readability(document).parse()
-    if (!parsed?.content) throw new Error('Paper could not find a readable article on this page')
-
-    let contentHtml = cleanArticleHtml(parsed.content)
-    if (!root && !rules?.removeSelectors.length && pageImage && !/<img\b/i.test(contentHtml)) {
-      try {
-        const imageUrl = new URL(pageImage, url)
-        if (['http:', 'https:'].includes(imageUrl.protocol)) contentHtml = `<figure><img src="${escapeAttribute(imageUrl.href)}" alt=""></figure>${contentHtml}`
-      } catch { /* Ignore invalid page metadata. */ }
-    }
-    const articleText = plainText(contentHtml)
-    if (/This article is FREE/i.test(articleText) && /Log in or register/i.test(articleText)) {
-      throw new Error('This publisher requires you to sign in to read the article')
-    }
-    if (root && !articleText && !/<(?:img|video|iframe)\b/i.test(contentHtml)) throw new BackendValidationError('The selected element contains no readable content.')
-    if (!root && articleText.length < 240) throw new Error('The extracted page did not contain enough article text')
-    return {
-      title: parsed.title?.trim() || '',
-      byline: parsed.byline?.trim() || '',
-      excerpt: root ? excerpt(contentHtml) : parsed.excerpt?.trim() || '',
-      contentHtml,
-      readingMinutes: readingMinutes(contentHtml),
-    }
-  } finally { dom.window.close() }
-}
-
-function prepareDocument(document: Document, url: string, removeChrome: boolean) {
-  if (removeChrome) {
-    for (const element of document.querySelectorAll([
-      'nav', 'footer', '[role="navigation"]', '[role="dialog"]',
-      '.newsletter', '.newsletter-signup', '.social-share', '.share-buttons',
-      '.copy-link', '.follow-button', '.comments', '#comments',
-      '.w-heading-options', '.action-bar-follow', '.qa-action-list', '.w-follow-btn',
-      '.article-date', '.w-article-header-author-img', '.article-header',
-    ].join(','))) element.remove()
-  }
-
-  for (const image of document.querySelectorAll<HTMLImageElement>('img')) {
-    const lazySource = image.getAttribute('data-large-file')
-      || image.getAttribute('data-orig-file')
-      || image.getAttribute('data-original')
-      || image.getAttribute('data-lazy-src')
-      || image.getAttribute('data-src')
-    if (lazySource && (!image.getAttribute('src') || /(?:^|\/)blank\.(?:gif|png)|data:image\/gif|spacer\.(?:gif|png)/i.test(image.getAttribute('src') || ''))) {
-      image.setAttribute('src', lazySource)
-    }
-    const lazySet = image.getAttribute('data-srcset')
-    if (lazySet && !image.getAttribute('srcset')) image.setAttribute('srcset', lazySet)
-  }
-
-  for (const source of document.querySelectorAll<HTMLSourceElement>('source')) {
-    const lazySource = source.getAttribute('data-src')
-    const lazySet = source.getAttribute('data-srcset')
-    if (lazySource && !source.getAttribute('src')) source.setAttribute('src', lazySource)
-    if (lazySet && !source.getAttribute('srcset')) source.setAttribute('srcset', lazySet)
-  }
-
-  for (const [selector, attribute] of [
-    ['a[href]', 'href'], ['img[src]', 'src'], ['source[src]', 'src'], ['video[src]', 'src'], ['video[poster]', 'poster'], ['iframe[src]', 'src'],
-  ] as const) {
-    for (const element of document.querySelectorAll<HTMLElement>(selector)) {
-      const value = element.getAttribute(attribute)
-      if (!value) continue
-      try { element.setAttribute(attribute, new URL(value, url).href) } catch { element.removeAttribute(attribute) }
-    }
-  }
-}
-
-function escapeAttribute(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
 }
 
 function normalizeUrl(input: string): URL {
@@ -177,49 +103,18 @@ export async function fetchHtml(startUrl: URL, fallbackEnabled = false, signal?:
 
 async function fetchReaderPage(url: URL, signal?: AbortSignal): Promise<{ html: string; finalUrl: URL }> {
   const readerUrl = new URL(`${JINA_READER_ORIGIN}${url.href}`)
-  const response = await fetch(readerUrl, {
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000),
-    headers: {
-      Accept: 'application/json',
-      DNT: '1',
-      'X-Return-Format': 'html',
-    },
+  const response = await boundedFetch(readerUrl.href, {
+    signal, timeoutMs: 45_000, maxRedirects: 0, accept: 'application/json', readerHtml: true,
   })
-  if (!response.ok) throw new Error(`The article page is blocked and the reader fallback returned status ${response.status}`)
+  if (response.status < 200 || response.status >= 300) throw new Error(`The article page is blocked and the reader fallback returned status ${response.status}`)
 
   let payload: { data?: { html?: unknown } }
   try {
-    payload = JSON.parse(await readLimited(response)) as { data?: { html?: unknown } }
+    payload = JSON.parse(response.text) as { data?: { html?: unknown } }
   } catch {
     throw new Error('The article page is blocked and the reader fallback returned an invalid response')
   }
   const html = typeof payload.data?.html === 'string' ? payload.data.html : ''
   if (!html) throw new Error('The article page is blocked and the reader fallback found no article HTML')
   return { html, finalUrl: url }
-}
-
-async function readLimited(response: Response): Promise<string> {
-  const declaredLength = Number(response.headers.get('content-length') || 0)
-  if (declaredLength > MAX_HTML_BYTES) throw new Error('The article page is too large to extract')
-  if (!response.body) return ''
-  const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
-  let size = 0
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    size += value.byteLength
-    if (size > MAX_HTML_BYTES) {
-      await reader.cancel()
-      throw new Error('The article page is too large to extract')
-    }
-    chunks.push(value)
-  }
-  const bytes = new Uint8Array(size)
-  let offset = 0
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return new TextDecoder().decode(bytes)
 }

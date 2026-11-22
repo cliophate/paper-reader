@@ -36,6 +36,8 @@ cookie. Both must contain printable ASCII on one line. User agents have a
 to the saved feed origin or an explicit article origin. Adding a different
 article origin requires entering the cookie again. A cross-origin redirect drops it for
 the rest of the request. Address checks and size limits apply on every hop.
+Paper rejects redirects that contain a cookie value of eight or more characters
+and redacts those values in response text before extraction or storage.
 Discovery, feed repair and icon lookups use their usual headers.
 
 Every hop requires HTTP or HTTPS without embedded credentials. Public DNS
@@ -90,7 +92,13 @@ Leave it empty for automatic extraction. Enter up to 12 removal selectors, one
 per line. Each selector can contain up to 256 characters. Prefer lazy-loaded
 images to use the publisher's deferred image in place of a placeholder.
 Link cleanup removes `utm_*`, `fbclid`, `gclid`, `dclid`, `msclkid`, `mc_cid`
-and `mc_eid`. Paper sanitizes the resulting HTML.
+and `mc_eid`. Paper keeps signed queries and links to hosts on the feed's
+exclusion list intact. It sanitizes the resulting HTML.
+
+Selectors support up to 10,000 DOM nodes per document. Functional pseudo-classes
+such as `:has()`, escapes and CSS comments are unsupported. If the worker reaches
+its three-second deadline or the node limit, Paper retries with default extraction.
+Manage feeds shows the reason.
 
 Preview fetches the chosen article with the form's current values. It leaves
 saved settings, the full-text cache and the search index alone. Saved rules

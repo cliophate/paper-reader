@@ -1,3 +1,5 @@
+import { ExtractionLimit } from './feed-extraction.js'
+import { signedQueryName } from './url-parameters.js'
 import { JSDOM } from 'jsdom'
 import type { ExtractionRules } from '../shared/feed-overrides.js'
 
@@ -29,7 +31,20 @@ function absoluteImageSet(value: string, base: string) {
   return candidates.join(', ')
 }
 
-export function applyFeedRewrites(root: ParentNode, base: string, rules: ExtractionRules) {
+export function supportedSelector(selector: string) {
+  return !/\\|\/\*|:[\w-]+\s*\(/.test(selector)
+}
+
+export function applyFeedRewrites(root: Document | DocumentFragment, base: string, rules: ExtractionRules) {
+  if (![rules.contentSelector, ...rules.removeSelectors].every(supportedSelector)) {
+    throw new ExtractionLimit('The saved selector uses unsupported CSS.')
+  }
+  const document = root.ownerDocument ?? root as Document
+  const walker = document.createTreeWalker(root)
+  let nodes = 0
+  while (walker.nextNode()) {
+    if (++nodes > 10_000) throw new ExtractionLimit('The page exceeds the 10,000-node selector limit.')
+  }
   for (const selector of rules.removeSelectors) {
     for (const element of root.querySelectorAll(selector)) element.remove()
   }
@@ -49,6 +64,7 @@ export function applyFeedRewrites(root: ParentNode, base: string, rules: Extract
       try {
         const url = new URL(link.getAttribute('href')!, base)
         if (!['http:', 'https:'].includes(url.protocol)) continue
+        if (rules.trackingExcludedHosts?.includes(url.hostname.replace(/\.$/, '')) || [...url.searchParams.keys()].some(signedQueryName)) continue
         stripTrackingParameters(url)
         link.setAttribute('href', url.href)
       } catch { /* The sanitizer checks the original link. */ }

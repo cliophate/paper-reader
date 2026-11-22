@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createServer, type Server, type RequestListener } from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db.js'
 import { StandaloneFeedScheduler, retryAfterTime } from '../src/server/feed-scheduler.js'
 import { endpointKeys, feedMove } from '../src/server/feed-maintenance.js'
@@ -572,4 +572,20 @@ it('uses the configured headers and rewrites feed HTML before sanitizing', async
   expect(html).toContain(origin + '/photo.jpg')
   expect(html).toContain(origin + '/story?id=3"')
   expect(html).not.toMatch(/Extra text|onerror|bad\(\)|utm_source/)
+})
+
+it('falls back before the ingestion transaction and reports the selector limit on the feed', async () => {
+  const origin = await server((_req, res) => res.end(rss().replace('</item>',
+    '<description><![CDATA[<p>Default feed text</p>' + '<!--node-->'.repeat(10_000) + ']]></description></item>')))
+  const id = save(origin)
+  db.feedOverrides.save(id, { userAgent: '', contentSelector: '', removeSelectors: ['p'], lazyImages: false, stripTracking: false })
+  const originalWarn = db.feedOverrides.warn.bind(db.feedOverrides)
+  const check = vi.spyOn(db.feedOverrides, 'warn').mockImplementation((revision, message) => {
+    expect(db.greaderDatabase.isTransaction).toBe(false)
+    originalWarn(revision, message)
+  })
+  expect(await scheduler(origin).runDue()).toMatchObject({ fetched: 1 })
+  expect(check).toHaveBeenCalledOnce()
+  expect(db.feedOverrides.view(id).overrideWarning).toContain('10,000-node')
+  expect(db.localEntry(db.recentEntryIds(1)[0])!.contentHtml).toContain('Default feed text')
 })

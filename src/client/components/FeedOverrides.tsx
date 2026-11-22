@@ -14,8 +14,8 @@ export function FeedOverrides({ feed, backend }: { feed: Feed; backend: 'standal
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   function load(view: FeedOverrideView) {
-    const { userAgent, articleCookieOrigin, contentSelector, removeSelectors, lazyImages, stripTracking } = view
-    setDraft({ userAgent, articleCookieOrigin, contentSelector, removeSelectors, lazyImages, stripTracking })
+    const { userAgent, articleCookieOrigin, contentSelector, removeSelectors, lazyImages, stripTracking, trackingExcludedHosts } = view
+    setDraft({ userAgent, articleCookieOrigin, contentSelector, removeSelectors, lazyImages, stripTracking, trackingExcludedHosts })
     setSaved(view)
     setEntryId(id => view.articles.some(article => article.id === id) ? id : view.articles[0]?.id || '')
   }
@@ -31,11 +31,13 @@ export function FeedOverrides({ feed, backend }: { feed: Feed; backend: 'standal
   }
   async function run(action: 'preview' | 'save' | 'reset') {
     setBusy(true); setPreview(''); setMessage(''); setError('')
-    const overrides = draft.cookie ? { ...draft, expectedCookieOrigin: origin } : draft
+    const overrides = { ...draft, expectedCookieOrigin: draft.cookie ? origin : undefined,
+      trackingExcludedHosts: draft.trackingExcludedHosts?.map(host => host.trim()).filter(Boolean) }
     try {
       if (action === 'preview') {
         const article = await api.previewFeedOverrides(feed.id, entryId, overrides)
         setPreview(article.contentHtml)
+        setMessage(article.overrideWarning || '')
       } else {
         load(await api.saveFeedOverrides(feed.id, action === 'reset' ? { ...empty, cookie: null } : overrides))
         setMessage(action === 'reset' ? 'Overrides reset.' : 'Overrides saved.')
@@ -56,6 +58,8 @@ export function FeedOverrides({ feed, backend }: { feed: Feed; backend: 'standal
       <label>Cookie ({saved.cookieSet ? 'set' : 'not set'})<input type="password" autoComplete="new-password" maxLength={4096}
         value={draft.cookie || ''} placeholder={saved.cookieSet ? 'Leave blank to keep' : undefined}
         onChange={event => edit({ cookie: event.target.value || undefined })} /></label>
+      <p>Keep full backups private. They contain saved cookies, the key to decrypt them and other credentials.</p>
+      {saved.overrideWarning && <p role="status">{saved.overrideWarning}</p>}
       {saved.cookieSet && <button type="button" onClick={() => edit({ cookie: draft.cookie === null ? undefined : null })}>{draft.cookie === null ? 'Keep saved cookie' : 'Clear cookie'}</button>}
       <p>{draft.cookie === null ? 'Saving will clear the cookie.' : `Feed cookie origin: ${draft.cookie ? origin : saved.cookieOrigin || origin}`}</p>
       {(draft.cookie || saved.cookieSet && draft.cookie !== null) && <label>Additional cookie origin for full articles, optional
@@ -68,6 +72,10 @@ export function FeedOverrides({ feed, backend }: { feed: Feed; backend: 'standal
         onChange={event => edit({ removeSelectors: event.target.value.split('\n') })} /></label>
       <label><input type="checkbox" checked={draft.lazyImages} onChange={event => edit({ lazyImages: event.target.checked })} /> Prefer lazy-loaded images</label>
       <label><input type="checkbox" checked={draft.stripTracking} onChange={event => edit({ stripTracking: event.target.checked })} /> Strip tracking parameters from links</label>
+      {draft.stripTracking && <label>Keep tracking parameters on these hosts, one per line
+        <textarea rows={2} value={(draft.trackingExcludedHosts || []).join('\n')}
+          onChange={event => edit({ trackingExcludedHosts: event.target.value.split('\n') })} />
+      </label>}
       {saved.articles.length ? <><label>Recent article<select value={entryId} onChange={event => { setEntryId(event.target.value); setPreview('') }}>
         {saved.articles.map(article => <option key={article.id} value={article.id}>{article.title}</option>)}
       </select></label><button type="button" onClick={() => void run('preview')}>Preview article</button></> : <p>A preview is available once this feed has an article.</p>}

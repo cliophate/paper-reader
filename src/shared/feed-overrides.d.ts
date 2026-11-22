@@ -3,6 +3,7 @@ export interface ExtractionRules {
   removeSelectors: string[]
   lazyImages: boolean
   stripTracking: boolean
+  trackingExcludedHosts?: string[]
 }
 
 export interface FeedOverrideOptions extends ExtractionRules {
@@ -16,6 +17,7 @@ export interface FeedOverrideUpdate extends FeedOverrideOptions {
 }
 
 export interface FeedOverrideView extends FeedOverrideOptions {
+  overrideWarning?: string
   cookieSet: boolean
   cookieOrigin: string
   articles: Array<{ id: string; title: string }>

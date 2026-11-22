@@ -7,6 +7,7 @@ test('Manage feeds saves, redacts and resets full article overrides', async ({ p
   await page.getByPlaceholder('Find a feed').fill('Synthetic feed')
   const panel = page.locator('details.feed-overrides')
   await panel.locator('summary').click()
+  await expect(panel.getByText(/Keep full backups private/)).toBeVisible()
   const agent = panel.getByLabel('User agent')
   const cookie = 'fixture=synthetic-only'
   await agent.fill('Synthetic reader')
@@ -16,10 +17,11 @@ test('Manage feeds saves, redacts and resets full article overrides', async ({ p
     const { preview, entryId } = route.request().postDataJSON()
     expect(entryId).toBeTruthy()
     expect(preview.overrides).toMatchObject({ userAgent: 'Synthetic reader', contentSelector: '.story', cookie })
-    return route.fulfill({ json: { contentHtml: '<p>Unsaved article preview</p>' } })
+    return route.fulfill({ json: { contentHtml: '<p>Unsaved article preview</p>', overrideWarning: 'Extraction timed out. Paper tried default extraction.' } })
   })
   await panel.getByRole('button', { name: 'Preview article' }).click()
   await expect(panel.frameLocator('iframe').getByText('Unsaved article preview')).toBeVisible()
+  await expect(panel.getByRole('status')).toContainText('Extraction timed out')
   const saving = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().includes('/api/feed-overrides/'))
   await panel.getByRole('button', { name: 'Save overrides' }).click()
   const saved = await saving
@@ -34,4 +36,28 @@ test('Manage feeds saves, redacts and resets full article overrides', async ({ p
   await panel.getByRole('button', { name: 'Reset overrides' }).click()
   await expect(panel.getByLabel('Cookie (not set)', { exact: true })).toHaveValue('')
   await expect(agent).toHaveValue('')
+})
+
+test('keeps a long recent article title inside the preview editor at 320px', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 720 })
+  await page.route('**/api/feed-overrides/*', async route => {
+    const response = await route.fetch()
+    const view = await response.json()
+    await route.fulfill({ json: { ...view, articles: [{ id: 'phone', title: 'Long article title '.repeat(30) }] } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Feeds', exact: true }).click()
+  await page.getByPlaceholder('Find a feed').fill('Synthetic feed')
+  await page.locator('.feed-manager-list button').filter({ hasText: 'Synthetic feed' }).first().click()
+  const panel = page.locator('details.feed-overrides')
+  await panel.locator('summary').click()
+  const select = panel.getByLabel('Recent article')
+  await expect(select).toBeVisible()
+  for (const element of [select, panel, page.locator('.feed-editor')]) {
+    const bounds = await element.boundingBox()
+    expect(bounds!.x).toBeGreaterThanOrEqual(0)
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320)
+  }
+  expect(await panel.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
 })

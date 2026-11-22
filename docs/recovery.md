@@ -78,7 +78,9 @@ tar -czf paper-data-backup.tar.gz data
 docker compose start paper
 ```
 
-Keep this archive outside the repository and protect it as private data.
+Keep the full backup private. Anyone with this archive can use `secrets.json`
+to decrypt feed cookies in `paper.sqlite` and read the other saved credentials.
+Store it outside the repository and never attach it to a support request.
 An online backup tool must use SQLite's backup API or another documented method
 that provides a consistent database snapshot. Copying only paper.sqlite while
 Paper is writing can omit committed changes in the WAL.

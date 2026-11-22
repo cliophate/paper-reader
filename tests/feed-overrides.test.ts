@@ -7,6 +7,7 @@ import { DATABASE_VERSION, FEED_OVERRIDE_VERSION } from '../src/server/auth-sche
 import { PaperDatabase } from '../src/server/db'
 import { ingestFeed } from '../src/server/feed-ingestion'
 import { boundedFetch } from '../src/server/feed-http'
+import { extractWithOverrides } from '../src/server/feed-extraction'
 import { validateOverrides } from '../src/server/feed-overrides'
 import { ReaderService } from '../src/server/reader'
 
@@ -36,7 +37,8 @@ it('rejects header controls before trimming and bounds selector input', () => {
   for (const invalid of ['\r', '\n', '\t', '\x00', '\x7f', '\u2028']) {
     for (const key of ['cookie', 'userAgent']) expect(() => validateOverrides({ ...defaults, [key]: 'test' + invalid })).toThrow('one line')
   }
-  for (const invalid of [{ cookie: 'a'.repeat(4097) }, { userAgent: 'a'.repeat(513) }, { contentSelector: '[' },
+  for (const invalid of [{ cookie: 'a'.repeat(4097) }, { userAgent: 'a'.repeat(513) }, { contentSelector: '[' }, { contentSelector: 'article:has(p)' }, { removeSelectors: ['p:nth-child(2n)'] },
+    { trackingExcludedHosts: ['https://example.test/path'] },
     { contentSelector: 'a'.repeat(257) }, { removeSelectors: Array(13).fill('p') }]) expect(() => validateOverrides({ ...defaults, ...invalid })).toThrow()
 })
 
@@ -95,12 +97,13 @@ it('sends a replacement cookie to an additional article origin only after the ow
 it('previews the configured reader fallback only when the draft restores defaults', async () => {
   const reader = new ReaderService(db, true)
   vi.mocked(boundedFetch).mockResolvedValue({ status: 403, url: story, text: '', contentType: 'text/html', conditional: false })
-  const fallback = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { html } })))
-  vi.stubGlobal('fetch', fallback)
+
   await expect(reader.fetch(story, 0, undefined, entryId, { feedId, overrides: { ...defaults, userAgent: 'Fixture' } })).rejects.toThrow('403')
-  expect(fallback).not.toHaveBeenCalled()
+  expect(boundedFetch).toHaveBeenCalledTimes(1)
+  vi.mocked(boundedFetch).mockResolvedValueOnce({ status: 403, url: story, text: '', contentType: '', conditional: false })
+    .mockResolvedValueOnce({ status: 200, url: story, text: JSON.stringify({ data: { html } }), contentType: 'application/json', conditional: false })
   await expect(reader.fetch(story, 0, undefined, entryId, { feedId, overrides: defaults })).resolves.toMatchObject({ cached: false })
-  expect(fallback).toHaveBeenCalledTimes(1)
+  expect(boundedFetch).toHaveBeenLastCalledWith('https://r.jina.ai/' + story, expect.objectContaining({ maxRedirects: 0 }))
   expect(db.getArticleForEntry(entryId)).toBeNull()
 })
 
@@ -114,4 +117,49 @@ it('backs up the previous schema before adding feed overrides', () => {
     expect(backup.prepare('PRAGMA user_version').get()?.user_version).toBe(FEED_OVERRIDE_VERSION - 1)
     expect(backup.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'feed_overrides'").get()).toBeUndefined()
   } finally { backup.close() }
+})
+
+const defaultPage = '<article><p>' + 'Default article paragraph. '.repeat(25) + '</p></article>'
+
+it('terminates the worker at its deadline and retries default article extraction', async () => {
+  const warning = vi.fn()
+  const result = await extractWithOverrides({ kind: 'article', body: defaultPage, url: story },
+    { ...defaults, contentSelector: '.absent' }, warning, undefined, 1)
+  expect(warning).toHaveBeenCalledWith(expect.stringContaining('timed out'))
+  expect(result.contentHtml).toContain('Default article paragraph')
+})
+
+it('returns default content and a preview warning for pages over the selector node limit', async () => {
+  const nav = '<nav>' + ('<div>' + '<!--node-->'.repeat(100) + '</div>').repeat(100) + '</nav>'
+  const text = nav + defaultPage
+  vi.mocked(boundedFetch).mockResolvedValue({ status: 200, url: story, text, contentType: 'text/html', conditional: false })
+  const overrides = { ...defaults, contentSelector: '.absent' }
+  const result = await new ReaderService(db).fetch(story, 0, undefined, entryId, { feedId, overrides })
+  expect(result.overrideWarning).toContain('10,000-node')
+  expect(result.contentHtml).toContain('Default article paragraph')
+  expect(db.feedOverrides.view(feedId).overrideWarning).toBeUndefined()
+})
+
+it('preserves whole signed queries and excluded hosts when stripping tracking', async () => {
+  const names = ['sig', 'SIGNATURE', 'hash', 'token', 'expires', 'X-Amz-Date', 'X-Goog-Signature', 'Key-Pair-Id']
+  const links = [...names.map(name => '/a?' + name + '=x%2fy&utm_source=v'), 'https://cdn.test/a?utm_source=v', 'https://xn--bcher-kva.test/a?utm_source=v', '/a?b=2&utm_source=v']
+  vi.mocked(boundedFetch).mockResolvedValue({ status: 200, url: story, contentType: 'text/html', conditional: false,
+    text: '<main>' + links.map(link => '<a href="' + link.replaceAll('&', '&amp;') + '">link</a>').join(' ') + '</main>' })
+  const overrides = { ...defaults, stripTracking: true, contentSelector: 'main', trackingExcludedHosts: ['CDN.test', 'bücher.test'] }
+  db.feedOverrides.save(feedId, overrides)
+  const { contentHtml } = await new ReaderService(db).fetch(story, 0, undefined, entryId)
+  for (const name of names) expect(contentHtml).toContain(name + '=x%2fy&amp;utm_source=v')
+  expect(contentHtml).toContain('https://cdn.test/a?utm_source=v')
+  expect(contentHtml).toContain('https://xn--bcher-kva.test/a?utm_source=v')
+  expect(contentHtml).toContain('https://example.test/a?b=2"')
+})
+
+it('removes cached cookie-backed full text from search on reset', async () => {
+  db.feedOverrides.save(feedId, { ...defaults, cookie: 'sid=synthetic', expectedCookieOrigin: 'https://example.test' })
+  await new ReaderService(db).fetch(story, 0, undefined, entryId)
+  const search = () => db.greaderDatabase.prepare("SELECT entry_id FROM entries_fts WHERE entries_fts MATCH 'paragraph'").all()
+  expect(search()).toEqual([{ entry_id: entryId }])
+  db.feedOverrides.save(feedId, { ...defaults, cookie: null })
+  expect(search()).toEqual([])
+  expect(db.getArticleForEntry(entryId)).toBeNull()
 })
