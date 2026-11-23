@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
+import { hasRegexRules } from './rule-regex.js'
 import { hasAnnotations } from './annotations.js'
 import { isSqliteBusy } from './transaction.js'
 import { PaperDatabase } from './db.js'
@@ -21,7 +22,7 @@ function needsInitialization(lock: StateLock): boolean {
     db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 0')
     const version = Number(db.prepare('PRAGMA user_version').get()?.user_version || 0)
     if (version > DATABASE_VERSION) throw new Error('This database was created by a newer Paper version')
-    return version < DATABASE_VERSION || !hasAnnotations(db)
+    return version < DATABASE_VERSION || !hasAnnotations(db) || !hasRegexRules(db)
       || db.prepare("SELECT value FROM sync_state WHERE key = 'fulltext_search_v1'").get()?.value !== 'true'
   } finally { db.close() }
 }

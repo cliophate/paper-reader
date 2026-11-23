@@ -8,6 +8,7 @@ export interface ArticleRule {
   feedId: string
   feedTitle: string
   matchCount: number
+  disabled?: boolean
   matching: boolean
   createdAt: string
   actions: RuleAction[]

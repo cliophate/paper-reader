@@ -540,22 +540,25 @@ app.post('/api/views/count', asyncRoute(async (request, response) => {
   response.json({ count: result.count, capped: result.capped })
 }))
 
+function previewRule(query: string, signal: AbortSignal) {
+  return search.select({ kind: 'all', id: 'all', title: 'All articles' }, { query }, { kind: 'rule' }, signal)
+}
+
 app.post('/api/rules/preview', asyncRoute(async (request, response) => {
-  const query = ruleQuery(request.body?.query)
-  const preview = await withRequestSignal(request, response, signal => search.select(
-    { kind: 'all', id: 'all', title: 'All articles' }, { query }, { kind: 'rule' }, signal))
+  const query = ruleQuery(request.body?.query, 'rule')
+  const preview = await withRequestSignal(request, response, signal => previewRule(query, signal))
   const items = preview.ids.flatMap(id => {
     const entry = database.localEntry(id)
     return entry ? [{ id, title: entry.title, feedTitle: entry.feedTitle }] : []
   })
-  response.json({ count: preview.count, items })
+  response.json({ count: preview.count, capped: preview.capped, items })
 }))
 
-app.post('/api/rules', (request, response) => {
-  const id = database.rules.save(request.body)
+app.post('/api/rules', asyncRoute(async (request, response) => {
+  const id = await withRequestSignal(request, response, signal => database.rules.save(request.body, query => previewRule(query, signal)))
   if (request.body.applyExisting) runRuleBackfill()
   response.status(201).json(database.muteFilters(id)[0])
-})
+}))
 
 app.get('/api/rules/:id/hidden', (request, response) => {
   response.json(database.rules.hidden(request.params.id, String(request.query.after || '')))

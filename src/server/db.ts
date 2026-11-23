@@ -1,5 +1,6 @@
 import { SavedViews, migrateSavedViews, SAVED_VIEWS_VERSION } from './saved-views.js'
 import type { ArticleRule, RuleAction } from '../shared/article-rules.js'
+import { hasRegexRules, migrateRegexRules, REGEX_RULES_VERSION, REGEX_FAILURE_LIMIT, RuleRegexWorker } from './rule-regex.js'
 import { ArticleRules, migrateRules, RULE_BATCH_SIZE, RULES_VERSION } from './article-rules.js'
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { migrateFeedMaintenance } from './feed-maintenance.js'
@@ -217,6 +218,7 @@ export class PaperDatabase {
   private activeBackendId = ''
   private closed = false
   private checkpointHandler?: () => void
+  private muteBackfillRequested = false
   private muteBackfill: Promise<void> | undefined
   private urlComparisons = 0
   private urlScanStart = 0
@@ -328,6 +330,10 @@ export class PaperDatabase {
           migrateEntryStateWrites(this.db)
           if (version > 0) console.info(`Schema v33 migration finished in ${((performance.now() - started) / 1000).toFixed(1)} s`)
         }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < REGEX_RULES_VERSION || !hasRegexRules(this.db)) {
+          if (version > 0 && version < REGEX_RULES_VERSION) this.backupBeforeMigration(REGEX_RULES_VERSION, 'regex-rules')
+          migrateRegexRules(this.db)
+        }
       }
       this.savedViews = new SavedViews(this.db)
       this.rules = new ArticleRules(this)
@@ -364,6 +370,7 @@ export class PaperDatabase {
 
   close() {
     this.closed = true
+    this.rules.close()
     this.db.close()
   }
 
@@ -1572,8 +1579,9 @@ export class PaperDatabase {
     const excludeMuted = !options.includeMuted && stream.kind !== 'starred'
     let search: ReturnType<typeof compileSearch> | undefined
     if (options.query?.trim() || stream.kind === 'view') {
-      const roots = [stream.kind === 'view' ? (stream.viewQuery ?? this.savedViews.get(stream.id).query) : '', options.query]
-        .filter((value): value is string => Boolean(value)).map(value => parseSearch(value).root)
+      const roots = []
+      if (stream.kind === 'view') roots.push(parseSearch(stream.viewQuery ?? this.savedViews.get(stream.id).query, 'stored-literal-rule').root)
+      if (options.query) roots.push(parseSearch(options.query).root)
       const root = { kind: 'and' as const, children: roots.flatMap(term => term.kind === 'and' ? term.children : [term]) }
       const index = stream.kind === 'feed' || stream.kind === 'category' ? 'entries_feed_published_idx'
         : options.after || options.before ? 'entries_published_idx' : 'entries_url_idx'
@@ -1858,13 +1866,22 @@ export class PaperDatabase {
   // Share one runner across startup and concurrent creations. Re-query after
   // each filter so rules added during a scan join the same queue.
   backfillMuteFilters(): Promise<void> {
-    if (!this.muteBackfill) {
-      this.muteBackfill = this.runMuteBackfill().finally(() => { this.muteBackfill = undefined })
-    }
-    return this.muteBackfill
+    this.muteBackfillRequested = true
+    return this.muteBackfill ??= this.runMuteBackfill()
   }
 
   private async runMuteBackfill() {
+    try {
+      do {
+        this.muteBackfillRequested = false
+        const worker = new RuleRegexWorker()
+        try { await this.drainMuteBackfill(worker) }
+        finally { await worker.close() }
+      } while (!this.closed && this.muteBackfillRequested)
+    } finally { this.muteBackfill = undefined }
+  }
+
+  private async drainMuteBackfill(worker: RuleRegexWorker) {
     await new Promise<void>(resolve => setImmediate(resolve))
     if (this.closed) return
     // Earlier builds also marked SQL-matched ASCII filters done. Reset their
@@ -1885,10 +1902,10 @@ export class PaperDatabase {
         WHERE scope != 'query' AND NOT EXISTS (SELECT 1 FROM sync_state WHERE key = 'mute_unicode_v1:' || mute_filters.id AND value = 'done')
         ORDER BY created_at, id LIMIT 1`).get() as (MuteRule & { id: string }) | undefined
       if (rule) await this.backfillMuteFilter(rule)
-      else {
-        if (!await retryBusy(() => !this.closed && this.rules.applyArchiveBatch(this.activeBackendId))) return
-        await new Promise<void>(resolve => setImmediate(resolve))
-      }
+      const archive = await retryBusy(() => !this.closed && this.rules.applyArchiveBatch(this.activeBackendId))
+      const regex = !this.closed && await this.rules.matchArrivalBatch(worker)
+      if (!rule && !archive && !regex) return
+      await new Promise<void>(resolve => setImmediate(resolve))
     }
   }
 
@@ -2197,9 +2214,11 @@ export class PaperDatabase {
 
   muteFilters(id?: string): MuteFilterRecord[] {
     const rows = this.db.prepare(`
-      SELECT mute_filters.*, r.actions, r.target_id, t.name AS target_name, r.cursor, r.scan_end, COALESCE(feeds.title, '') AS feed_title,
+      SELECT mute_filters.*, r.actions, r.target_id, t.name AS target_name, r.cursor, r.scan_end, x.failures,
+        x.cursor < (SELECT max(sequence) FROM article_arrivals) AS regex_pending, COALESCE(feeds.title, '') AS feed_title,
         (SELECT count(*) FROM muted_entries WHERE filter_id=mute_filters.id) AS match_count
       FROM mute_filters JOIN article_rules r ON r.id=mute_filters.id
+      LEFT JOIN regex_rules x ON x.id=r.id
       LEFT JOIN webhook_targets t ON t.id=r.target_id
       LEFT JOIN feeds ON feeds.id = mute_filters.feed_id
       ${id === undefined ? '' : 'WHERE mute_filters.id=?'}
@@ -2217,7 +2236,8 @@ export class PaperDatabase {
       targetName: String(row.target_name || ''),
       undoTokens: this.db.prepare(`SELECT u.token FROM rule_undo u JOIN undo_actions a ON a.token=u.token
         WHERE u.rule_id=? AND a.expires_at>?`).all(row.id, new Date().toISOString()).map(u => String(u.token)),
-      matching: row.scope === 'query' ? row.cursor < row.scan_end : this.getSyncValue(`mute_unicode_v1:${row.id}`) !== 'done',
+      ...(Number(row.failures) >= REGEX_FAILURE_LIMIT && { disabled: true }),
+      matching: row.scope === 'query' ? Number(row.failures) < REGEX_FAILURE_LIMIT && (row.cursor < row.scan_end || Boolean(row.regex_pending)) : this.getSyncValue(`mute_unicode_v1:${row.id}`) !== 'done',
       createdAt: String(row.created_at),
     }))
   }

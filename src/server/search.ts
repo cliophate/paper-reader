@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { parseSearch, searchDate, type SearchNode } from './search-query.js'
+import { REGEX_RULE_HINT, SearchLimitError, parseSearch, searchDate, type SearchNode } from './search-query.js'
 import { textMatch } from './search-sql.js'
 import { plainText } from './text.js'
 import { indexedSearchText, type Entry } from './types.js'
@@ -34,6 +34,7 @@ export class ArticleSearchEvaluator {
     const now = context.now ?? Date.now()
     const evaluate = (node: SearchNode): boolean => {
       switch (node.kind) {
+        case 'regex': throw new SearchLimitError(REGEX_RULE_HINT)
         case 'and': return node.children.every(evaluate)
         case 'or': return node.children.some(evaluate)
         case 'not': return !evaluate(node.child)

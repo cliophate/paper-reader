@@ -34,6 +34,27 @@ Bare words on remote pages match token prefixes across the title, author, feed n
 Saved full text, date-picker filters and bulk actions on search results need
 the local index.
 
+## Regular expressions in hide rules
+
+In **Settings > Article rules**, select Hide as the only action. Write
+`title~/^week [0-9]+/i`, `author~/^Lee$/`, `url~/news/` or `text~/weekly/`.
+A bare `~/pattern/` checks the title and article text. Paper tests feed text and
+saved full text separately. Use `i` to ignore case and `\/` for a literal slash.
+The existing `url:/news/local` query still looks for that literal path.
+
+Combine regex with ordinary terms, `OR`, `NOT` and parentheses. A pattern can
+contain up to 256 UTF-16 code units. Paper checks the first 4,096 characters of
+each field. Preview and Save both test the latest 1,024 arrivals, including
+hidden articles. Select **Also apply to existing matches** to scan older articles.
+
+An article may appear briefly before a regex rule hides it. The worker has 50 ms
+per rule to match up to 128 articles. Paper skips a timed-out batch and disables
+the rule after three consecutive timeouts. If the worker stops, Paper retries
+the same batch after 100 ms and 200 ms, then disables the rule if the third
+attempt fails. Paper splits batches to fit the 2 MiB input limit.
+**Settings > Activity** records failures and any article too large to check on
+its own. Removing a rule releases its hidden articles.
+
 ## Index storage
 
 Schema 11 replaces full-text trigger scans with a durable row mapping. FTS5's

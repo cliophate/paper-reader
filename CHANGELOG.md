@@ -8,6 +8,8 @@
   and 16 minutes for 1 million. Set the reader health check
   `start_period` to `30m` in custom Compose files to match the shipped file.
   See the [upgrade and rollback steps](docs/recovery.md#article-state-migration-and-recovery).
+- Hide rules can match regular expressions in titles, authors, URLs and
+  article text. Settings > Activity records skipped batches and disabled rules.
 - Save named article views in the sidebar. Combine feeds, folders, keywords,
   authors, dates, reading time and read or star status. Views sync across devices.
 - Download folders, saved views, search results or selected articles for offline reading.

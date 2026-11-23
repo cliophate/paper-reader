@@ -182,6 +182,17 @@ it('pages saved queries in stream order and confines searches and bulk reads to 
   expect(database.savedViews.list()).toMatchObject([{ id: other, query: 'after:7d' }])
 })
 
+it('opens stored literal tilde-slash views and rejects regex in new searches and view edits', async () => {
+  const query = '~/synthetic/'
+  const id = String(sql(db => db.prepare("INSERT INTO saved_views(title,query,position) VALUES ('Old view',?,1)").run(query).lastInsertRowid))
+  const view = { kind: 'view' as const, title: 'Old view', id }
+  expect((await service.search(view, { query: 'url:/10' })).items.map(item => item.id)).toEqual(['10'])
+  expect((await service.savedViewCounts())[id].count).toBe(12)
+  await expect(service.search(view, { query })).rejects.toThrow(/Regex only works in hide rules/)
+  expect(() => database.savedViews.save({ title: view.title, query })).toThrow(/Regex only works in hide rules/)
+  expect(() => database.savedViews.save({ title: view.title, query, revision: 1 }, id)).toThrow(/Regex only works in hide rules/)
+})
+
 it('uses the current read and star state for a saved view', async () => {
   const id = database.savedViews.save({ title: 'Unread', query: 'title:synthetic is:unread' })
   const view = { kind: 'view' as const, id, title: 'Unread' }

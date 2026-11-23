@@ -1,3 +1,4 @@
+import { parseSearch, usesRegex, REGEX_ACTION_HINT } from '../../server/search-query'
 import type { WebhookTarget } from '../../shared/webhooks'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
@@ -51,6 +52,13 @@ export function FiltersSettings({ onOpenEntry, onChanged, notify, onMatchingChan
   }, [filters, onChanged])
 
   useEffect(() => { setPreview(null) }, [phrase])
+  const queryError = useMemo(() => {
+    try {
+      const { root, hint } = parseSearch(phrase, 'rule')
+      if (hint) return hint.replace(' Searching as plain terms.', '')
+      if (usesRegex(root) && (actions.length !== 1 || actions[0] !== 'hide')) return REGEX_ACTION_HINT
+    } catch (reason) { return reason instanceof Error ? reason.message : 'Invalid rule query.' }
+  }, [phrase, actions])
   const check = async () => {
     setBusy(true); setPreviewing(true); setError('')
     try { setPreview(await api.previewRule(phrase.trim())) }
@@ -59,7 +67,7 @@ export function FiltersSettings({ onOpenEntry, onChanged, notify, onMatchingChan
   }
   const add = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!phrase.trim() || busy || !preview || !actions.length || (actions.includes('notify') && !targetId)) return
+    if (!phrase.trim() || queryError || busy || !preview || !actions.length || (actions.includes('notify') && !targetId)) return
     setBusy(true); setError('')
     try {
       const filter = await api.addRule(phrase.trim(), actions, targetId, applyExisting)
@@ -110,22 +118,24 @@ export function FiltersSettings({ onOpenEntry, onChanged, notify, onMatchingChan
     <header><h3>Article rules</h3><p>Use a search query to act on incoming articles. Hide keeps articles in your archive. Mark read and Star change reading state. Rules never discard articles. To browse matches without applying actions, create a saved view in the sidebar.</p></header>
     <form className="filter-form rule-form" onSubmit={add}>
       <label className="filter-phrase"><span>Search query</span><input disabled={busy} autoFocus placeholder={'title:"new episode" OR feed:podcast'} value={phrase} onChange={event => setPhrase(event.target.value)} /></label>
+      <small>Hide rules accept <code>title~/weekly/i</code>, <code>author~/Lee/</code>, <code>url~/news/</code> and <code>text~/weekly/</code>. A bare <code>~/weekly/</code> checks the title and article text. An article may appear briefly before a regex rule hides it.</small>
       <fieldset disabled={busy}><legend>Actions</legend>{ruleActions.map(([action, label]) =>
         <label key={action}><input type="checkbox" checked={actions.includes(action)} onChange={event => void toggle(action, event.target.checked)} />{label}</label>)}</fieldset>
       {actions.includes('notify') && <label><span>Notification target</span><select disabled={busy} value={targetId} onChange={event => setTargetId(event.target.value)}>
         <option value="">Choose a target</option>{targets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
       </select><small>Add targets in Reading &amp; connections.</small></label>}
       <label className="rule-existing"><input type="checkbox" disabled={busy} checked={applyExisting} onChange={event => setApplyExisting(event.target.checked)} />Also apply to existing matches</label>
-      <button type="button" disabled={busy || !phrase.trim()} onClick={() => void check()}>{previewing ? 'Checking...' : 'Preview matches'}</button>
-      <button type="submit" disabled={busy || !preview || !actions.length || (actions.includes('notify') && !targetId)}>Save rule</button>
+      <button type="button" disabled={busy || Boolean(queryError) || !phrase.trim()} onClick={() => void check()}>{previewing ? 'Checking...' : 'Preview matches'}</button>
+      <button type="submit" disabled={busy || Boolean(queryError) || !preview || !actions.length || (actions.includes('notify') && !targetId)}>Save rule</button>
     </form>
-    {preview && <div className="filter-preview" role="status"><p>{preview.count} matching {preview.count === 1 ? 'article' : 'articles'}.</p><ul>{preview.items.map(entry => <li key={entry.id}>{entry.title} <small>{entry.feedTitle}</small></li>)}</ul></div>}
-    {error && <p className="form-error" role="alert">{error}</p>}
+    {preview && <div className="filter-preview" role="status"><p>{preview.count} matching {preview.count === 1 ? 'article' : 'articles'}{preview.capped ? ' in the latest 1,024 arrivals' : ''}.</p><ul>{preview.items.map(entry => <li key={entry.id}>{entry.title} <small>{entry.feedTitle}</small></li>)}</ul></div>}
+    {(queryError || error) && <p className="form-error" role="alert">{queryError || error}</p>}
     <div className="settings-list">
       {filters.map(filter => <article className="settings-list-row rule-row" key={filter.id}>
         <div><strong>{filter.phrase}</strong><span>{filter.scope === 'query' ? ruleActions.filter(([action]) => filter.actions.includes(action)).map(([action, label]) => action === 'notify' && filter.targetName ? `Notify ${filter.targetName}` : label).join(', ')
           : `Contains this phrase in ${scopeLabel(filter.scope)}${filter.feedTitle ? ' in ' + filter.feedTitle : ''}`}
           {filter.actions.includes('notify') && !filter.targetId && ' · Notification target removed'}
+          {filter.disabled && ' · Disabled · See Activity for details'}
           {filter.matching && ' · Matching...'}</span></div>
         {filter.actions.includes('hide') && (!filter.matching || filter.matchCount > 0) && <button disabled={busy} onClick={() => void showHidden(filter.id)}>{filter.matchCount} hidden</button>}
         {!filter.matching && filter.undoTokens.length > 0 && <button disabled={busy} onClick={() => void undo(filter)}>Undo state changes</button>}
@@ -226,6 +236,7 @@ function activityDetail(event: ActivityRecord): string {
   if (event.origin === 'rule' && Array.isArray(event.details.articles)) {
     return `${event.details.reason} · Rule ${event.details.ruleId} · ${event.details.articles.map(number => '#' + number).join(', ')}`
   }
+  if (event.origin === 'rule' && event.details.ruleId) return `${event.details.reason} · Rule ${event.details.ruleId}`
   if (event.kind !== 'sync') return event.origin
   const details = event.details
   const changes = Number(details.readToUnread || 0)

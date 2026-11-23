@@ -417,10 +417,22 @@ function deferred() {
   return { promise, resolve }
 }
 
+it('hides regex matches without a FreshRSS write', async () => {
+  const source = new FakeBackend([{ items: [entry()], continuation: '' }])
+  const sync = new BackendSynchronizer(database, source, true, [28, 58])
+  const rule = await database.rules.save({ query: 'author~/Ada/', actions: ['hide'] })
+  const write = vi.spyOn(source, 'editEntries')
+  await sync.syncNow()
+  await database.rules.drainRegex()
+  await sync.flushRuleState()
+  expect(database.muteFilters(rule)[0].matchCount).toBe(1)
+  expect(write).not.toHaveBeenCalled()
+})
+
 it('never replays a rule star after a lost response and a newer upstream unstar', async () => {
   const source = new FakeBackend([{ items: [entry()], continuation: '' }])
   const sync = new BackendSynchronizer(database, source, true, [28, 58])
-  const ruleId = database.rules.save({ query: 'author:Ada', actions: ['star'] })
+  const ruleId = await database.rules.save({ query: 'author:Ada', actions: ['star'] })
   const write = vi.spyOn(source, 'editEntries').mockImplementationOnce(async ids => {
     source.starredIds = ids
     throw new Error('Lost response with synthetic-secret')
@@ -448,7 +460,7 @@ it('never replays a rule star after a lost response and a newer upstream unstar'
 it.each(['lost', 'confirmed'])('keeps the latest snapshot while a rule acknowledgement is %s', async outcome => {
   const source = new FakeBackend([{ items: [entry(), entry({ id: 'other', author: 'Grace' })], continuation: '' }])
   const sync = new BackendSynchronizer(database, source, true, [28, 58])
-  database.rules.save({ query: 'author:Ada', actions: ['star'] })
+  await database.rules.save({ query: 'author:Ada', actions: ['star'] })
   const started = deferred(), release = deferred()
   vi.spyOn(source, 'editEntries').mockImplementation(async () => {
     started.resolve()

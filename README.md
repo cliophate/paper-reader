@@ -213,6 +213,11 @@ can reverse each archive batch for one hour. If an article in a batch has
 changed since the rule ran, Paper leaves that batch alone. Notifications already
 sent cannot be recalled. Article deletion belongs to retention settings.
 
+Choose Hide as the only action to use a regular expression. For example,
+`title~/^week [0-9]+/i` matches numbered weekly titles regardless of case.
+Use `~/pattern/` to check both the title and article text. An article may appear
+briefly before a regex rule hides it. Preview checks the latest 1,024 arrivals.
+
 Existing mute filters keep matching the same literal phrases and feeds.
 For query examples, see [search syntax](docs/search-index.md#search-syntax).
 
