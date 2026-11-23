@@ -3,6 +3,7 @@ import { startRegistration, startAuthentication } from '@simplewebauthn/browser'
 import type { PublicKeyCredentialCreationOptionsJSON, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/browser'
 import { authRequest, requireLogin, type AuthStatus } from '../auth'
 import { clearOffline, setOfflineLocked } from '../offline'
+import { SourceSetup } from './SourceSetup'
 import { subscribeLoginReturn } from '../subscribe'
 
 interface ReaderStatus { enabled: boolean; username: string; activeApps: number; addresses: { netNewsWire: string; readYou: string; capyReader: string } }
@@ -94,6 +95,7 @@ export function AuthBoundary({ children }: { children: React.ReactNode }) {
   }, [])
   if (!status) return <main className="login-page"><section className="login-card"><p role="status">{error || 'Opening Paper...'}</p>{error && <button onClick={() => void load()}>Try again</button>}</section></main>
   if (status.enabled && !status.authenticated) return <LoginPage status={status} onSignedIn={() => void load()} />
+  if (status.setup) return <SourceSetup initial={status.setup} onSaved={() => void load()} />
   return children
 }
 

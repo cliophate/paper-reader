@@ -1,6 +1,6 @@
 import { GreaderAuth } from './greader-auth.js'
 import { openCoordinatedStorage } from './storage-bootstrap.js'
-import { stateDirectory } from './config.js'
+import { readerSourceConfiguration, stateDirectory } from './config.js'
 import { AuthError } from './auth-store.js'
 
 const action = process.argv[2]
@@ -20,7 +20,7 @@ if (!['app-password', 'reader-api'].includes(action) && (!allowed.includes(actio
       else if (command === 'revoke' && arg) storage.database.auth.revokeApp(arg)
       else throw new AuthError('Usage: app-password create <name>|list|revoke <id>')
     } else if (action === 'reader-api') {
-      const api = new GreaderAuth(storage.database.greaderDatabase, storage.database.auth, process.env.PAPER_BACKEND === 'standalone', process.env.PUBLIC_URL || 'http://localhost:8080')
+      const api = new GreaderAuth(storage.database.greaderDatabase, storage.database.auth, readerSourceConfiguration().backend === 'standalone', process.env.PUBLIC_URL || 'http://localhost:8080')
       const command = process.argv[3]
       if (command === 'enable') api.configure(true, process.argv[4] || '')
       else if (command === 'disable') api.configure(false, String(api.settings().username))

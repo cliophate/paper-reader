@@ -273,7 +273,9 @@ MINIFLUX_TEST_VERSION=2.3.3 python3 scripts/test-miniflux-installation.py
 
 The test creates disposable FreshRSS and Caddy containers with synthetic
 accounts and feeds. It checks two-way state sync, feed repair, connection
-settings, proxy authentication, and backup restoration. It removes its test
+setup through the authenticated proxy, and restoration of the saved source, owner
+session and article state. The restore check starts a populated schema v27 copy,
+checks the pre-upgrade backup and verifies the migrated AI activity table. It removes its test
 containers and network when finished.
 
 For the FreshRSS/proxy checks with rootless Podman, build a runtime image and run
@@ -284,6 +286,7 @@ skipped with Podman; run `scripts/test-ai-worker.py` separately with Docker Comp
 The default Docker path continues to run both sets of checks.
 
 The Miniflux checks create their own PostgreSQL, Miniflux and feed containers.
+Both tested versions connect through first setup and use the saved API key after restore.
 They share the container command helper with the FreshRSS/proxy checks.
 No test starts against a private account.
 

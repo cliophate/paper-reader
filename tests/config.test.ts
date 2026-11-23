@@ -22,7 +22,7 @@ describe('backend configuration', () => {
     expect(loadConfig).toThrow(/MINIFLUX_BASE_URL/)
     vi.stubEnv('MINIFLUX_BASE_URL', 'https://miniflux.example.test')
     vi.stubEnv('MINIFLUX_API_KEY', '')
-    expect(loadConfig).toThrow('Missing required environment variable MINIFLUX_API_KEY')
+    expect(loadConfig().sourcePending).toBe(true)
   })
   it('selects standalone explicitly without FreshRSS credentials and refuses disabling local reads', () => {
     configured()
@@ -54,10 +54,10 @@ describe('backend configuration', () => {
     vi.stubEnv('PAPER_TRUSTED_FEED_ORIGINS', 'https://feeds.example.test/private')
     expect(loadConfig).toThrow('origins without credentials or paths')
   })
-  it('reports missing FreshRSS credentials before starting the server', () => {
+  it('opens source setup when FreshRSS credentials are missing', () => {
     configured()
     vi.stubEnv('FRESHRSS_API_PASSWORD', '')
-    expect(loadConfig).toThrow('Missing required environment variable FRESHRSS_API_PASSWORD')
+    expect(loadConfig().sourcePending).toBe(true)
   })
   it('uses the documented sync schedule when the setting is empty', () => {
     configured()

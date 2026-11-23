@@ -1,3 +1,4 @@
+import { sourceFetch } from './source-fetch.js'
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { mediaEnclosures } from './enclosures.js'
 import { feedUrl } from './feed-parser.js'
@@ -47,13 +48,15 @@ function date(value: unknown): string | null {
   return raw && !raw.startsWith('0001-') && Number.isFinite(Date.parse(raw)) ? new Date(raw).toISOString() : null
 }
 
+export class MinifluxVersionError extends Error {}
+
 export class MinifluxClient implements ReaderBackend {
   readonly organizationCapabilities = MINIFLUX_ORGANIZATION_CAPABILITIES
   private account: BackendIdentity | null = null
   private readonly baseUrl: string
   private retryAfterUntil = 0
 
-  constructor(private readonly config: { baseUrl: string; apiKey: string }) {
+  constructor(private readonly config: { baseUrl: string; apiKey: string }, private readonly sourceOrigins?: string[]) {
     this.baseUrl = minifluxBaseUrl(config.baseUrl)
     if (!config.apiKey || /[\r\n]/.test(config.apiKey)) throw new Error('MINIFLUX_API_KEY must contain one nonempty token')
   }
@@ -63,17 +66,18 @@ export class MinifluxClient implements ReaderBackend {
     return this.account
   }
 
-  async initialize() {
-    const version = text(object(await this.request('v1/version')).version)
+  async initialize(read = (path: string) => this.request(path)) {
+    const version = text(object(await read('v1/version')).version)
     const match = /^(\d+)\.(\d+)\.(\d+)(?:\+[^\s]+)?$/.exec(version)
-    if (!match || Number(match[1]) < 2 || (Number(match[1]) === 2 && (Number(match[2]) < 3 || Number(match[2]) === 3 && Number(match[3]) < 2))) {
-      throw new Error('Miniflux 2.3.2 or newer is required for explicit starred-state updates')
+    if (!match) throw new Error('Miniflux returned an invalid version. Verify the server runs Miniflux 2.3.2 or newer.')
+    if (Number(match[1]) < 2 || (Number(match[1]) === 2 && (Number(match[2]) < 3 || Number(match[2]) === 3 && Number(match[3]) < 2))) {
+      throw new MinifluxVersionError('Miniflux 2.3.2 or newer is required for explicit starred-state updates')
     }
-    const me = object(await this.request('v1/me'))
+    const me = object(await read('v1/me'))
     this.account = minifluxIdentity(this.baseUrl, numericId(me.id))
   }
 
-  private async request(path: string, method = 'GET', body?: JsonObject, missing = false, signal?: AbortSignal): Promise<unknown> {
+  private async request(path: string, method: 'GET' | 'PUT' | 'POST' | 'DELETE' = 'GET', body?: JsonObject, missing = false, signal?: AbortSignal): Promise<unknown> {
     const retryable = method === 'GET' || method === 'PUT' && path === 'v1/entries'
     for (let attempt = 0; ; attempt++) {
       signal?.throwIfAborted()
@@ -82,11 +86,11 @@ export class MinifluxClient implements ReaderBackend {
       if (retryDelay > 0) await pause(retryDelay, signal)
       let response: Response
       try {
-        response = await fetch(`${this.baseUrl}/${path}`, {
+        response = await sourceFetch(`${this.baseUrl}/${path}`, {
           method, redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
           headers: { 'X-Auth-Token': this.config.apiKey, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
           body: body ? JSON.stringify(body) : undefined,
-        })
+        }, this.sourceOrigins)
       } catch {
         signal?.throwIfAborted()
         if (retryable && attempt < 2) { await pause(100 * (attempt + 1), signal); continue }

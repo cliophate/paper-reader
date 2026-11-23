@@ -8,7 +8,7 @@ import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib'
 import type { FeedRedirect } from '../shared/feed-checks.js'
 import { HttpUrlPolicyError, resolveHttpUrl } from './network-policy.js'
 
-export type FeedHttpErrorCode = 'policy' | 'limit' | 'encoding' | 'redirect' | 'timeout' | 'aborted' | 'network'
+export type FeedHttpErrorCode = 'policy' | 'limit' | 'encoding' | 'redirect' | 'timeout' | 'aborted' | 'network' | 'tls'
 export class FeedHttpError extends Error {
   constructor(readonly code: FeedHttpErrorCode, message: string) { super(message); this.name = 'FeedHttpError' }
 }
@@ -93,6 +93,8 @@ function decode(bytes: Buffer, contentType: string, max: number, fatal: boolean)
     return text
   } catch (error) {
     if (error instanceof FeedHttpError) throw error
+    const code = (error as NodeJS.ErrnoException).code || ''
+    if (code === 'EPROTO' || /CERT|SELF_SIGNED|^ERR_(TLS|SSL)_|UNABLE_TO_VERIFY|UNABLE_TO_GET_ISSUER/.test(code)) throw new FeedHttpError('tls', 'The TLS connection failed.')
     throw new FeedHttpError('encoding', 'The response has an unsupported or malformed text encoding.')
   }
 }
@@ -114,20 +116,21 @@ export async function boundedFetch(input: string, options: TextFetchOptions | By
 }
 
 export interface ApiRequest {
-  method?: 'GET' | 'POST' | 'PATCH'
+  method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
   signature?: { timestamp: string; digest: string }
   discardResponse?: boolean
   timeoutMs?: number
   signal?: AbortSignal
+  minifluxToken?: string
   authorization?: string
   body?: string
   contentType?: 'text/plain' | 'application/json' | 'application/x-www-form-urlencoded'
 }
 
-export function boundedApiRequest(url: URL, trustedOrigins: readonly string[], request: ApiRequest) {
+export function boundedApiRequest(url: URL, trustedOrigins: readonly string[], request: ApiRequest, maxBytes = MiB) {
   if (url.protocol !== 'https:' && !trustedOrigins.includes(url.origin)) throw new FeedHttpError('policy', 'Public API connections require HTTPS.')
   return fetchBounded(url.href, { trustedOrigins, accept: 'application/json', maxRedirects: 0,
-    signal: request.signal, timeoutMs: request.timeoutMs, maxResponseBytes: MiB, maxDecompressedBytes: MiB, maxDecodedBytes: MiB }, request) as Promise<BoundedFetchResult>
+    signal: request.signal, timeoutMs: request.timeoutMs, maxResponseBytes: maxBytes, maxDecompressedBytes: maxBytes, maxDecodedBytes: maxBytes }, request) as Promise<BoundedFetchResult>
 }
 
 async function fetchBounded(input: string, options: TextFetchOptions | BytesFetchOptions, api?: ApiRequest): Promise<BoundedFetchResult | BoundedBytesResult> {
@@ -174,6 +177,7 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
             headers: { Accept: options.accept || 'application/rss+xml, application/atom+xml, application/feed+json, application/xml, text/xml, text/html',
               'Accept-Encoding': 'gzip, deflate, br', 'User-Agent': options.userAgent ?? 'Mozilla/5.0 (compatible; Paper/0.1; feed reader)',
               ...(api?.signature ? { 'X-Paper-Timestamp': api.signature.timestamp, 'X-Paper-Signature': api.signature.digest } : {}),
+              ...(api?.minifluxToken ? { 'X-Auth-Token': api.minifluxToken } : {}),
               ...(api?.authorization ? { Authorization: api.authorization } : {}),
               ...(api?.body !== undefined ? { 'Content-Type': api.contentType ?? 'application/json', 'Content-Length': Buffer.byteLength(api.body) } : {}),
               ...(cookie ? { Cookie: cookie.value } : {}),
@@ -237,6 +241,8 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
     if (options.signal?.aborted) throw new FeedHttpError('aborted', 'The HTTP request was interrupted.')
     if (deadline.aborted) throw new FeedHttpError('timeout', 'The HTTP request exceeded its deadline.')
     if (error instanceof FeedHttpError) throw error
+    const code = (error as NodeJS.ErrnoException).code || ''
+    if (code === 'EPROTO' || /CERT|SELF_SIGNED|^ERR_(TLS|SSL)_|UNABLE_TO_VERIFY|UNABLE_TO_GET_ISSUER/.test(code)) throw new FeedHttpError('tls', 'The TLS connection failed.')
     throw new FeedHttpError('network', 'The HTTP request failed.')
   }
 }

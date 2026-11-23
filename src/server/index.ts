@@ -8,7 +8,7 @@ import { RetentionService } from './retention.js'
 import { AnnotationError } from './annotations.js'
 import { retentionRouter } from './retention-routes.js'
 import { AuthConnections } from './auth-connections.js'
-import { authGate, authRoutes, cookie, trustedProxyHops } from './auth-routes.js'
+import { cookie } from './auth-routes.js'
 import { privateFeedRef, resolveFeedRepair } from './feed-maintenance.js'
 import { feedCheckRouter } from './feed-check-routes.js'
 import { withRequestSignal } from './request-signal.js'
@@ -16,8 +16,8 @@ import { AI_UNAVAILABLE, warnUnsafeAi } from './ai-client.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
 import { organizationRouter } from './organization-routes.js'
 import crypto from 'node:crypto'
-import path from 'node:path'
-import type { IncomingMessage, ServerResponse } from 'node:http'
+import { once } from 'node:events'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import { BriefingService } from './briefing.js'
@@ -39,8 +39,9 @@ import { asyncRoute, drainRequests } from './request-work.js'
 import { ConnectionSettings, SettingsValidationError } from './connections.js'
 import { KirbyPublisher } from './kirby.js'
 import { PaperRepository, switchingEntrySource } from './repository.js'
-import { requireAllowedHost, requireSameOrigin } from './request-origin.js'
-import { preventFraming } from './response-headers.js'
+import { serveClient, webAccess } from './web-access.js'
+import { savedSource } from './reader-source.js'
+import { mountSourceRoutes } from './source-routes.js'
 import { subscriptionList } from './opml.js'
 import { previewFeed } from './feed-repair.js'
 import { FeedHttpError } from './feed-http.js'
@@ -65,7 +66,7 @@ import { TopicService } from './topics.js'
 import { PulseService, storedPulseCollections, type PulseModel } from './pulse.js'
 import { streamXMedia } from './x-media.js'
 import { XThreadService } from './x-thread.js'
-import { BackendValidationError, type EntryStateOperation } from './backend.js'
+import { BackendValidationError, type EntryStateOperation, type ReaderBackend } from './backend.js'
 import type { Entry } from './types.js'
 import type { StreamKind, StreamRef } from './types.js'
 
@@ -74,11 +75,56 @@ const SEARCH_SCAN_SIZE = 80
 const UNDO_LIFETIME_MS = 20_000
 
 warnUnsafeAi()
-const storage = await openRuntimeStorage()
+const app = express()
+let handler = app
+const server = createServer((request, response) => handler(request, response))
+let shuttingDown = false
+// Reverse proxies reuse idle upstream connections for up to two minutes (Caddy's
+// default). Node closes them after five seconds, so a request sent as the socket
+// closes gets reset and the proxy answers 502. Outlast the proxy instead.
+server.keepAliveTimeout = 130_000
+server.headersTimeout = 131_000
+// close() would wait out the keep-alive on sockets between requests, so
+// shutdown ends each socket once it has no response in progress.
+const openResponses = new Map<Socket, number>()
+server.on('connection', (socket: Socket) => {
+  openResponses.set(socket, 0)
+  socket.once('close', () => openResponses.delete(socket))
+})
+server.on('request', ({ socket }: IncomingMessage, response: ServerResponse) => {
+  openResponses.set(socket, (openResponses.get(socket) ?? 0) + 1)
+  response.once('close', () => {
+    if (!openResponses.has(socket)) return
+    const open = openResponses.get(socket)! - 1
+    openResponses.set(socket, open)
+    if (shuttingDown && !open) socket.end()
+  })
+})
+
+const storage = await openRuntimeStorage((pending, database) => new Promise<ReaderBackend | undefined>(resolve => {
+  const setup = express()
+  const ready = once(server, 'reader-ready')
+  async function finish(backend?: ReaderBackend) {
+    resolve(backend)
+    await ready
+  }
+  setup.get('/api/auth/status', async (req, res, next) => {
+    if (!savedSource(pending.stateDir)) return next()
+    await finish()
+    handler(req, res)
+  })
+  webAccess(setup, pending.publicUrl, database.auth, new AuthConnections(database.auth), undefined, pending.backend === 'miniflux' ? 'miniflux' : 'freshrss')
+  mountSourceRoutes(setup, pending, database, finish)
+  serveClient(setup)
+  handler = setup
+  server.listen(pending.port, pending.host, () => {
+    console.log(`Paper setup is listening on port ${(server.address() as { port: number }).port}`)
+    if (!database.auth.enabled()) console.log(`Paper owner setup code, valid for 15 minutes: ${database.auth.setupCode()}`)
+  })
+}))
 const { config, database, backend } = storage
 // Bulk Reader writes run elsewhere. Web requests must fail promptly on contention.
 database.greaderDatabase.exec('PRAGMA busy_timeout = 50; PRAGMA wal_autocheckpoint = 0')
-let shuttingDown = false
 const eventResponses = new Set<Response>()
 const authConnections = new AuthConnections(database.auth)
 const connectionSettings = new ConnectionSettings(config)
@@ -116,7 +162,6 @@ const topics = new TopicService(database, entriesSource, () => storedPulseCollec
 const briefings = new BriefingService(config, database, entriesSource, reader, topics)
 const briefingDelivery = new BriefingDelivery(config, database, briefings)
 const briefingLibrary = new BriefingLibraryService(database, ids => synchronizer.editEntries(ids, 'read', 'briefing'))
-const app = express()
 const discussions = new DiscussionService(database, createAiChatModel(config, database.aiActivity), {
   enabled: discussionEnabled,
   get: id => pulse.list().collections.find(collection => collection.id === id),
@@ -146,20 +191,15 @@ activityTimer.unref()
 const memoryTimer = setInterval(() => logMemory('running'), 60_000)
 memoryTimer.unref()
 
-app.disable('x-powered-by')
-app.set('trust proxy', trustedProxyHops())
-app.use(preventFraming)
-app.use(requireAllowedHost(config.publicUrl))
+const readerAuth = new GreaderAuth(database.greaderDatabase, database.auth, !!standalone, config.publicUrl)
 app.use((_request, response, next) => {
   if (shuttingDown) return response.status(503).json({ error: 'Paper is shutting down.' })
   next()
 })
-app.use(requireSameOrigin(config.publicUrl))
-app.use(authGate(database.auth, authConnections, !!standalone))
-const readerAuth = new GreaderAuth(database.greaderDatabase, database.auth, !!standalone, config.publicUrl)
+webAccess(app, config.publicUrl, database.auth, authConnections, readerAuth)
 const greader = greaderRoutes(database, readerAuth, backend.identity.id, standalone?.state, authConnections, discoveryTransport(config.trustedFeedOrigins))
 app.use(greader.handler)
-app.use('/api/auth', authRoutes(database.auth, config.publicUrl, readerAuth))
+mountSourceRoutes(app, config, database)
 app.use('/api/subscription-tools', subscriptionToolsRoutes(standalone ? localImportStore(database, backend.identity.id)
   : backend.identity.kind === 'miniflux' ? minifluxImportStore(backend, synchronizer) : freshRssImportStore(backend, synchronizer), discoveryTransport(config.trustedFeedOrigins)))
 app.use(express.json({ limit: '2mb' }))
@@ -182,8 +222,6 @@ app.post('/api/entries/send-to-webhook', asyncRoute(async (request, response) =>
   if (!count) return response.status(404).json({ error: 'No manual delivery target matches this article.' })
   response.status(202).json({ count, message })
 }))
-
-app.get('/health', (_request, response) => response.json({ status: 'ok' }))
 
 if (standalone) app.get('/feed-icons/:icon', (request, response) => {
   const icon = feedIconPath(request.path)
@@ -1035,12 +1073,7 @@ app.post('/briefings/:id/confirm', asyncRoute(async (request, response) => {
     : 'Paper marked the entries in this briefing as read.'))
 }))
 
-const clientPath = path.resolve('dist')
-app.use(express.static(clientPath, { index: false, maxAge: '1h' }))
-app.use(['/api', '/_offline', '/assets', '/health'], (_request, response) => {
-  response.set('Content-Security-Policy', "default-src 'none'").sendStatus(404)
-})
-app.get('*splat', (_request, response) => response.sendFile('index.html', { root: clientPath }))
+serveClient(app)
 
 app.use((error: Error, request: Request, response: Response, _next: NextFunction) => {
   if (response.destroyed) return
@@ -1059,7 +1092,9 @@ app.use((error: Error, request: Request, response: Response, _next: NextFunction
   response.status(500).json({ error: error.message || 'Paper could not complete the request' })
 })
 
-const server = app.listen(config.port, config.host, () => {
+handler = app
+function onListening() {
+  server.emit('reader-ready')
   console.log(`Paper is listening on port ${(server.address() as { port: number }).port}`)
   if (!database.auth.enabled()) console.log(`Paper owner setup code, valid for 15 minutes: ${database.auth.setupCode()}`)
   logMemory('listening')
@@ -1067,29 +1102,9 @@ const server = app.listen(config.port, config.host, () => {
   webhooks.start()
   briefingDelivery.start()
   void database.backfillMuteFilters().catch(error => console.error('Mute filter backfill failed; it will resume after restart.', error))
-})
-// Reverse proxies reuse idle upstream connections for up to two minutes (Caddy's
-// default). Node closes them after five seconds, so a request sent as the socket
-// closes gets reset and the proxy answers 502. Outlast the proxy instead.
-server.keepAliveTimeout = 130_000
-server.headersTimeout = 131_000
-// close() would wait out the keep-alive on sockets between requests, so
-// shutdown ends each socket once it has no response in progress.
-const openResponses = new Map<Socket, number>()
-server.on('connection', (socket: Socket) => {
-  openResponses.set(socket, 0)
-  socket.once('close', () => openResponses.delete(socket))
-})
-server.on('request', ({ socket }: IncomingMessage, response: ServerResponse) => {
-  openResponses.set(socket, (openResponses.get(socket) ?? 0) + 1)
-  response.once('close', () => {
-    if (!openResponses.has(socket)) return
-    const open = openResponses.get(socket)! - 1
-    openResponses.set(socket, open)
-    if (shuttingDown && !open) socket.end()
-  })
-})
-
+}
+if (server.listening) onListening()
+else server.listen(config.port, config.host, onListening)
 function parseRevisions(value: unknown): Record<string, number> | undefined {
   if (value === undefined) return undefined
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.values(value).some(revision => !Number.isSafeInteger(revision) || Number(revision) < 0)) throw new BackendValidationError('Send valid article revisions.')

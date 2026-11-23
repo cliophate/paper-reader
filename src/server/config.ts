@@ -1,7 +1,8 @@
 import path from 'node:path'
 import type { AiProvider } from '../shared/connections.js'
 import type { BriefingSchedule, SmtpFields, SmtpSecurity } from '../shared/briefing-delivery.js'
-import { minifluxBaseUrl } from './miniflux-url.js'
+import { savedSource, sourceConfig, type ReaderSource } from './reader-source.js'
+import { minifluxBaseUrl, sourceBaseUrl } from './miniflux-url.js'
 
 function value(name: string, fallback = ''): string {
   return process.env[name]?.trim() || fallback
@@ -75,6 +76,24 @@ export type Config = ReturnType<typeof loadConfig>
 
 export function stateDirectory() { return value('STATE_DIR', path.resolve('data')) }
 
+export function readerSourceConfiguration() {
+  const backend = value('PAPER_BACKEND', 'freshrss')
+  if (backend !== 'freshrss' && backend !== 'standalone' && backend !== 'miniflux') throw new Error('PAPER_BACKEND must be freshrss, standalone or miniflux')
+  let source: ReaderSource
+  if (backend === 'standalone') source = { backend }
+  else if (backend === 'miniflux') {
+    const baseUrl = value('MINIFLUX_BASE_URL')
+    source = { backend, baseUrl: baseUrl && minifluxBaseUrl(baseUrl), apiKey: value('MINIFLUX_API_KEY') }
+  } else {
+    const baseUrl = value('FRESHRSS_BASE_URL').replace(/\/$/, '')
+    if (baseUrl) sourceBaseUrl(baseUrl, 'FRESHRSS_BASE_URL')
+    source = { backend, baseUrl, username: value('FRESHRSS_USERNAME'), apiPassword: value('FRESHRSS_API_PASSWORD') }
+  }
+  if (Object.values(source).every(Boolean)) return { ...sourceConfig(source), sourcePending: false, sourceFromBrowser: false }
+  const saved = savedSource(stateDirectory())
+  return { ...sourceConfig(saved ?? source), sourcePending: !saved, sourceFromBrowser: Boolean(saved) }
+}
+
 let warnedOpenCode = false
 
 export function loadConfig(secrets?: { internalSecret: string; signingSecret: string }) {
@@ -82,8 +101,8 @@ export function loadConfig(secrets?: { internalSecret: string; signingSecret: st
     console.warn('OpenCode support was removed. Its environment variables are ignored. Enable Codex in Settings to use AI.')
     warnedOpenCode = true
   }
-  const backend = value('PAPER_BACKEND', 'freshrss')
-  if (backend !== 'freshrss' && backend !== 'standalone' && backend !== 'miniflux') throw new Error('PAPER_BACKEND must be freshrss, standalone or miniflux')
+  const selection = readerSourceConfiguration()
+  const { backend } = selection
   if (backend === 'standalone' && value('PAPER_LOCAL_READS', 'true') !== 'true') throw new Error('Standalone mode requires PAPER_LOCAL_READS=true')
   const provider = value('PAPER_AI_PROVIDER', value('CODEX_ENABLED') === 'true' ? 'codex' : 'none') as AiProvider
   if (!['none', 'codex', 'openai'].includes(provider)) throw new Error('PAPER_AI_PROVIDER must be none, codex or openai')
@@ -94,7 +113,7 @@ export function loadConfig(secrets?: { internalSecret: string; signingSecret: st
     evening: value('PAPER_BRIEFING_SCHEDULE_EVENING', '18:30'),
   }
   return {
-    backend,
+    ...selection,
     port: Number(value('PORT', '8080')),
     host: value('HOST', '127.0.0.1'),
     readerFallbackEnabled: value('PAPER_READER_FALLBACK_ENABLED', 'false') === 'true',
@@ -114,15 +133,6 @@ export function loadConfig(secrets?: { internalSecret: string; signingSecret: st
     publicUrl: value('PUBLIC_URL', 'http://localhost:8080').replace(/\/$/, ''),
     stateDir,
     databasePath: path.join(stateDir, 'paper.sqlite'),
-    freshRss: {
-      baseUrl: (backend === 'freshrss' ? required('FRESHRSS_BASE_URL') : '').replace(/\/$/, ''),
-      username: backend === 'freshrss' ? required('FRESHRSS_USERNAME') : '',
-      apiPassword: backend === 'freshrss' ? required('FRESHRSS_API_PASSWORD') : '',
-    },
-    miniflux: {
-      baseUrl: backend === 'miniflux' ? minifluxBaseUrl(required('MINIFLUX_BASE_URL')) : '',
-      apiKey: backend === 'miniflux' ? required('MINIFLUX_API_KEY') : '',
-    },
     rssHub: {
       baseUrl: value('RSSHUB_BASE_URL').replace(/\/$/, ''),
     },

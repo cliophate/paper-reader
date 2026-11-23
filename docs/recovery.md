@@ -10,6 +10,8 @@ discussions, highlights and personal notes, filters, briefing history, Pulse col
 Device overrides, theme and reader text size live in each browser.
 An empty remote-backend cache can resync articles but cannot recover that additional
 state. An empty standalone database cannot recover subscriptions or reading state.
+If you chose a feed source in the browser, keep `reader-source.json` with the
+database. Paper reads the saved source and its credentials on restart.
 The same directory also holds connections.json when connections have been edited
 in Settings. It contains connection switches and credentials, including save
 destination tokens and Wallabag login details, without encryption at rest. Keep its permissions at 0600 and include it

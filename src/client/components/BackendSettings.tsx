@@ -1,6 +1,9 @@
+import { useState } from 'react'
+import { sourceRequest } from './SourceSetup'
 import { RetentionSettings } from './RetentionSettings'
 
 export function BackendSettings({ backend }: { backend: 'standalone' | 'freshrss' | 'miniflux' }) {
+  const [testing, setTesting] = useState(false), [message, setMessage] = useState('')
   const name = backend === 'standalone' ? 'Standalone' : backend === 'miniflux' ? 'Miniflux' : 'FreshRSS'
   return <section className="connection-settings backend-settings" aria-label="Backend and data">
     <h3>Backend &amp; data</h3>
@@ -10,8 +13,17 @@ export function BackendSettings({ backend }: { backend: 'standalone' | 'freshrss
       : `${name} manages subscriptions and reading state. Paper keeps local history, discussions, briefings and collections.`}</p>
     <p>Paper saves playback positions for audio and video. Offline copies include article text and images.</p>
     {backend !== 'standalone' && <p>With local reads enabled, Paper searches its index after import. Until then it searches articles as it pages through {name}.</p>}
+    {backend !== 'standalone' && <>
+      <button disabled={testing} onClick={async () => {
+        setTesting(true); setMessage('')
+        try { await sourceRequest('/test', {}); setMessage('Connection works.') }
+        catch (error) { setMessage(error instanceof Error ? error.message : 'Could not reach Paper.') }
+        finally { setTesting(false) }
+      }}>{testing ? 'Testing...' : 'Test connection'}</button>
+      {message && <p role="status">{message}</p>}
+    </>}
     {backend === 'miniflux' && <div className="backend-notes">
-      <p>Set PAPER_BACKEND=miniflux, MINIFLUX_BASE_URL and MINIFLUX_API_KEY in your private configuration. Create a dedicated key in Miniflux Settings &gt; API Keys. Paper uses the native API and requires Miniflux 2.3.2 or newer.</p>
+      <p>Connect during first setup or set PAPER_BACKEND=miniflux, MINIFLUX_BASE_URL and MINIFLUX_API_KEY in your private configuration. Create a dedicated key in Miniflux Settings &gt; API Keys. Paper uses the native API and requires Miniflux 2.3.2 or newer.</p>
       <p>Use a new Paper data directory for each server or account. Miniflux must be reachable when Paper or a briefing command starts. Local articles stay readable during later outages. Rotating the key keeps the same account.</p>
       <p>Choose a category when moving feeds. New feeds use Miniflux's default if you omit one. Folder management, ordering and feed URL repair are unavailable. Back up Miniflux separately.</p>
     </div>}

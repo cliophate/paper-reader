@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -70,11 +71,9 @@ def start_paper(state):
     state.chmod(0o700)
     return run('paper', '--user', f'{os.getuid()}:{os.getgid()}', '-p', '127.0.0.1::8080', '-v', f'{state}:/data',
                '-e', 'HOST=0.0.0.0', '-e', 'PUBLIC_URL=http://localhost',
-               '-e', 'FRESHRSS_BASE_URL=http://freshrss', '-e', 'FRESHRSS_USERNAME=fixture',
-               '-e', 'FRESHRSS_API_PASSWORD=synthetic-api-password',
                '-e', 'PAPER_INTERNAL_SECRET=synthetic-internal-secret-for-release-test',
                '-e', 'PAPER_SIGNING_SECRET=synthetic-signing-secret-for-release-test',
-               '-e', 'PAPER_TRUSTED_FEED_ORIGINS=http://fixture:8080',
+               '-e', 'PAPER_TRUSTED_FEED_ORIGINS=http://fixture:8080,http://freshrss',
                '-e', 'CODEX_ENABLED=false', IMAGE)
 
 
@@ -110,6 +109,30 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         assert request(upstream + '/api/paper-feed-health.php', headers=auth)[0] == 200
         paper = start_paper(temporary / 'data')
         base = address(paper, 8080)
+        hash_value = docker('run', '--rm', '--network', 'none', CADDY, 'caddy', 'hash-password', '--plaintext', 'synthetic-proxy-password')
+        config = temporary / 'Caddyfile'
+        config.write_text((ROOT / 'examples/Caddyfile').read_text())
+        proxy = run('proxy', '-p', '127.0.0.1::80', '-v', f'{config}:/etc/caddy/Caddyfile:ro',
+                    '-e', 'PAPER_DOMAIN=http://localhost', '-e', 'PAPER_AUTH_USER=fixture',
+                    '-e', 'PAPER_AUTH_PASSWORD_HASH=' + hash_value, CADDY)
+        protected = address(proxy, 80)
+        until(lambda: request(protected + '/health', headers={'Host': 'localhost'})[0] == 401)
+        assert request(protected + '/api/navigation', headers={'Host': 'localhost'})[0] == 401
+        assert request(protected + '/api/settings/connections', headers={'Host': 'localhost'})[0] == 401
+        credentials = base64.b64encode(b'fixture:synthetic-proxy-password').decode()
+        proxy_headers = {'Host': 'localhost', 'Authorization': 'Basic ' + credentials}
+        until(lambda: request(protected + '/api/auth/status', headers=proxy_headers)[1].get('setup') == 'freshrss')
+        source = {'backend': 'freshrss', 'baseUrl': 'http://freshrss', 'username': 'fixture',
+                  'apiPassword': 'synthetic-api-password'}
+        route = protected + '/api/settings/source'
+        assert request(route, source, headers={'Host': 'localhost'})[0] == 401
+        assert request(route, source, headers={**proxy_headers, 'Origin': 'https://other.example.test'})[0] == 403
+        assert request(route + '/test', {**source, 'apiPassword': 'synthetic-wrong'}, headers=proxy_headers)[0] == 422
+        assert request(route + '/test', source, headers=proxy_headers) == (200, {'ok': True})
+        assert not (temporary / 'data/reader-source.json').exists()
+        assert request(route, source, headers=proxy_headers) == (200, {'ok': True})
+        assert (temporary / 'data/reader-source.json').stat().st_mode & 0o777 == 0o600
+        assert request(route, {'backend': 'standalone'}, headers=proxy_headers)[0] == 409
         until(lambda: request(base + '/api/status')[1].get('localReadsActive'))
         assert request(base + '/api/sync/parity')[1]['ready']
         assert request(base + '/api/status')[1]['sync']['entryCount'] == 92
@@ -155,17 +178,6 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         assert all(feed['id'] != entry['feedId'] for folder in outcome['snapshot']['navigation']['folders'] if folder['id'] == folder_id for feed in folder['feeds'])
         preserved = request(base + '/api/entries/item', {'id': entry['id']})[1]['entry']
         assert preserved['starred'] and preserved['readingPosition'] == 0.42
-        hash_value = docker('run', '--rm', '--network', 'none', CADDY, 'caddy', 'hash-password', '--plaintext', 'synthetic-proxy-password')
-        config = temporary / 'Caddyfile'
-        config.write_text((ROOT / 'examples/Caddyfile').read_text())
-        proxy = run('proxy', '-p', '127.0.0.1::80', '-v', f'{config}:/etc/caddy/Caddyfile:ro',
-                    '-e', 'PAPER_DOMAIN=http://localhost', '-e', 'PAPER_AUTH_USER=fixture',
-                    '-e', 'PAPER_AUTH_PASSWORD_HASH=' + hash_value, CADDY)
-        protected = address(proxy, 80)
-        until(lambda: request(protected + '/health', headers={'Host': 'localhost'})[0] == 401)
-        assert request(protected + '/api/navigation', headers={'Host': 'localhost'})[0] == 401
-        assert request(protected + '/api/settings/connections', headers={'Host': 'localhost'})[0] == 401
-        credentials = base64.b64encode(b'fixture:synthetic-proxy-password').decode()
         with urllib.request.urlopen(urllib.request.Request(protected + '/api/navigation', headers={
                 'Host': 'localhost', 'Authorization': 'Basic ' + credentials})) as response:
             assert response.status == 200
@@ -174,7 +186,6 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         assert request(protected + '/api/navigation', headers={'Host': 'localhost', 'Authorization': 'Basic ' + credentials})[0] == 200
         assert request(protected + '/api/settings/connections', headers={'Host': 'localhost', 'Authorization': 'Basic ' + credentials})[1]['readwise']['tokenConfigured']
         # Stack owner login behind the existing Basic-auth proxy.
-        proxy_headers = {'Host': 'localhost', 'Authorization': 'Basic ' + credentials}
         setup_code = docker('exec', paper, 'npm', 'run', 'paper-auth', '--', 'setup-code').splitlines()[-1]
         payload = json.dumps({'code': setup_code, 'username': 'owner', 'password': 'synthetic-owner-password'}).encode()
         with urllib.request.urlopen(urllib.request.Request(protected + '/api/auth/setup', payload,
@@ -222,11 +233,30 @@ with tempfile.TemporaryDirectory(prefix='paper-installation-') as directory:
         restored = temporary / 'restored'
         shutil.copytree(temporary / 'data', restored)
         docker('rm', '-f', paper, check=False)
+        # Build a v27 fixture in the restored copy. Only the two AI activity
+        # tables and their index were added in v28. Preserve the account and articles.
+        db_path = restored / 'paper.sqlite'
+        with sqlite3.connect(db_path) as db:
+            db.executescript('DROP TABLE ai_activity; DROP TABLE ai_daily_usage; PRAGMA user_version=27;')
+        db.close()
         paper = start_paper(restored)
         base = address(paper, 8080)
         until(lambda: request(base + '/health')[0] == 200)
+        backup = restored / 'paper.sqlite.before-ai-activity-v28'
+        assert backup.is_file()
+        with sqlite3.connect(backup) as db:
+            assert db.execute('PRAGMA user_version').fetchone() == (27,)
+            assert db.execute('SELECT 1 FROM entries WHERE id=?', (entry['id'],)).fetchone() == (1,)
+            assert db.execute("SELECT 1 FROM sqlite_master WHERE name='ai_activity'").fetchone() is None
+        db.close()
+        with sqlite3.connect(db_path) as db:
+            assert db.execute('PRAGMA user_version').fetchone()[0] >= 28
+            db.execute('SELECT id FROM ai_activity LIMIT 1')
+        db.close()
         # Restoring revives credentials and sessions. Recovery revokes them.
         assert request(base + '/api/navigation')[0] == 401
+        assert request(base + '/api/settings/source/test', {})[0] == 401
+        assert request(base + '/api/settings/source/test', {}, headers={'Cookie': owner_cookie}) == (200, {'ok': True})
         assert request(base + '/api/auth/access', headers={'Cookie': owner_cookie})[1]['apps'][0]['name'] == 'Fixture reader'
         docker('exec', paper, 'npm', 'run', 'paper-auth', '--', 'revoke-all')
         assert request(base + '/api/navigation', headers={'Cookie': owner_cookie})[0] == 401
