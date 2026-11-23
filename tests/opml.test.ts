@@ -72,6 +72,12 @@ describe('OPML parsing and portability', () => {
     expect(rows[0].problem).toBeTruthy()
   })
 
+  it.each(['file:///feed.xml', 'https://example.test/' + 'x'.repeat(4096)])('rejects non-HTTP and overlong subscription URLs', url => {
+    const [row] = parseOpml(wrap(`<outline xmlUrl="${url}"/>`)).subscriptions
+    expect(row.url).toBe('')
+    expect(row.problem).toBeTruthy()
+  })
+
   it('redacts credential-bearing URLs for display and excludes them from transfers', () => {
     const base = 'https://example.test/rss'
     const privateUrls = ['SIG', '%68ash', 'signATUReVersion', 'readerAccessToken', 'mySECRETid',

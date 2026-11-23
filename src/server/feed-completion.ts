@@ -5,7 +5,7 @@ import type { FeedLease, FetchCompletion } from './feed-fetch-state.js'
 import type { ParsedFeed } from './feed-parser.js'
 import { ingestFeed } from './feed-ingestion.js'
 import { displayFeedUrl } from './feed-url-display.js'
-import { subscriptionUrl } from './opml.js'
+import { subscriptionUrl } from './subscription-url.js'
 
 type Completion = { lease: FeedLease; now: number; update: FetchCompletion; parsed?: ParsedFeed; responseUrl: string }
 

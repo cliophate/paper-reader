@@ -52,6 +52,36 @@ describe('subscription tools HTTP routes', () => {
     expect(store.create).toHaveBeenCalledWith(expect.objectContaining({ url }), [], null)
   })
 
+  it('previews a submitted private URL directly without returning its query', async () => {
+    const { request, store } = await fixture()
+    const url = 'https://members.test/feed?token=synthetic-direct'
+    const preview = await request('preview-feed', { url, title: url })
+    expect(preview.status).toBe(200)
+    expect(preview.data.rows[0]).toMatchObject({ url: 'https://members.test/feed', title: 'https://members.test/feed' })
+    expect(JSON.stringify(preview.data)).not.toContain('synthetic-direct')
+    await request('apply', { token: preview.data.token, choices: [{ key: '1', action: 'create', folders: [] }] })
+    expect(store.create).toHaveBeenCalledWith(expect.objectContaining({ url }), [], null)
+  })
+
+  it('distinguishes private advertised feeds with the same displayed address', async () => {
+    const { request, store, transport } = await fixture()
+    const page = 'https://example.test/members?token=synthetic-page'
+    const base = 'https://example.test/private'
+    transport.mockResolvedValueOnce({ responseUrl: page, contentType: 'text/html',
+      body: ['first', 'second'].map(value => `<link rel="alternate" type="application/rss+xml" href="/private?token=synthetic-${value}">`).join('') })
+    const found = await request('discover', { url: page })
+    expect(transport).toHaveBeenCalledWith(page, undefined)
+    expect(JSON.stringify(found.data)).not.toContain('synthetic-')
+    const [first, second] = found.data.candidates
+    expect(first.urlRef).not.toBe(second.urlRef)
+    expect(second).toMatchObject({ url: base, title: base })
+    expect((await request('preview-feed', { ...second, urlRef: 'missing' })).status).toBe(400)
+    const preview = await request('preview-feed', second)
+    expect(JSON.stringify(preview.data)).not.toContain('synthetic-')
+    await request('apply', { token: preview.data.token, choices: [{ key: '1', action: 'create', folders: [] }] })
+    expect(store.create).toHaveBeenCalledWith(expect.objectContaining({ url: base + '?token=synthetic-second' }), [], null)
+  })
+
   it('returns conflict metadata on stale navigation and validates candidate preview input', async () => {
     const { request, navigation } = await fixture()
     const preview = await request('preview-feed', { url: 'https://example.test/rss', title: 'A & B' })

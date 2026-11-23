@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { subscriptionToolsApi as api } from '../subscriptionToolsApi'
-import type { DiscoveryResult, ImportChoice, ImportPreview, ImportResult, ImportRow } from '../../shared/subscription-tools'
+import { displayFeedUrl } from '../../server/feed-url-display'
+import type { DiscoveryCandidate, DiscoveryResult, ImportChoice, ImportPreview, ImportResult, ImportRow } from '../../shared/subscription-tools'
 import './SubscriptionTools.css'
 import { parseSubscribeQuery } from '../subscribe'
 
@@ -9,8 +10,9 @@ export function SubscriptionTools({ onChanged, initialUrl = '', initialError = '
   onChanged: () => Promise<unknown>; initialUrl?: string; initialError?: string; subscribeOnly?: boolean; online?: boolean; intro?: ReactNode
 }) {
   const [url, setUrl] = useState(initialUrl)
+  const [editingUrl, setEditingUrl] = useState(false)
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null)
-  const [candidate, setCandidate] = useState('')
+  const [candidate, setCandidate] = useState<DiscoveryCandidate | null>(null)
   const [xml, setXml] = useState('')
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [choices, setChoices] = useState<ImportChoice[]>([])
@@ -39,11 +41,11 @@ export function SubscriptionTools({ onChanged, initialUrl = '', initialError = '
     finally { setBusy(false) }
   }
   async function discover(value: string) {
-    setDiscovery(null); setCandidate(''); setPreview(null); setResult(null)
+    setEditingUrl(false); setDiscovery(null); setCandidate(null); setPreview(null); setResult(null)
     const parsed = parseSubscribeQuery(new URLSearchParams({ url: value }).toString())
     if (parsed.error) throw new Error(parsed.error)
     const found = await api.discover(parsed.url); setDiscovery(found)
-    if (found.candidates.length === 1) setCandidate(found.candidates[0].url)
+    if (found.candidates.length === 1) setCandidate(found.candidates[0])
   }
   function showPreview(value: ImportPreview) {
     setPreview(value); setResult(null); setFolderDrafts({})
@@ -89,16 +91,16 @@ export function SubscriptionTools({ onChanged, initialUrl = '', initialError = '
     {intro}
     <fieldset disabled={busy || !online} className="subscription-tools-controls">
       <form aria-label="Discover feeds" onSubmit={event => submit(event, () => discover(url))}>
-        <label>Website or feed URL<input type="url" value={url} required maxLength={4096} placeholder="https://example.com/" onChange={event => { setUrl(event.target.value); setDiscovery(null); setCandidate(''); setPreview(null); setResult(null); setError('') }} /></label>
+        <label>Website or feed URL<input type="url" value={editingUrl ? url : displayFeedUrl(url) || url} onBlur={() => setEditingUrl(false)} required maxLength={4096} placeholder="https://example.com/" onChange={event => { setEditingUrl(true); setUrl(event.target.value); setDiscovery(null); setCandidate(null); setPreview(null); setResult(null); setError('') }} /></label>
         <button type="submit">Find feeds</button>
       </form>
       {discovery && <div className="discovery-results">
         {discovery.candidates.length ? <>
-          <fieldset><legend>Choose a feed</legend>{discovery.candidates.map(feed => <label className="discovery-choice" key={feed.url}>
-            <input type="radio" name="discovered-feed" value={feed.url} checked={candidate === feed.url} onChange={() => setCandidate(feed.url)} />
+          <fieldset><legend>Choose a feed</legend>{discovery.candidates.map(feed => <label className="discovery-choice" key={feed.urlRef ?? feed.url}>
+            <input type="radio" name="discovered-feed" value={feed.urlRef ?? feed.url} checked={candidate === feed} onChange={() => setCandidate(feed)} />
             <span>{feed.title} <small>{feed.format.toUpperCase()} · {feed.url}</small></span>
           </label>)}</fieldset>
-          <button type="button" disabled={!candidate} onClick={() => void run(async () => { const feed = discovery.candidates.find(feed => feed.url === candidate)!; showPreview(await api.previewFeed(feed.url, feed.title)) })}>Preview selected feed</button>
+          <button type="button" disabled={!candidate} onClick={() => candidate && void run(async () => showPreview(await api.previewFeed(candidate)))}>Preview selected feed</button>
         </> : <p role="status">No RSS or Atom links were advertised on this page. Try the publisher's feed URL.</p>}
       </div>}
       {!subscribeOnly && <><form aria-label="Import OPML" onSubmit={event => submit(event, async () => {

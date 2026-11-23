@@ -11,7 +11,8 @@ import { AnnotationError } from './annotations.js'
 import { retentionRouter } from './retention-routes.js'
 import { AuthConnections } from './auth-connections.js'
 import { cookie } from './auth-routes.js'
-import { privateFeedRef, resolveFeedRepair } from './feed-maintenance.js'
+import { resolveFeedRepair } from './feed-maintenance.js'
+import { privateFeedRef, subscriptionUrl } from './subscription-url.js'
 import { feedCheckRouter } from './feed-check-routes.js'
 import { withRequestSignal } from './request-signal.js'
 import { AI_UNAVAILABLE, warnUnsafeAi } from './ai-client.js'
@@ -1108,10 +1109,10 @@ app.post('/api/feeds/repair', asyncRoute(async (request, response) => {
 }))
 
 app.post('/api/feeds', asyncRoute(async (request, response) => {
-  const url = String(request.body?.url || '').trim()
+  const url = subscriptionUrl(String(request.body?.url || ''))
   const title = String(request.body?.title || '').trim().slice(0, 240)
   const folder = String(request.body?.folder || '').trim().slice(0, 120)
-  if (!/^https?:\/\//i.test(url)) return response.status(400).json({ error: 'Enter a complete feed URL' })
+  if (!url) return response.status(400).json({ error: 'Enter a complete feed URL without embedded credentials.' })
   await synchronizer.addFeed(url, title, folder)
   response.status(201).json({ ok: true })
 }))

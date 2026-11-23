@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { OrganizationCapabilities } from './organization.js'
 import type { NavigationPayload } from './types.js'
-import { parseOpml, previewOpml, subscriptionList, subscriptionUrl, SubscriptionInputError } from './opml.js'
+import { displayFeedUrl } from './feed-url-display.js'
+import { matchesSubscriptionUrl } from './subscription-url.js'
+import { parseOpml, previewOpml, subscriptionList, SubscriptionInputError } from './opml.js'
 import type { ImportChoice, ImportPreview, ImportResult, ImportRow } from '../shared/subscription-tools.js'
 
 export interface ImportSnapshot { navigation: NavigationPayload; revision: number | null; capabilities: Readonly<OrganizationCapabilities> }
@@ -42,7 +44,7 @@ export class SubscriptionImporter {
     for (const [token, preview] of this.previews) if (preview.expires <= this.now()) this.previews.delete(token)
     while (this.previews.size >= 8) this.previews.delete(this.previews.keys().next().value!)
     this.previews.set(value.token, { value, fingerprint: signature(snapshot), expires: this.now() + 10 * 60_000 })
-    return value
+    return { ...value, rows: value.rows.map(row => ({ ...row, url: displayFeedUrl(row.url) })) }
   }
 
   async apply(token: string, input: unknown): Promise<ImportResult> {
@@ -67,7 +69,7 @@ export class SubscriptionImporter {
           validateFolderNames(choice.folders, snapshot.navigation)
           if (choice.action === 'create') {
             if (choice.folders === null) throw new SubscriptionInputError('Choose a folder or Uncategorized for a new subscription.')
-            if (this.store.kind !== 'standalone' && subscriptionList(snapshot.navigation).some(({ feed }) => !feed.urlRef && subscriptionUrl(feed.url) === row.url)) throw new SubscriptionInputError(`${this.store.kind === 'miniflux' ? 'Miniflux' : 'FreshRSS'} cannot create a distinct subscription at this URL. Choose an existing subscription explicitly or skip this row.`)
+            if (this.store.kind !== 'standalone' && subscriptionList(snapshot.navigation).some(({ feed }) => matchesSubscriptionUrl(feed, row.url))) throw new SubscriptionInputError(`${this.store.kind === 'miniflux' ? 'Miniflux' : 'FreshRSS'} cannot create a distinct subscription at this URL. Choose an existing subscription explicitly or skip this row.`)
             const created = await this.store.create(row, choice.folders, snapshot.revision)
             const id = typeof created === 'string' ? created : created?.id
             const warning = typeof created === 'object' ? created.refreshError : undefined

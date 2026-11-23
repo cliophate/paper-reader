@@ -1,7 +1,8 @@
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { Parser } from 'htmlparser2'
 import { parseFeed, feedUrl, FEED_LIMITS } from './feed-parser.js'
-import { SubscriptionInputError, portableUrl, subscriptionUrl } from './opml.js'
+import { SubscriptionInputError } from './opml.js'
+import { subscriptionUrl } from './subscription-url.js'
 import type { DiscoveryCandidate, DiscoveryResult } from '../shared/subscription-tools.js'
 
 export interface DiscoveryDocument { body: string; responseUrl: string; contentType: string }
@@ -17,8 +18,8 @@ export function parseDiscoveryDocument({ body, responseUrl, contentType }: Disco
   if (!/html/i.test(contentType) && !/^\s*(?:<!doctype\s+html|<html[\s>])/i.test(body)) {
     try {
       const parsed = parseFeed(body, responseUrl)
-      // Subscribe through the public redirect when the final URL needs a signature.
-      const url = finalUrl !== safeResponseUrl && requestedUrl ? requestedUrl : safeResponseUrl
+      // Keep the submitted endpoint when either side of a redirect needs a signature.
+      const url = requestedUrl && (requestedUrl !== displayFeedUrl(requestedUrl) || finalUrl !== safeResponseUrl) ? requestedUrl : finalUrl
       return { responseUrl: safeResponseUrl, candidates: [{ url, title: displayFeedTitle(parsed.title) || safeResponseUrl, format: parsed.format }] }
     } catch {
       // An XML document must parse as a feed. Do not reinterpret malformed XML
@@ -52,16 +53,16 @@ export function parseDiscoveryDocument({ body, responseUrl, contentType }: Disco
   parser.write(body); parser.end()
   const candidates: DiscoveryCandidate[] = []
   for (const link of links) {
-    const url = portableUrl(feedUrl(link.href, base))
+    const url = subscriptionUrl(feedUrl(link.href, base))
     if (!url || candidates.some(candidate => candidate.url === url)) continue
     if (candidates.length >= 100) throw new SubscriptionInputError('The page advertises more than 100 feeds. Use a feed URL directly.')
-    candidates.push({ url, title: displayFeedTitle(link.title || title.trim()) || url, format: link.format })
+    candidates.push({ url, title: displayFeedTitle(link.title || title.trim()) || displayFeedUrl(url), format: link.format })
   }
   return { responseUrl: safeResponseUrl, candidates }
 }
 
 export async function discoverFeeds(url: string, transport: DiscoveryTransport, signal?: AbortSignal): Promise<DiscoveryResult> {
-  const safe = portableUrl(url)
+  const safe = subscriptionUrl(url)
   if (!safe) throw new SubscriptionInputError('Enter a complete website or feed URL without credentials.')
   signal?.throwIfAborted()
   const document = await transport(safe, signal)

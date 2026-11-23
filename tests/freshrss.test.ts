@@ -177,11 +177,12 @@ describe('FreshRSS transport', () => {
     vi.stubGlobal('fetch', fetchMock)
     const client = new FreshRssClient({ baseUrl: 'http://freshrss', username: 'clio', apiPassword: 'secret' })
 
-    await client.addFeed('https://example.com/feed.xml', 'Example feed', 'AI')
+    const feedUrl = 'https://example.test/feed.xml?token=synthetic-member'
+    await client.addFeed(feedUrl, 'Example feed', 'AI')
 
     expect(fetchMock).toHaveBeenCalledTimes(4)
     expect(String(fetchMock.mock.calls[1][0])).toContain('/reader/api/0/subscription/quickadd')
-    expect(String(fetchMock.mock.calls[1][1]?.body)).toBe('quickadd=https%3A%2F%2Fexample.com%2Ffeed.xml')
+    expect(fetchMock.mock.calls[1][1]?.body.get('quickadd')).toBe(feedUrl)
     expect(String(fetchMock.mock.calls[3][0])).toContain('/reader/api/0/subscription/edit')
     expect(String(fetchMock.mock.calls[3][1]?.body)).toContain('s=feed%2F42')
     expect(String(fetchMock.mock.calls[3][1]?.body)).toContain('t=Example+feed')
