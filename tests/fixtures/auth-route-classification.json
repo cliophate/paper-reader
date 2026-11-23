@@ -86,6 +86,8 @@
   "POST /api/notes": "session",
   "POST /api/organization/commands": "session",
   "POST /api/playback": "session",
+  "POST /api/pulse/briefing-settings": "session",
+  "POST /api/pulse/choice": "session",
   "POST /api/pulse/feedback": "session",
   "POST /api/pulse/visit": "session",
   "POST /api/reading": "session",

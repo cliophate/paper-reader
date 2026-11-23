@@ -28,7 +28,11 @@ export interface PulseCatchUp {
   background: PulseSummaryLine[]
 }
 
+export type StoryChoice = { kind: 'follow' | 'mute' } | { kind: 'snooze'; until: number }
+export type SavedStoryChoice = { id: string; headline: string; choice: StoryChoice }
+
 export interface PulseCollection {
+  followed?: boolean
   linkNumber?: number
   id: string
   headline: string
@@ -53,6 +57,8 @@ export interface PulseCollection {
 }
 
 export interface PulsePayload {
+  storyChoices?: SavedStoryChoice[]
+  useStoryChoicesInBriefings?: boolean
   collections: PulseCollection[]
   collectionAliases?: Array<{ id: string; linkNumber?: number; targetId: string }>
   revision: string

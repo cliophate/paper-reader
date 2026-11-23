@@ -1,3 +1,4 @@
+import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -301,7 +302,7 @@ it('backs up the previous schema before installing the queue', () => {
   db.greaderDatabase.exec(`DROP TRIGGER webhook_arrival; DROP TRIGGER webhook_star; DROP VIEW webhook_intake; DROP VIEW webhook_capacity;
     DROP TABLE webhook_deliveries; DROP TABLE webhook_targets; PRAGMA user_version=${WEBHOOK_SCHEMA_VERSION - 1}`)
   db.close(); db = new PaperDatabase(path.join(dir, 'paper.sqlite'))
-  expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(WEBHOOK_SCHEMA_VERSION)
+  expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
   const filename = path.join(dir, `paper.sqlite.before-webhooks-v${WEBHOOK_SCHEMA_VERSION}`)
   expect(fs.statSync(filename).mode & 0o777).toBe(0o600)
   const backup = new DatabaseSync(filename, { readOnly: true })

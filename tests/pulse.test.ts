@@ -1,9 +1,11 @@
 import fs from 'node:fs'
 import os from 'node:os'
+import { DatabaseSync } from 'node:sqlite'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db'
 import { DATABASE_VERSION } from '../src/server/auth-schema'
+import { STORY_CHOICES_VERSION } from '../src/server/pulse-schema.js'
 import { PulseService as RealPulseService, type PulseModel, reviewPulseGroups, duplicatePulseArticle, pulseExtract, validatePulseGroups, validatePulseBatch, shortPulseReferences, comparePulseCollections } from '../src/server/pulse'
 import { PULSE_CATCH_UP_PROMPT, validatePulseCatchUp } from '../src/server/pulse-catch-up'
 import { TopicService } from '../src/server/topics'
@@ -654,5 +656,171 @@ describe('Pulse membership quality', () => {
     expect(groups[0]).toMatchObject({ collectionId: 'collection-one', articleCount: 1, publicationCount: 1 })
     expect(groups[0].sources.map(source => source.id)).toEqual(['3'])
     expect(groups[0].backgroundSources?.map(source => source.id).sort()).toEqual(['1', '2'])
+  })
+})
+
+describe('manual story choices', () => {
+  it('restores v26 visits from the pre-v27 backup', () => {
+    save(['1', '2', '3'].map(id => article(id)))
+    db.visitPulseCollection('collection-one', 1)
+    db.greaderDatabase.exec('DROP TABLE pulse_story_choices; DROP TABLE pulse_merge_choices; PRAGMA user_version = 26')
+    db.close()
+    const file = path.join(directory, 'paper.sqlite')
+    db = new PaperDatabase(file)
+    const backup = `${file}.before-story-choices-v${STORY_CHOICES_VERSION}`
+    expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
+    expect(new PulseService(db, vi.fn(), false).list()).toMatchObject({
+      collections: [{ newCount: 2, followed: false }], storyChoices: [], useStoryChoicesInBriefings: false,
+    })
+    db.visitPulseCollection('collection-one', 3)
+    db.close()
+    fs.copyFileSync(backup, file)
+    const restored = new DatabaseSync(file, { readOnly: true })
+    try {
+      expect(restored.prepare('PRAGMA user_version').get()?.user_version).toBe(26)
+      expect(restored.prepare('SELECT seen_through FROM pulse_visits WHERE collection_id = ?').get('collection-one')?.seen_through).toBe(1)
+    } finally { restored.close(); db = new PaperDatabase(file) }
+  })
+
+  it.each([21, 22])('preserves choices and restores missing feed migrations from Pulse preview v%i', version => {
+    save(['1', '2', '3'].map(id => article(id)))
+    db.setStoryChoice('collection-one', { kind: 'follow' })
+    if (version === 21) db.greaderDatabase.exec('ALTER TABLE pulse_story_choices DROP COLUMN orphaned_since; ALTER TABLE feed_fetch_state DROP COLUMN redirects_json')
+    db.greaderDatabase.exec(`DROP TABLE feed_overrides; PRAGMA user_version = ${version}`)
+    db.close()
+    db = new PaperDatabase(path.join(directory, 'paper.sqlite'))
+    expect(db.greaderDatabase.prepare("SELECT name FROM sqlite_schema WHERE name = 'feed_overrides'").get()).toBeDefined()
+    expect(db.greaderDatabase.prepare("SELECT name FROM pragma_table_info('feed_fetch_state') WHERE name = 'redirects_json'").get()).toBeDefined()
+    expect(new PulseService(db, vi.fn(), false).list().collections[0].followed).toBe(true)
+    expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(STORY_CHOICES_VERSION)
+  })
+
+  it('keeps visits and feed state through a mute, a snooze, new arrivals and expiry with grouping paused', () => {
+    save(['1', '2', '3'].map(id => article(id)))
+    const pulse = new PulseService(db, vi.fn(), false, () => now)
+    pulse.visit('collection-one', 2)
+    pulse.setChoice('collection-one', 'mute')
+    const muted = pulse.list()
+    expect(muted.collections).toEqual([])
+    expect(muted.storyChoices).toMatchObject([{ id: 'collection-one', choice: { kind: 'mute' } }])
+    save([article('4')])
+    expect(pulse.list().revision).toBe(muted.revision)
+    expect(db.localEntriesPage({ kind: 'all', id: 'all', title: 'All' }, { unreadOnly: true }).items).toHaveLength(4)
+    expect(() => pulse.setChoice('collection-one', 'snooze', now)).toThrow('future')
+    pulse.setChoice('collection-one', 'snooze', now + DAY)
+    db.close(); db = new PaperDatabase(path.join(directory, 'paper.sqlite'))
+    const restarted = new PulseService(db, vi.fn(), false, () => now)
+    expect(restarted.list().collections).toEqual([])
+    now += DAY
+    expect(restarted.list().storyChoices).toEqual([])
+    expect(restarted.list().collections[0]).toMatchObject({ articleCount: 4, unreadCount: 4, newCount: 2 })
+    restarted.setChoice('collection-one', 'follow')
+    now += 8 * DAY
+    expect(restarted.list().collections[0]).toMatchObject({ followed: true, active: false })
+    restarted.setChoice('collection-one', 'clear')
+    expect(restarted.list().collections[0]).toMatchObject({ followed: false, archived: true })
+  })
+
+  it('matches fresh coverage to an empty muted story and omits empty choices from Settings', async () => {
+    save(['1', '2', '3'].map(id => article(id)))
+    const model: PulseModel = async (_prompt, input) => {
+      const { collections, articles } = input as { collections: Array<{ title: string; scope: string; recentTitles: string[] }>; articles: Entry[] }
+      expect(collections).toMatchObject([{ title: 'Orion 9', scope: 'The Orion 9 release and its features.', recentTitles: [] }])
+      const matching = proposal(articles)
+      matching.groups[0].scope = ' THE ORION 9 RELEASE and its features. '
+      return matching
+    }
+    const pulse = new PulseService(db, model, true, () => now)
+    pulse.setChoice('collection-one', 'mute')
+    for (const entryId of ['1', '2', '3']) pulse.feedback({ action: 'not_same', clusterId: 'collection-one', entryId })
+    expect(pulse.list().storyChoices).toEqual([])
+    db.upsertEntries([article('4')])
+    await pulse.refresh()
+    expect(db.pulseCollectionIds()).toEqual(['collection-one'])
+    expect(pulse.list()).toMatchObject({ collections: [], storyChoices: [{ id: 'collection-one', choice: { kind: 'mute' } }] })
+  })
+
+  it.each(['', 'c1'])('keeps a mute orphaned when the proposed scope changes (collection ID "%s")', async collectionId => {
+    save(['1', '2', '3'].map(id => article(id)))
+    const scope = 'Recovery of the Orion 9 landing capsule.'
+    const model: PulseModel = async (_prompt, input) => {
+      const group = proposal((input as { articles: Entry[] }).articles, collectionId, ' ORION 9 ')
+      group.groups[0].scope = scope
+      return group
+    }
+    const pulse = new PulseService(db, model, true, () => now)
+    pulse.setChoice('collection-one', 'mute')
+    for (const entryId of ['1', '2', '3']) pulse.feedback({ action: 'not_same', clusterId: 'collection-one', entryId })
+    db.upsertEntries(['4', '5', '6'].map(id => article(id)))
+    await pulse.refresh()
+    expect(pulse.list()).toMatchObject({ collections: [{ scope, articleCount: 3 }], storyChoices: [] })
+    expect(pulse.list().collections[0].id).not.toBe('collection-one')
+    expect(db.storyChoices(now)).toMatchObject([{ id: 'collection-one', choice: { kind: 'mute' } }])
+  })
+
+  it('prunes choices after 30 days empty, including while grouping is paused', () => {
+    for (const id of ['empty', 'revived', 'visible']) save(['1', '2', '3'].map(n => article(id + n)), id)
+    const pulse = new PulseService(db, vi.fn(), false, () => now)
+    for (const id of ['empty', 'revived', 'visible']) pulse.setChoice(id, 'mute')
+    for (const id of ['empty', 'revived']) {
+      for (const n of ['1', '2', '3']) pulse.feedback({ action: 'not_same', clusterId: id, entryId: id + n })
+    }
+    const sweep = () => { pulse.start(); pulse.stop() }
+    sweep()
+    now += 30 * DAY - 1
+    save([article('4')], 'revived')
+    sweep()
+    expect(db.storyChoices(now).map(choice => choice.id)).toEqual(['empty', 'revived', 'visible'])
+    pulse.feedback({ action: 'not_same', clusterId: 'revived', entryId: '4' })
+    now++
+    sweep()
+    expect(db.storyChoices(now).map(choice => choice.id)).toEqual(['revived', 'visible'])
+    expect(db.pulseCollectionIds()).toContain('empty')
+    now += 30 * DAY
+    sweep()
+    expect(db.storyChoices(now).map(choice => choice.id)).toEqual(['visible'])
+  })
+
+  it.each(['feedback', 'list'])('counts downtime from the first empty %s observation', observation => {
+    save(['1', '2', '3'].map(id => article(id)))
+    const pulse = new PulseService(db, vi.fn(), false, () => now)
+    pulse.setChoice('collection-one', 'mute')
+    now += DAY
+    if (observation === 'feedback') {
+      for (const entryId of ['1', '2', '3']) pulse.feedback({ action: 'not_same', clusterId: 'collection-one', entryId })
+    } else {
+      db.greaderDatabase.prepare('DELETE FROM pulse_memberships WHERE collection_id = ?').run('collection-one')
+      expect(pulse.list().storyChoices).toEqual([])
+    }
+    db.close()
+    now += 30 * DAY - 1
+    db = new PaperDatabase(path.join(directory, 'paper.sqlite'))
+    const restarted = new PulseService(db, vi.fn(), false, () => now)
+    restarted.start()
+    restarted.stop()
+    expect(db.storyChoices(now)).toHaveLength(1)
+    now++
+    restarted.start()
+    restarted.stop()
+    expect(db.storyChoices(now)).toEqual([])
+  })
+
+  it('restores only the absorbed choice when chained merges are undone out of order', () => {
+    for (const key of ['a', 'b', 'c']) save(['1', '2', '3'].map(id => article(key + id)), key)
+    const pulse = new PulseService(db, vi.fn(), false, () => now)
+    pulse.setChoice('a', 'mute')
+    const first = pulse.feedback({ action: 'merge', clusterId: 'a', targetClusterId: 'b' })
+    expect(pulse.list().storyChoices).toMatchObject([{ id: 'b', choice: { kind: 'mute' } }])
+    pulse.setChoice('b', 'follow')
+    const second = pulse.feedback({ action: 'merge', clusterId: 'b', targetClusterId: 'c' })
+    pulse.setChoice('c', 'snooze', now + DAY)
+    pulse.removeFeedback(first.id)
+    expect(pulse.list().storyChoices).toMatchObject([{ id: 'a', choice: { kind: 'mute' } }, { id: 'c', choice: { kind: 'snooze' } }])
+    pulse.removeFeedback(second.id)
+    expect(pulse.list().storyChoices).toEqual([
+      { id: 'a', headline: 'Orion 9', choice: { kind: 'mute' } },
+      { id: 'b', headline: 'Orion 9', choice: { kind: 'follow' } },
+      { id: 'c', headline: 'Orion 9', choice: { kind: 'snooze', until: now + DAY } },
+    ])
   })
 })

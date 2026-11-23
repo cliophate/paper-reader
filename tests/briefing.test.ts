@@ -1,8 +1,37 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { JSDOM } from 'jsdom'
 import { briefingNeedsFullText, clusterNews, newsImageFitsHeadline, proposedNewsClusters, shouldLimitBriefingToUnread, splitBriefingCandidates, validateSelection } from '../src/server/briefing.js'
 import { renderBriefing } from '../src/server/email.js'
 import type { BriefingSelection, Entry } from '../src/server/types.js'
+import { switchingEntrySource } from '../src/server/repository.js'
+
+it('pages remote briefing streams past muted and ordinary entries to include followed stories before the cap', async () => {
+  const stream = { kind: 'all' as const, id: 'all', title: 'All' }
+  const items = Array.from({ length: 2101 }, (_, index) => entry(String(index), 'Fixture', 'https://example.test'))
+  const remote = {
+    entries: async () => items.slice(0, 1000),
+    entriesPage: vi.fn(async (_stream: typeof stream, options?: { continuation?: string; limit?: number }) => {
+      const offset = Number(options?.continuation || 0)
+      const end = offset + (options?.limit || 250)
+      return { items: items.slice(offset, end), continuation: end < items.length ? String(end) : '' }
+    }),
+    navigation: async () => ({ folders: [], uncategorized: [], starred: 0, unread: 0 }),
+    entry: async () => null, entryIds: async () => [],
+  }
+  const source = switchingEntrySource(() => false, remote, remote)
+  const options = { before: new Date(), limit: 1000, unreadOnly: true }
+  const picked = await source.briefingEntries!(stream, { ...options, muted: new Set(items.slice(0, 100).map(item => item.id)), followed: new Set(['1200']) })
+  expect(picked.map(item => item.id)).toEqual(['1200', ...items.slice(100, 1099).map(item => item.id)])
+  remote.entriesPage.mockClear()
+  await source.briefingEntries!(stream, { ...options, followed: new Set(['already-read']) })
+  expect(remote.entriesPage).toHaveBeenCalledTimes(5)
+  remote.entriesPage.mockClear()
+  await source.briefingEntries!(stream, { ...options, followed: new Set(['10']) })
+  expect(remote.entriesPage).toHaveBeenCalledTimes(4)
+  remote.entriesPage.mockClear()
+  expect(await source.briefingEntries!(stream, options)).toEqual(items.slice(0, 1000))
+  expect(remote.entriesPage).not.toHaveBeenCalled()
+})
 
 function entry(id: string, title: string, url: string): Entry {
   return {

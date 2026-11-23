@@ -27,17 +27,19 @@ import { migrateSearchRows } from './search-schema.js'
 import { migrateLinkNumbers } from './link-numbers.js'
 import { migrateBackendKinds } from './backend-schema.js'
 import { FeedIconStore, migrateFeedIcons } from './feed-icon-store.js'
-import { migratePulseCatchUps } from './pulse-schema.js'
+import { migratePulseCatchUps, migrateStoryChoices, STORY_CHOICES_VERSION } from './pulse-schema.js'
 import { WebhookStore, WEBHOOK_SCHEMA_VERSION, migrateWebhooks } from './webhook-store.js'
 import { BriefingDeliveryStore, migrateBriefingDelivery } from './briefing-delivery-store.js'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES, MINIFLUX_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
-import type { EntryStateOperation } from './backend.js'
+import type { BriefingEntryOptions, EntryStateOperation } from './backend.js'
 import { decodeHtmlText, excerpt, plainText, readingMinutes } from './text.js'
 import { indexedSearchText, type BriefingSelection, type Entry, type Feed, type Folder, type NavigationPayload, type StreamRef } from './types.js'
 import type { Topic } from './topics.js'
 import { publicationDomain, qualifiesForNewCollection, sourceDomain } from './pulse-rules.js'
-import type { PulseCatchUp, PulseSource } from '../shared/pulse.js'
+import type { PulseCatchUp, PulseSource, StoryChoice, SavedStoryChoice } from '../shared/pulse.js'
 import type { Discussion } from '../shared/discussion.js'
+
+const ORPHANED_STORY_CHOICE_TTL_MS = 30 * 86_400_000
 
 export interface BriefingRecord {
   id: string
@@ -247,7 +249,7 @@ export class PaperDatabase {
           if (version > 0) this.backupBeforeMigration(20, 'briefing-delivery')
           migrateBriefingDelivery(this.db)
         }
-        // Pre-release preferences used v21 and v22 before these feed migrations landed.
+        // Pre-release preferences and Pulse choices used v21 and v22 before these feed migrations landed.
         if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < FEED_MAINTENANCE_VERSION
           || (version === FEED_MAINTENANCE_VERSION && !this.db.prepare("SELECT 1 FROM pragma_table_info('feed_fetch_state') WHERE name = 'redirects_json'").get())) {
           if (version > 0) this.backupBeforeMigration(FEED_MAINTENANCE_VERSION, 'feed-maintenance')
@@ -273,6 +275,10 @@ export class PaperDatabase {
         if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < WEBHOOK_SCHEMA_VERSION) {
           if (version > 0) this.backupBeforeMigration(WEBHOOK_SCHEMA_VERSION, 'webhooks')
           migrateWebhooks(this.db)
+        }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < STORY_CHOICES_VERSION) {
+          if (version > 0) this.backupBeforeMigration(STORY_CHOICES_VERSION, 'story-choices')
+          migrateStoryChoices(this.db)
         }
       }
       this.db.function('checked_url_match', { directOnly: true }, matched => {
@@ -1100,7 +1106,7 @@ export class PaperDatabase {
     return rows.map(row => this.numberEntry(entryFromRow(row)))
   }
 
-  briefingEntries(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; before: Date }): Entry[] {
+  briefingEntries(stream: StreamRef, options: BriefingEntryOptions): Entry[] {
     const cutoff = options.before.getTime()
     const clauses = ["entries.timestamp < ?", "entries.first_seen_at <= ?",
       "MAX(entries.timestamp, entries.first_seen_at) >= ?", visibleEntryClause('entries'),
@@ -1112,8 +1118,14 @@ export class PaperDatabase {
       clauses.push('EXISTS (SELECT 1 FROM feed_folders WHERE feed_folders.feed_id = entries.feed_id AND feed_folders.folder_id = ?)')
       parameters.push(stream.id)
     }
+    if (options.muted?.size) {
+      clauses.push('entries.id NOT IN (SELECT value FROM json_each(?))')
+      parameters.push(JSON.stringify([...options.muted]))
+    }
+    const priority = options.followed?.size ? '(entries.id IN (SELECT value FROM json_each(?))) DESC,' : ''
+    if (options.followed?.size) parameters.push(JSON.stringify([...options.followed]))
     const rows = this.db.prepare(`SELECT entries.* FROM entries LEFT JOIN briefing_considered ON briefing_considered.entry_id = entries.id
-      WHERE ${clauses.join(' AND ')} ORDER BY COALESCE(briefing_considered.considered_at, 0), MAX(entries.timestamp, entries.first_seen_at) DESC, entries.id
+      WHERE ${clauses.join(' AND ')} ORDER BY ${priority} COALESCE(briefing_considered.considered_at, 0), MAX(entries.timestamp, entries.first_seen_at) DESC, entries.id
       LIMIT ?`).all(...parameters, options.limit || 1000) as Array<Record<string, string | number>>
     return rows.map(row => this.numberEntry(entryFromRow(row)))
   }
@@ -1165,6 +1177,10 @@ export class PaperDatabase {
     } catch (error) { this.db.exec('ROLLBACK'); throw error }
   }
 
+  pulseCollectionIds() {
+    return this.db.prepare('SELECT id FROM pulse_collections').all().map(row => String(row.id))
+  }
+
   pulseCollections() {
     const rows = this.db.prepare(`SELECT pulse_memberships.collection_id, pulse_memberships.sequence,
       pulse_memberships.added_at, pulse_memberships.development, article_arrivals.sequence AS link_number, entries.id, entries.feed_id,
@@ -1196,6 +1212,63 @@ export class PaperDatabase {
         articleCount: members.length, sources: members.map(source => ({ ...source, isNew: source.sequence > Number(row.seen_through) })) }
     })
   }
+
+  storyChoices(now: number): SavedStoryChoice[] {
+    return this.db.prepare(`SELECT c.id, c.headline, p.kind, p.until_ms FROM pulse_story_choices p
+      JOIN pulse_collections c ON c.id = p.collection_id
+      WHERE p.until_ms IS NULL OR p.until_ms > ? ORDER BY c.headline, c.id`).all(now).map(row => ({
+      id: String(row.id), headline: String(row.headline), choice: row.kind === 'snooze'
+        ? { kind: 'snooze', until: Number(row.until_ms) } : { kind: row.kind as 'follow' | 'mute' },
+    }))
+  }
+
+  setStoryChoice(id: string, choice: StoryChoice | null) {
+    if (choice) {
+      this.db.prepare(`INSERT INTO pulse_story_choices(collection_id, kind, until_ms) VALUES (?, ?, ?)
+        ON CONFLICT(collection_id) DO UPDATE SET kind = excluded.kind, until_ms = excluded.until_ms`)
+        .run(id, choice.kind, choice.kind === 'snooze' ? choice.until : null)
+    } else {
+      this.db.prepare('DELETE FROM pulse_story_choices WHERE collection_id = ?').run(id)
+    }
+  }
+
+  storyChoicesToCheck(visible?: ReadonlySet<string>): string[] {
+    return this.db.prepare('SELECT collection_id, orphaned_since FROM pulse_story_choices').all()
+      .filter(row => row.orphaned_since !== null || !visible?.has(String(row.collection_id)))
+      .map(row => String(row.collection_id))
+  }
+
+  pruneOrphanedStoryChoices(now: number, stories: Map<string, { originals: string[]; removed: string[] }>) {
+    const hasSource = this.db.prepare(`SELECT 1 FROM pulse_memberships m
+      WHERE m.collection_id IN (SELECT value FROM json_each(?))
+        AND m.entry_id NOT IN (SELECT value FROM json_each(?))
+        AND NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = m.entry_id) LIMIT 1`)
+    const mark = this.db.prepare('UPDATE pulse_story_choices SET orphaned_since = ? WHERE collection_id = ? AND orphaned_since IS NULL')
+    const clear = this.db.prepare('UPDATE pulse_story_choices SET orphaned_since = NULL WHERE collection_id = ? AND orphaned_since IS NOT NULL')
+    transaction(this.db, () => {
+      for (const [id, { originals, removed }] of stories) {
+        if (hasSource.get(JSON.stringify(originals), JSON.stringify(removed))) clear.run(id)
+        else mark.run(now, id)
+      }
+      this.db.prepare('DELETE FROM pulse_story_choices WHERE orphaned_since <= ?').run(now - ORPHANED_STORY_CHOICE_TTL_MS)
+    })
+  }
+
+  saveMergeChoice(feedbackId: string, id: string, choice: StoryChoice | null) {
+    this.db.prepare('INSERT OR REPLACE INTO pulse_merge_choices VALUES (?, ?)').run(feedbackId, JSON.stringify({ [id]: choice }))
+  }
+
+  absorbedStoryChoice(feedbackId: string): { id: string; choice: StoryChoice | null } | undefined {
+    const row = this.db.prepare(`SELECT cluster_id, choices_json FROM pulse_merge_choices
+      JOIN coverage_feedback ON coverage_feedback.id = feedback_id WHERE feedback_id = ?`).get(feedbackId)
+    if (row) {
+      const id = String(row.cluster_id)
+      return { id, choice: JSON.parse(String(row.choices_json))[id] }
+    }
+  }
+
+  get useStoryChoicesInBriefings() { return this.getSyncValue('briefing_story_choices') === 'true' }
+  set useStoryChoicesInBriefings(enabled: boolean) { this.setSyncValue('briefing_story_choices', String(enabled)) }
 
   pulseCatchUps() {
     return new Map(this.db.prepare('SELECT collection_id, revision, summary_json FROM pulse_catch_ups').all().map(row =>

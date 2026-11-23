@@ -129,6 +129,7 @@ Existing Codex configuration keeps working after an upgrade.
 Turning AI off stops new model requests and cancels active discussions. A batch
 request already running may finish. Disabled features do not start its next
 review or batch. Existing discussions, briefings and collections remain stored.
+You can still follow, mute or snooze a saved collection in Pulse.
 Model calls send article text to the selected provider. Grouping and headline
 cleanup can make background requests after synchronization and may incur charges.
 Choose models your account can access.
@@ -308,6 +309,12 @@ Enter the SMTP username and password if the relay requires authentication.
 Enter a sender, either an address or a name and address such as
 `Paper <briefings@example.com>`, and one recipient address. **Send test email** sends
 to the recipient using the form values and reports the SMTP status.
+
+To give followed stories priority and skip muted articles in future editions,
+turn on the briefing option in **Pulse settings**. It starts off and applies
+to scheduled editions, manual generation and the briefing CLI.
+With this option on, a remote briefing can prioritize a followed article from
+the next 250 entries beyond its usual first 1,000 candidates.
 
 Choose morning and evening times. The schedule uses Paper's `TZ` and runs once
 per edition and local date. If clocks jump forward over a scheduled time, Paper

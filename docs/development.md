@@ -106,6 +106,21 @@ files. Start the previous build against that copy. Changes made after the
 backup stay in the preserved directory. See [webhook delivery](webhooks.md)
 for receiver setup and retry behavior.
 
+Schema v27 adds Pulse story choices. The migration saves
+`paper.sqlite.before-story-choices-v27` before upgrading. Choices use the
+original collection IDs. Undo restores the absorbed story's pre-merge choice.
+The destination keeps its current choice. Pulse drops a choice after its
+collection has been empty for 30 days. A new group can reuse an empty saved
+story when its normalized title and scope both match.
+Snoozes expire when Pulse reads the choices.
+
+To roll back v27, stop Paper and copy the current `paper.sqlite` and any
+`paper.sqlite-wal` and `paper.sqlite-shm` files to a separate directory.
+Restore `paper.sqlite.before-story-choices-v27` over `paper.sqlite`, remove
+any stale `paper.sqlite-wal` and `paper.sqlite-shm` from the data directory,
+then start the previous release. Restoring `paper.sqlite.before-feed-maintenance-v21`
+instead discards everything saved since the v21 upgrade.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh

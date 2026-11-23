@@ -38,6 +38,62 @@ describe('Pulse visit and update interface', () => {
     expect(acknowledgePulseVisit(incoming.collections[0], 2)).toMatchObject({ newCount: 1, unreadCount: 2 })
   })
 
+  it('ranks a waking story among cards present in both lists during a visit', () => {
+    const [removed, a, b, waking, unseen] = ['removed', 'a', 'b', 'waking', 'unseen'].map(id => collection(id, [source(id, 1)]))
+    const current: PulsePayload = { ...payload([removed, a, b]),
+      storyChoices: [{ id: waking.id, headline: waking.headline, choice: { kind: 'snooze', until: Date.now() } }] }
+    const next = refreshPulseState(current, payload([unseen, b, waking, a]), removed.id)
+    expect(next.collections.map(card => card.id)).toEqual(['removed', 'a', 'waking', 'b'])
+  })
+
+  it('pins a quiet followed story above active stories and restores a waking story during an open visit', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    const active = collection('active', [source('1', 1), source('2', 2), source('3', 3)])
+    const quiet = { ...collection('old', [source('old', 1)]), active: false, archived: true, followed: true }
+    const others = Array.from({ length: 25 }, (_, index) => ({ ...active, id: `other-${index}`, headline: `Other ${index}` }))
+    let latest: PulsePayload = { ...payload([active, ...others, quiet]), storyChoices: [{ id: 'waking', headline: 'Waking', choice: { kind: 'snooze', until: Date.now() + 60_000 } }] }
+    vi.spyOn(api, 'pulse').mockImplementation(async () => latest)
+    vi.spyOn(api, 'visitPulse').mockResolvedValue({ ok: true })
+    const container = document.createElement('div'); document.body.append(container); root = createRoot(container)
+    const notify = vi.fn()
+    const render = (refreshKey: number) => <TopicsLibrary onCollectionChange={() => {}} refreshKey={refreshKey} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={notify} />
+    await act(async () => root!.render(render(0)))
+    expect([...container.querySelectorAll('.pulse-title')].slice(0, 2).map(node => node.textContent)).toEqual(['Collection old', 'Collection active'])
+    expect(container.querySelector('.pulse-following-badge')?.textContent).toContain('Quiet')
+    await act(async () => button(container, 'Other 23').click())
+    const waking = { ...active, id: 'waking', headline: 'Waking', newCount: active.newCount + 1 }
+    latest = { ...payload([others[0], waking, active, ...others.slice(1), quiet], 'two'), storyChoices: [] }
+    await act(async () => root!.render(render(1)))
+    expect([...container.querySelectorAll('.pulse-title')].slice(0, 4).map(node => node.textContent))
+      .toEqual(['Collection old', 'Collection active', 'Waking', 'Other 0'])
+    expect(button(container, 'Other 23').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('keeps the displayed lead and inserts a waking story at its rank when every card is collapsed', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    vi.useFakeTimers()
+    try {
+      const sources = [source('1', 1), source('2', 2), source('3', 3)]
+      const alpha = collection('Alpha', [...sources, source('4', 4)])
+      const beta = collection('Beta', sources)
+      const waking = collection('Waking', [...alpha.sources, source('5', 5)])
+      const until = Date.now() + 1000
+      const apiPulse = vi.spyOn(api, 'pulse')
+        .mockResolvedValueOnce({ ...payload([beta, alpha]), storyChoices: [{ id: waking.id, headline: waking.headline, choice: { kind: 'snooze', until } }] })
+        .mockResolvedValue({ ...payload([beta, waking, alpha], 'two'), storyChoices: [] })
+      const container = document.createElement('div')
+      document.body.append(container)
+      root = createRoot(container)
+      const titles = () => [...container.querySelectorAll('.pulse-title[aria-expanded="false"]')].map(node => node.textContent)
+      await act(async () => root!.render(<TopicsLibrary onCollectionChange={() => {}} refreshKey={0} onBack={() => {}} onOpenEntry={() => {}} onMarkRead={vi.fn()} notify={() => {}} />))
+      expect(titles()).toEqual([alpha.headline, beta.headline])
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+      expect(apiPulse).toHaveBeenCalledTimes(2)
+      expect(titles()).toEqual([alpha.headline, waking.headline, beta.headline])
+      expect(container.querySelector('.pulse-lead .pulse-title')?.textContent).toBe(alpha.headline)
+    } finally { vi.useRealTimers() }
+  })
+
   it('keeps a collection snapshot open, acknowledges only its displayed revision and loads changes on request', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
     let latest = payload([collection('one', [{ ...source('1', 1), stateRevision: 4 }, source('2', 2, true), { ...source('3', 3), stateRevision: 6 }])])
