@@ -177,10 +177,13 @@ it('limits batch sizes and deletes finished history by age and count', async () 
   expect(requests.length).toBeGreaterThan(1)
   expect(requests.every(r => Buffer.byteLength(r.body) <= 65536)).toBe(true)
   expect(requests.flatMap(r => JSON.parse(r.body).entries)).toHaveLength(160)
-  for (let i = 0; i < 501; i++) {
-    hooks.test(target.id)
-    db.greaderDatabase.exec("UPDATE webhook_deliveries SET state='delivered' WHERE state='pending'")
-  }
+  db.greaderDatabase.prepare(`
+    WITH RECURSIVE history(n) AS (
+      VALUES (1) UNION ALL SELECT n + 1 FROM history WHERE n < 501
+    )
+    INSERT INTO webhook_deliveries(target_id,event,entries,state)
+    SELECT ?, 'test', '[]', 'delivered' FROM history
+  `).run(target.id)
   db.webhooks.prune(Date.now())
   expect(db.greaderDatabase.prepare('SELECT count(*) AS count FROM webhook_deliveries').get()?.count).toBe(500)
   hooks.test(target.id)
