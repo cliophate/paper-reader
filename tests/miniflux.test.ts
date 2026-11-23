@@ -266,7 +266,7 @@ describe('Miniflux state and subscriptions', () => {
 describe('native change synchronization', () => {
   it('sends a rule PUT once when Miniflux applies it but the response is lost', async () => {
     const synchronizer = sync()
-    database!.rules.save({ query: 'title:"Synthetic article 2"', actions: ['star'] })
+    await database!.rules.save({ query: 'title:"Synthetic article 2"', actions: ['star'] })
     vi.mocked(fetch).mockImplementation(async (url, options) => {
       const response = await fixture.fetch(url, options)
       if (options?.method === 'PUT') throw new Error('Synthetic lost acknowledgement')
@@ -284,7 +284,7 @@ describe('native change synchronization', () => {
 
   it('writes rule actions through the native API once per imported article', async () => {
     const synchronizer = sync()
-    database!.rules.save({ query: 'title:"Synthetic article 2" is:unread', actions: ['read', 'star', 'hide'] })
+    await database!.rules.save({ query: 'title:"Synthetic article 2" is:unread', actions: ['read', 'star', 'hide'] })
     await synchronizer.syncNow()
     await synchronizer.flushRuleState()
     expect(fixture.entries[1]).toMatchObject({ status: 'read', starred: true })
@@ -293,6 +293,16 @@ describe('native change synchronization', () => {
     await synchronizer.syncNow()
     expect(fixture.entries[1].starred).toBe(false)
     expect(database!.muteFilters()[0].matchCount).toBe(1)
+  })
+
+  it('hides regex matches without a Miniflux write', async () => {
+    const synchronizer = sync()
+    const rule = await database!.rules.save({ query: 'title~/^Synthetic article 2$/', actions: ['hide'] })
+    await synchronizer.syncNow()
+    await database!.rules.drainRegex()
+    await synchronizer.flushRuleState()
+    expect(database!.muteFilters(rule)[0].matchCount).toBe(1)
+    expect(fixture.calls.filter(call => call.method === 'PUT')).toEqual([])
   })
 
   it('revisits content-only edits in bounded pages and resumes the sweep after restart', async () => {

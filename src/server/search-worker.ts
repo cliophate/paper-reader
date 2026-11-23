@@ -1,7 +1,7 @@
 import { parentPort, workerData } from 'node:worker_threads'
 import { PaperDatabase, type PageOptions } from './db.js'
 import type { StreamRef } from './types.js'
-import { SearchLimitError } from './search-query.js'
+import { parseSearch, usesRegex, SearchLimitError } from './search-query.js'
 import type { BulkSelection } from './search-service.js'
 
 // The server already owns coordinated storage. Never initialize or migrate here.
@@ -20,6 +20,11 @@ port.on('message', async (message: { type: string; id: number; stream: StreamRef
           result = { ids: [], ...database.viewMatchCount(stream, options) }
           break
         case 'rule': {
+          const root = parseSearch(options.query || '', 'rule').root
+          if (usesRegex(root)) {
+            result = await database.rules.previewRegex(root)
+            break
+          }
           const ids = database.matchingEntryIds(stream, { ...options, includeMuted: true })
           result = { ids: ids.slice(0, 8), count: ids.length }
           break

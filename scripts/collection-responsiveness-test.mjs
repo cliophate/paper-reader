@@ -54,7 +54,7 @@ try {
   const feeds = Array.from({ length: feedCount }, (_, i) => db.saveLocalSubscription(backend.id, {
     title: `Synthetic feed ${i}`, url: `${origin}/feed-${i}.xml`,
   }))
-  db.rules.save({ query: 'collectionneedle title:synthetic', actions: ['star'] })
+  await db.rules.save({ query: 'collectionneedle title:synthetic', actions: ['star'] })
   db.close()
   const sql = new DatabaseSync(file)
   sql.exec('PRAGMA foreign_keys = ON; BEGIN')

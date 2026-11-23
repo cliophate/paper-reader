@@ -1,6 +1,8 @@
 // Shared with the search box. Keep parsing independent of storage and the clock.
 type TextField = 'title' | 'author' | 'feed'
+export type RegexTerm = { kind: 'regex'; field: '' | 'title' | 'author' | 'url' | 'text'; pattern: string; flags: string }
 export type SearchNode =
+  | RegexTerm
   | { kind: 'text'; field?: TextField; value: string; phrase: boolean }
   | { kind: 'folder' | 'url' | 'feedid' | 'folderid'; value: string }
   | { kind: 'state'; value: 'unread' | 'read' | 'starred' }
@@ -58,7 +60,17 @@ export function searchHint(input: string) {
   }
 }
 
-export function parseSearch(input: string): { root: SearchNode; hint?: string } {
+export const REGEX_RULE_HINT = 'Regex only works in hide rules'
+
+export const REGEX_ACTION_HINT = 'A regex rule can only hide articles. Select Hide as its only action.'
+
+export function usesRegex(node: SearchNode): boolean {
+  if (node.kind === 'not') return usesRegex(node.child)
+  if (node.kind === 'and' || node.kind === 'or') return node.children.some(usesRegex)
+  return node.kind === 'regex'
+}
+
+export function parseSearch(input: string, mode: 'search' | 'rule' | 'stored-literal-rule' = 'search'): { root: SearchNode; hint?: string } {
   checkSearchSize(input)
   const source = input.replaceAll('\0', '\ufffd').trim()
   const words = source ? source.split(/\s+/, 257) : []
@@ -70,7 +82,29 @@ export function parseSearch(input: string): { root: SearchNode; hint?: string } 
 
   const lex = /\s+|[()]|-|(?:feedid|folderid):"(?:[^"]|"")*"|(?:[a-zA-Z]+:)?"[^"]*"|(?:[a-zA-Z]+:)?"|[^\s()"]+/giy
   const tokens: string[] = []
-  for (const match of source.matchAll(lex)) {
+  const literal = /([a-z]+)?~\/((?:\\[^\n]|\[(?:\\[^\n]|[^\]\\\n])*\]|[^/\\[\n])*)\/([a-z]*)(?=\s|[()]|$)/iy
+  const regexTokens = new Map<string, RegexTerm>()
+  let offset = 0
+  while (offset < source.length) {
+    literal.lastIndex = lex.lastIndex = offset
+    const regex = mode !== 'stored-literal-rule' && literal.exec(source)
+    const match = regex || lex.exec(source)!
+    offset += match[0].length
+    if (regex) {
+      if (mode !== 'rule') throw new SearchLimitError(REGEX_RULE_HINT)
+      const field = (regex[1] || '').toLowerCase()
+      if (field !== '' && field !== 'title' && field !== 'author' && field !== 'url' && field !== 'text')
+        throw new SearchLimitError('Use title~, author~, url~, text~ or ~ before the pattern.')
+      const [, , pattern, flags] = regex
+      if (!pattern || pattern.length > 256) throw new SearchLimitError('Use 1 to 256 characters per regular expression.')
+      if (flags && flags !== 'i') throw new SearchLimitError('Use /i for case-insensitive matching or omit the flag.')
+      try { new RegExp(pattern, flags) }
+      catch { throw new SearchLimitError('Invalid regular expression. Check the pattern and try again.') }
+      regexTokens.set(match[0], { kind: 'regex', field, pattern, flags })
+    } else if (mode !== 'stored-literal-rule' && /^(?:[a-z]+)?~\//i.test(match[0])) {
+      if (mode !== 'rule') throw new SearchLimitError(REGEX_RULE_HINT)
+      throw new SearchLimitError('Close the regular expression with a slash or quote the literal term.')
+    }
     if (match[0].trim()) tokens.push(match[0])
     if (tokens.length > 256) throw new SearchLimitError('Use at most 256 search tokens.')
   }
@@ -84,6 +118,8 @@ export function parseSearch(input: string): { root: SearchNode; hint?: string } 
       if (tokens[index++] !== ')') throw new SearchSyntaxError('Missing closing parenthesis.')
       return node
     }
+    const regex = regexTokens.get(token)
+    if (regex) return regex
     const prefix = /^([a-z]+):(?!\/\/)/i.exec(token || '')
     const field = prefix?.[1].toLowerCase() || ''
     const raw = prefix ? token.slice(prefix[0].length) : token

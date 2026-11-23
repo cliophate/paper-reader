@@ -86,7 +86,7 @@ export class SearchService {
   private enqueue(stream: StreamRef, options: PageOptions, selection: undefined, signal?: AbortSignal): Promise<LocalEntryPage>
   private enqueue(stream: StreamRef, options: PageOptions, selection: BulkSelection, signal?: AbortSignal): Promise<SelectionResult>
   private async enqueue(stream: StreamRef, options: PageOptions, selection?: BulkSelection, signal?: AbortSignal): Promise<LocalEntryPage | SelectionResult> {
-    if (options.query) parseSearch(options.query)
+    if (options.query) parseSearch(options.query, selection?.kind === 'rule' ? 'rule' : 'search')
     if (this.closed) return Promise.reject(new SearchUnavailableError('Search is shutting down.'))
     if (signal?.aborted) return Promise.reject(new SearchUnavailableError('Search cancelled.'))
     const queue = selection?.kind === 'view-count' ? this.countQueue : this.queue

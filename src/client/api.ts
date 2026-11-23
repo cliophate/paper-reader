@@ -120,7 +120,7 @@ export const api = {
   },
   reconcileOffline: (edit: Extract<OfflineEdit, { kind: 'progress' }>) => request<OfflineReceipt>('/api/reading/offline', { method: 'POST', body: JSON.stringify(edit) }),
   saveProgress: (id: string, position: number) => request<{ ok: boolean }>('/api/reading', { method: 'POST', body: JSON.stringify({ id, position }), keepalive: true }),
-  previewRule: (query: string) => request<{ count: number; items: Array<Pick<Entry, 'id' | 'title' | 'feedTitle'>> }>('/api/rules/preview', { method: 'POST', body: JSON.stringify({ query }) }),
+  previewRule: (query: string) => request<{ count: number; capped?: boolean; items: Array<Pick<Entry, 'id' | 'title' | 'feedTitle'>> }>('/api/rules/preview', { method: 'POST', body: JSON.stringify({ query }) }),
   addRule: (query: string, actions: MuteFilter['actions'], targetId: string, applyExisting: boolean) =>
     request<MuteFilter>('/api/rules', { method: 'POST', body: JSON.stringify({ query, actions, targetId, applyExisting }) }),
   hiddenByRule: (id: string, after = '') => request<{ items: Array<Pick<Entry, 'id' | 'title'>>; next: string }>(

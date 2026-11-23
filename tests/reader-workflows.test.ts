@@ -1,3 +1,7 @@
+import { parseSearch } from '../src/server/search-query.js'
+import { Worker } from 'node:worker_threads'
+import * as regex from '../src/server/rule-regex.js'
+import { hasRegexRules, migrateRegexRules, REGEX_RULES_VERSION } from '../src/server/rule-regex.js'
 import { RULES_VERSION } from '../src/server/article-rules.js'
 import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import { ANNOTATIONS_PER_ARTICLE } from '../src/server/annotations'
@@ -374,7 +378,7 @@ it('caps annotations within each article and pages through notes without duplica
 
 it('yields between arrival batches and matches grouped FTS terms only on new rows', async () => {
   db.upsertEntries([article(0)])
-  const id = db.rules.save({ query: '(title:compos OR author:ada) -url:/99 is:unread', actions: ['hide'] })
+  const id = await db.rules.save({ query: '(title:compos OR author:ada) -url:/99 is:unread', actions: ['hide'] })
   const select = vi.spyOn(StatementSync.prototype, 'all')
   let midBatchCount = 0
   setImmediate(() => { midBatchCount = db.entryCount() })
@@ -410,4 +414,211 @@ it('upgrades literal hide rules without retokenizing their phrases or losing hid
   expect(db.muteFilters()).toMatchObject([{ id, actions: ['hide'], matching: false, matchCount: 1 }])
   db.upsertEntries([article(3, { title: 'midKELVINword' })])
   expect(db.rules.hidden(id, '').items.map(item => item.id)).toEqual(['1', '3'])
+})
+
+it('combines regex and ordinary terms in preview, archive scans and arrivals', async () => {
+  const query = '(title~/report (1|3)$/i OR ~/teaser/) NOT (is:read OR author~/^Lee$/)'
+  const entries = [article(1), article(2, { author: 'Lee' }), article(3, { read: true }), article(4)]
+  db.upsertEntries(entries)
+  expect(await db.rules.previewRegex(parseSearch(query, 'rule').root)).toMatchObject({ ids: ['4', '1'], count: 2 })
+  const id = await db.rules.save({ query, actions: ['hide'], applyExisting: true })
+  await db.backfillMuteFilters()
+  expect(db.rules.hidden(id, '').items.map(row => row.id)).toEqual(['1', '4'])
+  await db.upsertEntriesInChunks([article(5), article(6, { author: 'Lee' })])
+  await db.rules.drainRegex()
+  expect(db.muteFilters(id)[0].matchCount).toBe(3)
+  await expect(db.rules.save({ query: 'title~/(invalid/', actions: ['hide'] })).rejects.toThrow(/Invalid regular expression/)
+  expect(() => db.savedViews.save({ title: 'Example', query })).toThrow(/Regex only works in hide rules/)
+  expect(() => parseSearch(query)).toThrow(/Regex only works in hide rules/)
+})
+
+it('records skipped batches and disables a rule after three consecutive timeouts', async () => {
+  const id = await db.rules.save({ query: 'title~/report/', actions: ['hide'] })
+  // Withhold the batch after the worker signals readiness. This exercises the
+  // actual deadline and termination without relying on a machine's regex speed.
+  const send = Worker.prototype.postMessage
+  let stall = true
+  let attempts = 0
+  const messages = vi.spyOn(Worker.prototype, 'postMessage').mockImplementation(function (this: Worker, message) {
+    if (message?.expression) { attempts++; if (stall) return }
+    send.call(this, message)
+  })
+  try {
+    await expect(db.rules.save({ query: 'url~/report/', actions: ['hide'] })).rejects.toThrow(/exceeded 50 ms/)
+    expect(db.rules.count()).toBe(1)
+    for (let i = 1; i <= 6; i++) {
+      stall = i !== 2
+      await db.upsertEntriesInChunks([article(i)])
+      await db.rules.drainRegex()
+    }
+    expect(attempts).toBe(6)
+    expect(db.muteFilters(id)[0]).toMatchObject({ disabled: true, matching: false, matchCount: 1 })
+    expect(db.activity().filter(event => event.details.ruleId === id).map(event => event.details.failures)).toEqual([3, 2, 1, 1])
+  } finally { messages.mockRestore() }
+})
+
+it('resumes a hide-only rule from its arrival cursor after restart', async () => {
+  db.upsertEntries([article(1)])
+  const query = 'author~/writer/i'
+  for (const actions of [['star'], ['hide', 'read'], ['hide', 'notify']]) {
+    await expect(db.rules.save({ query, actions })).rejects.toThrow(/only hide/)
+  }
+  const id = await db.rules.save({ query, actions: ['hide'] })
+  db.upsertEntries([article(2, { starred: true }), article(3)])
+  db.editLocalEntryState(['2'], 'unstar')
+  db.close()
+  db = new PaperDatabase(path.join(directory, 'test.sqlite'))
+  await Promise.all([db.backfillMuteFilters(), db.rules.drainRegex()])
+  expect(db.rules.hidden(id, '').items.map(row => row.id)).toEqual(['2', '3'])
+  expect(db.localEntry('2')).toMatchObject({ read: false, starred: false })
+  expect(db.rules.takeRemote('star', 'Synthetic').ids).toEqual([])
+  expect(db.rules.takeRemote('read', 'Synthetic').ids).toEqual([])
+})
+
+it.each(['startup', 'matching'] as const)('retries worker exits during %s without another import', async phase => {
+  const id = await db.rules.save({ query: 'author~/writer/i', actions: ['hide'] })
+  const send = Worker.prototype.postMessage
+  let exits = 0
+  const messages = vi.spyOn(Worker.prototype, 'postMessage').mockImplementation(function (this: Worker, message) {
+    if ((phase === 'startup' ? message?.snapshot : message?.expression) && exits++ < 2) { void this.terminate(); return }
+    send.call(this, message)
+  })
+  try {
+    await db.upsertEntriesInChunks([article(1)])
+    await vi.waitFor(() => expect(db.muteFilters(id)[0].matchCount).toBe(1), { timeout: 5000 })
+    expect(exits).toBe(3)
+  } finally { messages.mockRestore() }
+})
+
+it('disables an unavailable worker rule after bounded retries and leaves ingestion successful', async () => {
+  const id = await db.rules.save({ query: 'title~/report/', actions: ['hide'] })
+  const messages = vi.spyOn(Worker.prototype, 'postMessage').mockImplementation(function (this: Worker) { void this.terminate() })
+  try {
+    await db.upsertEntriesInChunks([article(1)])
+    await vi.waitFor(() => expect(db.muteFilters(id)[0].disabled).toBe(true), { timeout: 5000 })
+    expect(messages).toHaveBeenCalledTimes(3)
+    expect(db.activity()[0].details.reason).toMatch(/could not start/)
+  } finally { messages.mockRestore() }
+})
+
+it('shares snapshots for overlapping rules and splits oversized batches without losing matches', async () => {
+  const rules = []
+  for (const query of ['title~/report|界/', 'text~/teaser|界/']) rules.push(await db.rules.save({ query, actions: ['hide'] }))
+  const messages = vi.spyOn(Worker.prototype, 'postMessage')
+  try {
+    db.upsertEntries([article(1)])
+    await db.rules.drainRegex()
+    expect(messages.mock.calls.filter(([message]) => message?.snapshot)).toHaveLength(1)
+    expect(rules.map(id => db.muteFilters(id)[0].matchCount)).toEqual([1, 1])
+    const long = '界'.repeat(4096)
+    db.upsertEntries(Array.from({ length: 128 }, (_, i) => article(i + 2, { title: long, contentHtml: long })))
+    await db.rules.drainRegex()
+    expect(rules.map(id => db.muteFilters(id)[0])).toMatchObject([
+      { matching: false, matchCount: 129 }, { matching: false, matchCount: 129 },
+    ])
+    expect(db.activity().filter(event => String(event.details.reason).includes('2 MiB'))).toHaveLength(0)
+    expect((await db.rules.previewRegex(parseSearch('~/界/', 'rule').root)).count).toBe(128)
+  } finally { messages.mockRestore() }
+})
+
+it('defers a rule when its SQL terms would overflow the shared queue', async () => {
+  const ids = []
+  for (const query of ['is:unread text~/𠀀/', 'is:unread text~/^𠀀/']) {
+    ids.push(await db.rules.save({ query, actions: ['hide'] }))
+  }
+  // These 128 rows leave room for one set of SQL term results in the 2 MiB job.
+  seedPreviewArticles(Array.from({ length: 128 }, (_, i) => article(i + 1)))
+  db.greaderDatabase.prepare('UPDATE entries SET content_text=?').run('𠀀'.repeat(4072))
+  const messages = vi.spyOn(Worker.prototype, 'postMessage')
+  try {
+    await db.rules.drainRegex()
+    expect(messages.mock.calls.filter(([message]) => message?.snapshot)).toHaveLength(2)
+    for (const id of ids) expect(db.muteFilters(id)[0]).toMatchObject({ matching: false, matchCount: 128 })
+    expect(db.activity()).toHaveLength(0)
+  } finally { messages.mockRestore() }
+})
+
+it('logs only the individual arrival that cannot fit the worker budget', async () => {
+  const id = await db.rules.save({ query: 'title~/report/', actions: ['hide'] })
+  const snapshot = regex.regexSnapshot
+  // The production field caps currently keep a single article below 2 MiB.
+  const size = vi.spyOn(regex, 'regexSnapshot').mockImplementation((db, sequences, fields) => {
+    const result = snapshot(db, sequences, fields)
+    if (JSON.parse(sequences).includes(2)) result.bytes = regex.REGEX_QUEUE_BYTES + 1
+    return result
+  })
+  try {
+    db.upsertEntries([article(1), article(2), article(3)])
+    await db.rules.drainRegex()
+    expect(db.rules.hidden(id, '').items.map(item => item.id)).toEqual(['1', '3'])
+    expect(db.muteFilters(id)[0].matching).toBe(false)
+    expect(db.activity()).toMatchObject([{ details: { ruleId: id, article: 2, reason: expect.stringContaining('2 MiB') } }])
+  } finally { size.mockRestore() }
+})
+
+it('finishes ordinary archive work saved while the shared runner is matching regex rules', async () => {
+  db.upsertEntries([article(1)])
+  const id = await db.rules.save({ query: 'title~/report/', actions: ['hide'], applyExisting: true })
+  let ordinary: string | undefined
+  const match = regex.RuleRegexWorker.prototype.match
+  const worker = vi.spyOn(regex.RuleRegexWorker.prototype, 'match').mockImplementationOnce(async function (this: regex.RuleRegexWorker, snapshot, job) {
+    ordinary = await db.rules.save({ query: 'title:report', actions: ['hide'], applyExisting: true })
+    expect(db.backfillMuteFilters()).toBe(running)
+    return match.call(this, snapshot, job)
+  })
+  const running = db.backfillMuteFilters()
+  try {
+    await running
+    expect(ordinary).toBeDefined()
+    for (const rule of [id, ordinary]) expect(db.muteFilters(rule)[0]).toMatchObject({ matching: false, matchCount: 1 })
+  } finally { worker.mockRestore() }
+})
+
+it('caps each regex field independently and preserves literal paths', async () => {
+  db.upsertEntries([article(1, { title: 'x'.repeat(4096) + 'needle', url: 'https://example.test/news/1' })])
+  for (const [query, count] of [['title~/needle/', 0], ['url~/news/', 1], ['url:/news/', 1], ['text~/teaser/', 1], ['text~/^x/', 0], ['url:"/news/"', 1],
+    ['url:/news', 1], ['title~/^x{4096}$/', 1], ['title~/report/ OR author:writer', 1]] as const) {
+    const id = await db.rules.save({ query, actions: ['hide'], applyExisting: true })
+    await db.backfillMuteFilters()
+    expect(db.muteFilters(id)[0].matchCount, query).toBe(count)
+  }
+  for (const query of ['title~/week/g', 'feed~/week/', 'title~/broken', 'text~/[unclosed/', 'author~/' + 'w'.repeat(257) + '/']) {
+    await expect(db.rules.save({ query, actions: ['hide'] })).rejects.toThrow()
+  }
+})
+
+it('keeps slash-delimited URL fragments literal in rules and views saved before the upgrade', async () => {
+  const sql = db.greaderDatabase
+  sql.exec(`DROP TABLE regex_rules;
+    INSERT INTO mute_filters(id,phrase,scope,created_at) VALUES ('old','url:/news/local','query','');
+    INSERT INTO saved_views(title,query,position) VALUES ('News','url:/news/local',1);
+    PRAGMA user_version=${REGEX_RULES_VERSION - 1}`)
+  db.close()
+  const file = path.join(directory, 'test.sqlite')
+  db = new PaperDatabase(file)
+  expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
+  const backup = new DatabaseSync(file + '.before-regex-rules-v' + REGEX_RULES_VERSION, { readOnly: true })
+  try { expect(backup.prepare('PRAGMA user_version').get()?.user_version).toBe(REGEX_RULES_VERSION - 1) }
+  finally { backup.close() }
+  await db.upsertEntriesInChunks([article(1, { url: 'https://example.test/news/local/1' }), article(2, { url: 'https://news.example.test' })])
+  expect(db.rules.hidden('old', '').items.map(row => row.id)).toEqual(['1'])
+  const view = db.savedViews.list()[0]
+  expect(db.savedViews.save({ ...view, title: 'Renamed' }, view.id)).toBe(view.id)
+  expect(db.matchingEntryIds({ kind: 'view', id: view.id, title: view.title }, { includeMuted: true })).toEqual(['1'])
+})
+
+it('repairs a missing regex table at the current schema version', () => {
+  db.greaderDatabase.exec('DROP TABLE regex_rules')
+  db.close()
+  db = new PaperDatabase(path.join(directory, 'test.sqlite'))
+  expect(hasRegexRules(db.greaderDatabase)).toBe(true)
+})
+
+it('keeps a higher prerelease version when installing the regex table', () => {
+  const sql = db.greaderDatabase
+  const version = REGEX_RULES_VERSION + 1
+  sql.exec(`DROP TABLE regex_rules; PRAGMA user_version = ${version}`)
+  migrateRegexRules(sql)
+  expect(hasRegexRules(sql)).toBe(true)
+  expect(sql.prepare('PRAGMA user_version').get()!.user_version).toBe(version)
 })

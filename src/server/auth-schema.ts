@@ -3,7 +3,7 @@ import { transaction } from './transaction.js'
 
 export const FEED_MAINTENANCE_VERSION = 21
 export const FEED_OVERRIDE_VERSION = 22
-export { ENTRY_STATE_WRITES_VERSION as DATABASE_VERSION } from './entry-state-schema.js'
+export { REGEX_RULES_VERSION as DATABASE_VERSION } from './rule-regex.js'
 
 export function migrateAuth(db: DatabaseSync) {
   transaction(db, () => db.exec(`

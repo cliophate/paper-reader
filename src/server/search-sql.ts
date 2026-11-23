@@ -1,4 +1,4 @@
-import { searchDate, type SearchNode } from './search-query.js'
+import { REGEX_RULE_HINT, SearchLimitError, searchDate, type SearchNode } from './search-query.js'
 
 export function textMatch(node: Extract<SearchNode, { kind: 'text' }>): string {
   const column = node.field === 'feed' ? 'feed_title' : node.field
@@ -23,6 +23,7 @@ function predicate(expression: Expression, batch = false) {
 
 function compile(node: SearchNode, now: number, positive: string[], urlRows?: SearchScope, negated = false): Expression {
   switch (node.kind) {
+    case 'regex': throw new SearchLimitError(REGEX_RULE_HINT)
     case 'text': {
       const match = textMatch(node)
       if (!negated || !urlRows) positive.push(match)

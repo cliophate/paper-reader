@@ -370,7 +370,7 @@ it('runs query actions once on arrival and undoes the fields changed by an archi
   if (old.status !== 'resolved') throw new Error('Fixture identity failed')
   const { target } = create({ events: ['save_entry'] })
   const input = { query: 'title:science is:unread', actions: ['hide', 'read', 'star', 'notify'], targetId: target.id }
-  const id = db.rules.save(input)
+  const id = await db.rules.save(input)
   const arrived = ingest('Science archive', 'Science arrival', 'Unrelated article').results[1]
   if (arrived.status !== 'resolved') throw new Error('Fixture identity failed')
   expect(db.entryState(old.id)).toMatchObject({ read: false, starred: false })
@@ -384,7 +384,7 @@ it('runs query actions once on arrival and undoes the fields changed by an archi
   expect(requests).toHaveLength(1)
   expect(JSON.parse(requests[0].body)).toMatchObject({ event_type: 'rule_entry', entry: { id: arrived.id } })
 
-  const archive = db.rules.save({ ...input, applyExisting: true })
+  const archive = await db.rules.save({ ...input, applyExisting: true })
   await db.backfillMuteFilters()
   await db.backfillMuteFilters()
   await hooks.tick()
@@ -403,7 +403,7 @@ it('uses the narrow state row to match and apply archive rule actions', async ()
   if (entry.status !== 'resolved') throw new Error('Fixture identity failed')
   db.commitLocalEntryState(backend, [entry.id], 'read', { fields: { read: true, starred: true } })
   db.greaderDatabase.prepare('UPDATE entry_state SET read=0, starred=0 WHERE entry_id=?').run(entry.id)
-  db.rules.save({ query: 'is:unread -is:starred', actions: ['read', 'star'], applyExisting: true })
+  await db.rules.save({ query: 'is:unread -is:starred', actions: ['read', 'star'], applyExisting: true })
   await db.backfillMuteFilters()
   expect(db.entryState(entry.id)).toMatchObject({ read: true, starred: true })
 })
@@ -412,7 +412,7 @@ it('applies a rule only to its target within the configured folder', async () =>
   db.organization.apply(backend, db.organization.snapshot(backend).revision, [{ type: 'create-folder', title: 'Science' }])
   const folderId = db.organization.snapshot(backend).navigation.folders[0].id
   const { target } = create({ kind: 'ntfy', folderId, events: ['save_entry'] })
-  db.rules.save({ query: 'title:science', actions: ['notify'], targetId: target.id })
+  await db.rules.save({ query: 'title:science', actions: ['notify'], targetId: target.id })
   ingest('Science outside')
   db.organization.apply(backend, db.organization.snapshot(backend).revision, [{ type: 'add-membership', feedId: feed, folderId }])
   ingest('Science outside', 'Science inside')

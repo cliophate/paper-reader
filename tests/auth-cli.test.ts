@@ -1,6 +1,7 @@
 import { ARTICLE_LABELS_VERSION } from '../src/server/greader-schema'
 import { ENTRY_STATE_VERSION, ENTRY_STATE_WRITES_VERSION } from '../src/server/entry-state-schema.js'
 import { SAVED_VIEWS_VERSION } from '../src/server/saved-views.js'
+import { REGEX_RULES_VERSION } from '../src/server/rule-regex.js'
 import { RULES_VERSION } from '../src/server/article-rules.js'
 import { ANNOTATIONS_VERSION } from '../src/server/annotations.js'
 import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION, FEED_OVERRIDE_VERSION } from '../src/server/auth-schema.js'
@@ -82,7 +83,9 @@ it.each([13, 14])('upgrades schema %i through retention v14 to login v15 and pre
     `paper.sqlite.before-article-labels-v${ARTICLE_LABELS_VERSION}`,
     `paper.sqlite.before-article-rules-v${RULES_VERSION}`,
     'paper.sqlite.before-briefing-delivery-v20', `paper.sqlite.before-entry-state-v${ENTRY_STATE_VERSION}`, `paper.sqlite.before-entry-state-writes-v${ENTRY_STATE_WRITES_VERSION}`, 'paper.sqlite.before-feed-icons-v18', `paper.sqlite.before-feed-maintenance-v${FEED_MAINTENANCE_VERSION}`, `paper.sqlite.before-feed-overrides-v${FEED_OVERRIDE_VERSION}`, 'paper.sqlite.before-greader-v16', 'paper.sqlite.before-miniflux-v17', 'paper.sqlite.before-owner-login-v15',
-    `paper.sqlite.before-podcast-enclosures-v${ENCLOSURE_SCHEMA_VERSION}`, 'paper.sqlite.before-pulse-catch-ups-v19', `paper.sqlite.before-reading-preferences-v${READING_PREFERENCES_VERSION}`, ...(version === 13 ? ['paper.sqlite.before-retention-v14'] : []),
+    `paper.sqlite.before-podcast-enclosures-v${ENCLOSURE_SCHEMA_VERSION}`, 'paper.sqlite.before-pulse-catch-ups-v19', `paper.sqlite.before-reading-preferences-v${READING_PREFERENCES_VERSION}`,
+    `paper.sqlite.before-regex-rules-v${REGEX_RULES_VERSION}`,
+    ...(version === 13 ? ['paper.sqlite.before-retention-v14'] : []),
     `paper.sqlite.before-saved-views-v${SAVED_VIEWS_VERSION}`,
     `paper.sqlite.before-story-choices-v${STORY_CHOICES_VERSION}`,
     `paper.sqlite.before-webhooks-v${WEBHOOK_SCHEMA_VERSION}`,

@@ -213,6 +213,19 @@ To roll back to v32, stop Paper and briefing commands and preserve the data
 directory. In a separate copy, restore the pre-v33 backup as `paper.sqlite`,
 remove the newer WAL and SHM sidecars and start the previous release.
 
+Schema v34 stores an arrival cursor and failure count for each regex hide rule.
+Paper creates `paper.sqlite.before-regex-rules-v34` before upgrading from v33.
+To roll back to v33, stop Paper and restore this backup as `paper.sqlite` in a separate
+data directory without the newer WAL and SHM files.
+
+The cursor starts at the latest arrival. Selecting **Also apply to existing
+matches** starts it at zero. After ingest commits, Paper reads up to 128
+arrivals, checks ordinary query terms against the current article state and
+shares a snapshot of the requested fields across rules. Paper uses fewer
+arrivals or defers rules to keep each batch within 2 MiB. Each rule
+commits its hidden memberships and cursor together. Restart resumes from the
+last committed cursor.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh
@@ -265,7 +278,10 @@ at a time with the ingestion matcher, outside write transactions. Preview uses t
 existing timestamp/id indexes, applies feed scope first, and yields between batches
 until 10,240 rows or about one second. Incomplete counts are lower bounds.
 It also times 1,000 arrivals with and without 50 rules of 24 OR terms and
-probes the HTTP health endpoint during each import.
+probes the HTTP health endpoint during each import. Regex cases measure a
+field-scoped pattern, 50 overlapping rule scans and a nested repetition on long matching input. Each case reports ingest time and time until matching finishes. The
+last case withholds worker replies and checks health while Paper skips three
+batches and disables the rule.
 The script retains its synthetic database and results in a new temporary directory.
 Pass an optional path to a baseline module exporting `PaperDatabase` to compare it.
 

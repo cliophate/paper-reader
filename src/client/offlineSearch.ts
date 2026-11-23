@@ -1,4 +1,4 @@
-import { parseSearch, searchDate, type SearchNode } from '../server/search-query'
+import { REGEX_RULE_HINT, SearchLimitError, parseSearch, searchDate, type SearchNode } from '../server/search-query'
 import type { Entry } from './types'
 
 // Generated from the server's FTS5 tokenizer by scripts/generate-unicode61.mjs.
@@ -45,6 +45,7 @@ export function searchCopies(items: Entry[], query: string) {
     }
     function matches(node: SearchNode): boolean {
       switch (node.kind) {
+        case 'regex': throw new SearchLimitError(REGEX_RULE_HINT)
         case 'and': return node.children.every(matches)
         case 'or': return node.children.some(matches)
         case 'not': return !matches(node.child)

@@ -76,6 +76,19 @@ it('starts the actual server and briefing CLI together, then admits a current CL
   acquireStateLock(directory, 'exclusive').release()
 }, 20000)
 
+it('previews and saves regex rules through the tsx development server', async () => {
+  const number = await port()
+  start('index', number)
+  await ready(number)
+  const query = 'title~/report/'
+  for (const [route, status] of [['/api/rules/preview', 200], ['/api/rules', 201]] as const) {
+    const response = await fetch(`http://127.0.0.1:${number}${route}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query, actions: ['hide'] }),
+    })
+    expect(response.status, await response.text()).toBe(status)
+  }
+}, 15000)
+
 it('excludes both real entrypoints while an exclusive lock owns the directory, then releases failed startup resources', async () => {
   const number = await port(), lock = acquireStateLock(directory, 'exclusive')
   try {

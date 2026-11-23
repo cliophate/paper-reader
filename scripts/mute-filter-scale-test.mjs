@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import express from 'express'
 import os from 'node:os'
 import path from 'node:path'
+import { Worker } from 'node:worker_threads'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -31,12 +32,21 @@ async function measureRuleArrivals(db) {
     terms.push('title:article', `title:cohort${rule}x`)
     return terms.join(' OR ')
   })
+  const nested = ['author~/(a+)+$/']
+  const longAuthors = entries.map(entry => ({ ...entry, author: 'a'.repeat(4096) }))
+  const cases = [
+    { queries: [] }, { queries: ['is:unread'] }, { queries: textRules },
+    { queries: ['is:unread title~/^story cohort[0-9]+x$/i'] },
+    { queries: Array.from({ length: 50 }, (_, i) => `title~/cohort${i}x$/`) },
+    { queries: nested, arrivals: longAuthors }, { queries: nested, arrivals: longAuthors, stallWorker: true },
+  ]
   const results = []
   try {
-    for (const queries of [[], ['is:unread'], textRules]) {
+    for (const { queries, arrivals = entries, stallWorker } of cases) {
       assert.equal(db.entryCount(), 200_000)
       assert.equal(db.unreadCount(), 200_000)
-      const ruleIds = queries.map(query => db.rules.save({ query, actions: ['hide'] }))
+      const ruleIds = []
+      for (const query of queries) ruleIds.push(await db.rules.save({ query, actions: ['hide'] }))
       let done = false, healthError
       const probes = []
       const health = (async () => {
@@ -48,15 +58,30 @@ async function measureRuleArrivals(db) {
         } while (!done)
       })().catch(error => { healthError = error })
       const started = performance.now()
-      let wallMs
-      try { await db.upsertEntriesInChunks(entries); wallMs = performance.now() - started }
-      finally { done = true; await health }
+      // Withhold the job after the worker is ready to measure timeout recovery
+      // under the same HTTP load, independently of V8's backtracking behavior.
+      const send = Worker.prototype.postMessage
+      if (stallWorker) Worker.prototype.postMessage = function (message, ...args) {
+        if (!message?.expression) return send.call(this, message, ...args)
+      }
+      let ingestMs, wallMs
+      try {
+        await db.upsertEntriesInChunks(arrivals)
+        ingestMs = performance.now() - started
+        await db.rules.drainRegex()
+        wallMs = performance.now() - started
+      }
+      finally { Worker.prototype.postMessage = send; done = true; await health }
       if (healthError) throw healthError
       const matches = db.muteFilters().reduce((sum, rule) => sum + rule.matchCount, 0)
-      assert.equal(matches, queries.length ? entries.length : 0)
-      const report = { operation: 'rule-arrivals', ruleCount: queries.length,
+      assert.equal(matches, queries.length && !stallWorker ? entries.length : 0)
+      if (stallWorker) {
+        assert.equal(db.muteFilters(ruleIds[0])[0].disabled, true)
+        assert.equal(db.activity().filter(event => event.details.ruleId === ruleIds[0]).length, 3)
+      }
+      const report = { operation: 'rule-arrivals', ruleCount: queries.length, ...(stallWorker && { stalledWorker: true }),
         termsPerRule: queries[0]?.split(' OR ').length ?? 0, query: queries.length === 1 ? queries[0] : undefined,
-        arrivals: entries.length, wallMs, matches, healthProbes: probes.length, healthMaxMs: Math.max(...probes) }
+        arrivals: entries.length, ingestMs, wallMs, matches, healthProbes: probes.length, healthMaxMs: Math.max(...probes) }
       console.log(JSON.stringify(report))
       assert.ok(probes.length > 1 && report.healthMaxMs < 2000)
       results.push(report)

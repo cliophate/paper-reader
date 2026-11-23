@@ -197,6 +197,7 @@ export class StandaloneFeedScheduler {
         etag: response.etag ?? (status === 304 ? lease.etag : ''),
         lastModified: response.lastModified ?? (status === 304 ? lease.lastModified : ''), validatorUrl: response.url }
       const result = await completeFeed(this.db, { lease, now, update, parsed, responseUrl: response.url })
+      if (result.committed && parsed) this.db.rules.scheduleRegex()
       return { kind: !result.committed ? 'stale' : status === 304 ? 'notModified' : 'fetched', ambiguous: result.committed ? result.value : 0 }
     } catch (error) {
       const now = Date.now()
