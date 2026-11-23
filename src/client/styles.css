@@ -562,6 +562,7 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .connection-settings { margin-top: 30px; }
 .connection-card { margin-top: 20px; border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
 .connection-card h4 { margin: 0 0 14px; font-size: 16px; }
+.webhook-settings, .webhook-settings .connection-card, .webhook-settings li { min-width: 0; overflow-wrap: anywhere; }
 .connection-card fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .connection-card fieldset fieldset { margin: 14px 0; }
 .connection-card legend { padding: 8px 0; font-size: 12px; font-weight: 650; color: var(--muted); }

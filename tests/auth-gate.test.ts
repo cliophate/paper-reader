@@ -20,6 +20,7 @@ import classifications from './fixtures/auth-route-classification.json'
 // changes the snapshot and must be reviewed and classified explicitly.
 const files = [
   ['src/server/index.ts', 'app', ''], ['src/server/auth-routes.ts', 'router', '/api/auth'],
+  ['src/server/webhook-routes.ts', 'router', '/api/settings/connections/webhooks'],
   ['src/server/retention-routes.ts', 'router', '/api/retention'],
   ['src/server/subscription-tools-routes.ts', 'router', '/api/subscription-tools'],
   ['src/server/feed-check-routes.ts', 'router', '/api/feed-checks'], ['src/server/organization-routes.ts', 'router', '/api/organization'],

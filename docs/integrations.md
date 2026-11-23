@@ -5,7 +5,7 @@ Select the backend in private configuration. Use a separate data directory
 for a different backend or FreshRSS account.
 All other connections can be left disabled. Never commit authentication files,
 tokens, or a real .env. Open Settings > Reading & connections to enable or disable
-AI, article saves, briefing email and Kirby notes. Changes take effect without restarting
+AI, article saves, [webhooks and push notifications](webhooks.md), briefing email and Kirby notes. Changes take effect without restarting
 Paper. The same settings apply to every device using this server.
 
 Settings accepts service tokens, Wallabag credentials, OpenAI-compatible API keys and

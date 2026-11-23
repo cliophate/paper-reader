@@ -20,6 +20,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import { BriefingService } from './briefing.js'
+import { Webhooks } from './webhooks.js'
+import { webhookRoutes } from './webhook-routes.js'
 import { BriefingDelivery } from './briefing-delivery.js'
 import { sendSmtp, SmtpError } from './smtp.js'
 import { createAiChatModel, providerConfigured, providerAvailability, runAiBatch, aiEnabled } from './ai-provider.js'
@@ -102,6 +104,7 @@ const headlines = new HeadlineService(database, (url, entryId) => reader.fetch(u
 const xThreads = new XThreadService(config.rssHub.baseUrl)
 let localReadsActive = Boolean(standalone) || config.sync.localReads && database.getSyncValue('backfill_complete') === 'true'
 const entriesSource = switchingEntrySource(() => localReadsActive, repository, backend)
+const webhooks = new Webhooks(database.webhooks, config.stateDir, config.trustedSaveOrigins, entriesSource.navigation)
 const pulse = new PulseService(database, (prompt, input, schema) => runAiBatch(config, 'grouping', config.collections.model, prompt, input, schema, 'medium'),
   providerConfigured(config) && config.collections.enabled)
 const topics = new TopicService(database, entriesSource, () => pulse.list().collections)
@@ -119,6 +122,8 @@ logMemory('services ready')
 synchronizer.onSyncCompleted(() => {
   if (shuttingDown) return
   localReadsActive = Boolean(standalone) || config.sync.localReads && database.getSyncValue('backfill_complete') === 'true'
+  // The worker also releases old batches if a concurrent writer holds the database.
+  try { database.webhooks.finishBatch() } catch { console.error('Paper could not close the webhook batch after sync.') }
   void headlines.run()
   void pulse.refresh()
   topics.invalidate()
@@ -158,6 +163,16 @@ app.use(['/api/settings/connections', '/api/feed-overrides', '/api/fulltext'], (
     : (tooLarge ? 'The request is too large.' : 'Send valid JSON.')
   response.status(tooLarge ? 413 : 400).set('Cache-Control', 'no-store').json({ error: message })
 })
+
+app.use('/api/settings/connections/webhooks', webhookRoutes(webhooks, () => { for (const listener of connectionListeners) listener() }))
+app.post('/api/entries/send-to-webhook', asyncRoute(async (request, response) => {
+  const id = request.body?.id
+  if (typeof id !== 'string') return response.status(400).json({ error: 'Choose an article to send.' })
+  const { count, message } = await webhooks.sendArticle(id)
+  if (!count && message) return response.status(503).json({ error: message })
+  if (!count) return response.status(404).json({ error: 'No manual delivery target matches this article.' })
+  response.status(202).json({ count, message })
+}))
 
 app.get('/health', (_request, response) => response.json({ status: 'ok' }))
 
@@ -245,6 +260,7 @@ app.get('/api/status', (_request, response) => response.json({
   discussionConfigured: discussionEnabled(),
   rssHubConfigured: Boolean(config.rssHub.baseUrl),
   readwiseConfigured: readwise.configured,
+  manualWebhooks: database.webhooks.targets().filter(target => target.events.includes('save_entry')).map(({ feedId, folderId }) => ({ feedId, folderId })),
   saveDestinations: destinationIds.map(id => connectionSettings.destination(id)).filter(client => client.configured)
     .map(({ id, name }) => ({ id, name })),
   kirbyConfigured: kirby.configured,
@@ -1007,6 +1023,7 @@ const server = app.listen(config.port, config.host, () => {
   if (!database.auth.enabled()) console.log(`Paper owner setup code, valid for 15 minutes: ${database.auth.setupCode()}`)
   logMemory('listening')
   feedIcons?.start()
+  webhooks.start()
   briefingDelivery.start()
   void database.backfillMuteFilters().catch(error => console.error('Mute filter backfill failed; it will resume after restart.', error))
 })
@@ -1053,6 +1070,7 @@ async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
   const iconsStopped = feedIcons?.stop()
+  const hooksStopped = webhooks.stop()
   const deliveryStopped = briefingDelivery.stop()
   await greader.close()
   clearInterval(memoryTimer)
@@ -1074,6 +1092,7 @@ async function shutdown() {
   await Promise.all([headlines.drain(), pulse.drain(), topics.drain(), discussions.drain()])
   await searchStopped
   await iconsStopped
+  await hooksStopped
   await deliveryStopped
   storage.close()
   clearTimeout(deadline)

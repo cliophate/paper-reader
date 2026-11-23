@@ -15,7 +15,10 @@ const state = path.join(temporary, 'data')
 // still go through the production transport's address checks.
 const publisher = http.createServer((request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1:4319')
-  if (url.pathname.startsWith('/feed/')) {
+  if (url.pathname === '/webhook-test') {
+    response.writeHead(503)
+    response.end('Synthetic private response')
+  } else if (url.pathname.startsWith('/feed/')) {
     response.setHeader('Content-Type', 'application/rss+xml')
     response.end('<rss version="2.0"><channel><title>Synthetic shared feed</title><link>https://example.test</link><description>Disposable share fixture</description></channel></rss>')
   } else {
@@ -86,6 +89,7 @@ const child = spawn(process.execPath, [path.resolve('dist-server/index.js')], { 
   PATH: process.env.PATH, NODE_NO_WARNINGS: '1', STATE_DIR: state, PAPER_BACKEND: 'standalone', PAPER_SYNC_ENABLED: 'false',
   HOST: '127.0.0.1', PORT: '4318', PUBLIC_URL: 'http://127.0.0.1:4318', CODEX_ENABLED: 'false',
   PAPER_TRUSTED_FEED_ORIGINS: 'http://127.0.0.1:4319',
+  PAPER_TRUSTED_SAVE_ORIGINS: 'http://127.0.0.1:4319',
   PAPER_TRUSTED_AI_ORIGINS: openai.origin, PAPER_OPENAI_BASE_URL: `${openai.origin}/v1`, PAPER_OPENAI_DISCUSSION_MODEL: 'collection-fixture',
 } })
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { child.kill('SIGTERM'); owner.kill('SIGTERM') })

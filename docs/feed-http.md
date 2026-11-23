@@ -28,6 +28,8 @@ ignored on send and receive. The transport ignores proxy environment settings.
 
 Save destinations use `boundedApiRequest` for authenticated GET, POST and PATCH requests.
 It pins the resolved address, rejects redirects and caps responses at 1 MiB.
+Webhooks and push notifications use the same transport. They close the response
+after reading the status and headers and set a ten-second deadline.
 Private addresses and HTTP require an exact origin in `PAPER_TRUSTED_SAVE_ORIGINS`.
 
 Feed collection and full-text extraction accept a feed-specific user agent and

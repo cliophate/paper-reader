@@ -3,6 +3,7 @@ import { PlaybackQueue, type PlaybackPosition } from './playback'
 import { checkSearchSize, SEARCH_SIZE_HINT } from '../server/search-query'
 import type { Annotation, AnnotationPage, NewAnnotation } from '../shared/annotations'
 import type { ReadingSnapshot, ReadingWrite, ReadingWriteResult } from '../server/reading-preference-values'
+import type { WebhookCreate, WebhookSettings, WebhookSubscription } from '../shared/webhooks'
 import type { RetentionPolicy, RetentionPreview, RetentionView } from '../shared/retention'
 import type { FeedMaintenance, StaleDays, FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarget } from '../shared/feed-checks'
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
@@ -37,6 +38,7 @@ export const playback = new PlaybackQueue(item => request<PlaybackPosition>('/ap
   method: 'POST', body: JSON.stringify(item), keepalive: true,
 }))
 
+const webhooks = '/api/settings/connections/webhooks'
 function annotationPage({ entryId, before, limit, signal }: {
   entryId?: string; before?: number; limit?: number; signal?: AbortSignal
 }): Promise<AnnotationPage> {
@@ -65,6 +67,14 @@ export const api = {
   removeAnnotation: (id: number, revision: number) => request<{ ok: boolean }>(`/api/annotations/${id}`, { method: 'DELETE', body: JSON.stringify({ revision }) }),
   readingPreferences: () => request<ReadingSnapshot>('/api/settings/reading', { cache: 'no-store' }),
   saveReadingPreferences: (write: ReadingWrite) => request<ReadingWriteResult>('/api/settings/reading', { method: 'PATCH', body: JSON.stringify(write) }),
+  webhooks: () => request<WebhookSettings>(webhooks),
+  createWebhook: (settings: WebhookCreate) => request<{ secret?: string }>(webhooks, { method: 'POST', body: JSON.stringify(settings) }),
+  updateWebhook: (id: string, settings: WebhookSubscription) => request(webhooks + '/' + id, { method: 'PATCH', body: JSON.stringify(settings) }),
+  removeWebhook: (id: string) => request(webhooks + '/' + id, { method: 'DELETE' }),
+  testWebhook: (id: string) => request(webhooks + '/' + id + '/test', { method: 'POST' }),
+  rotateWebhook: (id: string) => request<{ secret: string }>(webhooks + '/' + id + '/rotate', { method: 'POST' }),
+  retryWebhook: (id: string) => request(webhooks + '/deliveries/' + id + '/retry', { method: 'POST' }),
+  sendToWebhook: (id: string) => request<{ count: number; message: string }>('/api/entries/send-to-webhook', { method: 'POST', body: JSON.stringify({ id }) }),
   retention: () => request<RetentionView>('/api/retention'),
   previewRetention: (policy: RetentionPolicy) => request<RetentionPreview>('/api/retention/preview', { method: 'POST', body: JSON.stringify({ policy }) }),
   saveRetention: (policy: RetentionPolicy, revision: number, token?: string) => request<RetentionView>('/api/retention', { method: 'POST', body: JSON.stringify({ policy, revision, token }) }),
@@ -126,6 +136,7 @@ export const api = {
     backend: 'standalone' | 'freshrss' | 'miniflux'
     backendInstance: string
     discussionConfigured: boolean
+    manualWebhooks: Array<{ feedId: string; folderId: string }>
     saveDestinations: SaveDestination[]
     readwiseConfigured: boolean
     kirbyConfigured: boolean

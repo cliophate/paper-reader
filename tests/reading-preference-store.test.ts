@@ -1,3 +1,4 @@
+import { DATABASE_VERSION } from '../src/server/auth-schema'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -66,7 +67,7 @@ it('backs up the prior schema and retains preferences and retry receipts after r
     old.close()
     const db = new PaperDatabase(name)
     const write = edit('a', 1, { markRead: 'manual' })
-    expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(25)
+    expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
     const after = db.readingPreferences.write(write)
     db.close()
     const backup = new DatabaseSync(name + '.before-reading-preferences-v' + READING_PREFERENCES_VERSION, { readOnly: true })

@@ -115,15 +115,19 @@ export async function boundedFetch(input: string, options: TextFetchOptions | By
 
 export interface ApiRequest {
   method?: 'GET' | 'POST' | 'PATCH'
+  signature?: { timestamp: string; digest: string }
+  discardResponse?: boolean
+  timeoutMs?: number
+  signal?: AbortSignal
   authorization?: string
   body?: string
-  contentType?: 'application/json' | 'application/x-www-form-urlencoded'
+  contentType?: 'text/plain' | 'application/json' | 'application/x-www-form-urlencoded'
 }
 
 export function boundedApiRequest(url: URL, trustedOrigins: readonly string[], request: ApiRequest) {
   if (url.protocol !== 'https:' && !trustedOrigins.includes(url.origin)) throw new FeedHttpError('policy', 'Public API connections require HTTPS.')
   return fetchBounded(url.href, { trustedOrigins, accept: 'application/json', maxRedirects: 0,
-    maxResponseBytes: MiB, maxDecompressedBytes: MiB, maxDecodedBytes: MiB }, request) as Promise<BoundedFetchResult>
+    signal: request.signal, timeoutMs: request.timeoutMs, maxResponseBytes: MiB, maxDecompressedBytes: MiB, maxDecodedBytes: MiB }, request) as Promise<BoundedFetchResult>
 }
 
 async function fetchBounded(input: string, options: TextFetchOptions | BytesFetchOptions, api?: ApiRequest): Promise<BoundedFetchResult | BoundedBytesResult> {
@@ -169,6 +173,7 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
               ? callback(null, [addresses[0]]) : callback(null, addresses[0].address, addresses[0].family),
             headers: { Accept: options.accept || 'application/rss+xml, application/atom+xml, application/feed+json, application/xml, text/xml, text/html',
               'Accept-Encoding': 'gzip, deflate, br', 'User-Agent': options.userAgent ?? 'Mozilla/5.0 (compatible; Paper/0.1; feed reader)',
+              ...(api?.signature ? { 'X-Paper-Timestamp': api.signature.timestamp, 'X-Paper-Signature': api.signature.digest } : {}),
               ...(api?.authorization ? { Authorization: api.authorization } : {}),
               ...(api?.body !== undefined ? { 'Content-Type': api.contentType ?? 'application/json', 'Content-Length': Buffer.byteLength(api.body) } : {}),
               ...(cookie ? { Cookie: cookie.value } : {}),
@@ -180,7 +185,7 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
           request.end(api?.body)
         })
         const status = response.statusCode || 0
-        if ([301, 302, 303, 307, 308].includes(status)) {
+        if (!api?.discardResponse && [301, 302, 303, 307, 308].includes(status)) {
           const location = header(response, 'location')
           response.destroy()
           if (!location || hop >= limits.maxRedirects) throw new FeedHttpError('redirect', 'The response has an invalid or excessive redirect.')
@@ -195,7 +200,7 @@ async function fetchBounded(input: string, options: TextFetchOptions | BytesFetc
         const result = { status, redirects, url: url.href, contentType: header(response, 'content-type'),
           etag: safeValidator(validEtag(header(response, 'etag'))), lastModified: safeValidator(validLastModified(header(response, 'last-modified'))),
           retryAfter: header(response, 'retry-after').slice(0, 128) || undefined, conditional: Boolean(etag || lastModified) }
-        if (status === 304 || status === 204 || options.skipBodyStatuses?.includes(status)) {
+        if (api?.discardResponse || status === 304 || status === 204 || options.skipBodyStatuses?.includes(status)) {
           response.destroy()
           return options.responseBody === 'bytes' ? { ...result, bytes: Buffer.alloc(0) } : { ...result, text: '' }
         }

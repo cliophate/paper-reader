@@ -187,6 +187,7 @@ Open **Settings > Reading & connections** to enable:
 - AI discussions, headline cleanup, Pulse story grouping, and briefings.
 - Scheduled morning and evening briefing emails using your SMTP relay.
 - Article saves to Readwise Reader, Linkding, Wallabag, Readeck, Raindrop.io or Linkwarden.
+- [Signed webhooks and push notifications](docs/webhooks.md) for article arrivals, stars and manual sends.
 - Kirby note drafts through a compatible publishing plugin.
 
 Test and enable a save destination in Settings. Press `q` in the reader to save

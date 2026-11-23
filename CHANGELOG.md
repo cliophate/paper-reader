@@ -7,6 +7,8 @@
   the result on a recent article before saving.
 - Save highlights and personal notes in the web reader. Search them in Highlights
   and download an article, selected annotations or everything as Markdown.
+- Send signed webhooks for new articles, stars and manual sends. Add ntfy or Apprise
+  for push notifications and retry failed deliveries in Reading & connections.
 - Add Linux ARM64 support for the reader and Codex worker. Both use the same
   release tags as amd64. Reader archives are available for each architecture.
 - Save articles to Linkding, Wallabag, Readeck, Raindrop.io or Linkwarden.
