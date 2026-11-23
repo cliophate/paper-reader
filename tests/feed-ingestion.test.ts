@@ -1,3 +1,4 @@
+import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import { MAX_ENCLOSURES, MAX_ENCLOSURE_URL_BYTES } from '../src/server/enclosure-limits.js'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -49,9 +50,9 @@ describe('repeatable feed ingestion', () => {
   it('backs up pre-enclosure articles and keeps positions across reordering and restart', () => {
     const id = resolvedId(ingest())
     db.saveReadingProgress(id, 0.4)
-    sql(c => c.exec('DROP TABLE article_enclosures; ALTER TABLE entries DROP COLUMN enclosures_checked; PRAGMA user_version = 22'))
+    sql(c => c.exec('DROP TABLE annotations; DROP TABLE article_enclosures; ALTER TABLE entries DROP COLUMN enclosures_checked; PRAGMA user_version = 22'))
     reopen()
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(23)
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
     const backup = new DatabaseSync(file + '.before-podcast-enclosures-v23', { readOnly: true })
     try {
       expect(backup.prepare('PRAGMA user_version').get()?.user_version).toBe(22)

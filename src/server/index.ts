@@ -2,6 +2,7 @@ import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { GreaderAuth } from './greader-auth.js'
 import { greaderRoutes } from './greader-routes.js'
 import { RetentionService } from './retention.js'
+import { AnnotationError } from './annotations.js'
 import { retentionRouter } from './retention-routes.js'
 import { AuthConnections } from './auth-connections.js'
 import { authGate, authRoutes, cookie, trustedProxyHops } from './auth-routes.js'
@@ -340,6 +341,32 @@ app.get('/api/events', (request, response) => {
     navigationListeners.delete(navigationChanged)
     unsubscribeState()
   })
+})
+
+app.get('/api/annotations', (request, response) => {
+  const entryId = request.query.entryId
+  if (entryId !== undefined && typeof entryId !== 'string') throw new AnnotationError(400, 'Choose an article.')
+  const { before, limit } = request.query
+  if ((before !== undefined && typeof before !== 'string') || (limit !== undefined && typeof limit !== 'string'))
+    throw new AnnotationError(400, 'Invalid annotation page.')
+  response.set('Cache-Control', 'no-store').json(database.annotations.list(entryId, before === undefined ? undefined : Number(before),
+    limit === undefined ? undefined : Number(limit)))
+})
+app.get('/api/annotations/articles', (request, response) => {
+  const { after = '' } = request.query
+  if (typeof after !== 'string') throw new AnnotationError(400, 'Invalid article cursor.')
+  response.set('Cache-Control', 'no-store').json(database.annotations.articleIds(after))
+})
+app.post('/api/annotations', (request, response) => {
+  response.status(201).json({ id: database.annotations.create(request.body) })
+})
+app.patch('/api/annotations/:id', (request, response) => {
+  database.annotations.change(Number(request.params.id), request.body?.revision, { note: request.body?.note })
+  response.json({ ok: true })
+})
+app.delete('/api/annotations/:id', (request, response) => {
+  database.annotations.change(Number(request.params.id), request.body?.revision)
+  response.json({ ok: true })
 })
 
 app.use('/api/retention', retentionRouter(retention))
@@ -954,6 +981,7 @@ app.use((error: Error, request: Request, response: Response, _next: NextFunction
   if ([5, 6].includes((error as Error & { errcode?: number }).errcode || 0)) return response.status(503).set('Retry-After', '1').json({ error: 'The library is busy. Try again.' })
   if (error instanceof SearchSnapshotError) return response.status(409).json({ error: error.message })
   if (error instanceof SearchLimitError) return response.status(400).json({ error: error.message })
+  if (error instanceof AnnotationError) return response.status(error.status).json({ error: error.message })
   if (error instanceof SearchUnavailableError) return response.status(503).json({ error: error.message })
   if (error instanceof StateConflictError) return response.status(409).json({ code: 'state-conflict', error: error.message, states: error.states })
   if (error instanceof UndoExpiredError) return response.status(410).json({ error: error.message })

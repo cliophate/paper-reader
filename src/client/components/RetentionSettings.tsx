@@ -115,7 +115,7 @@ export function RetentionSettings({ backend }: { backend: 'standalone' | 'freshr
             <div className="retention-protections">
               <h6>Paper always keeps</h6>
               <ul>
-                <li>Starred articles</li><li>Articles with discussions</li><li>Pulse collections</li>
+                <li>Starred articles</li><li>Articles with highlights or personal notes</li><li>Articles with discussions</li><li>Pulse collections</li>
                 <li>Saved briefings and reports</li><li>Recent reading history</li><li>Articles still in their feed</li>
               </ul>
               <p>Paper makes a backup before it deletes anything for the first time.</p>

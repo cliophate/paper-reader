@@ -58,6 +58,22 @@ The migration saves `paper.sqlite.before-podcast-enclosures-v23`. Existing
 FreshRSS articles fetch missing attachment metadata once when opened. Other
 articles gain attachments when their feed or backend supplies them again.
 
+Schema v24 adds article highlights and personal notes. Paper saves
+`paper.sqlite.before-annotations-v24` before upgrading. Quote anchors use the
+article body's text with line breaks between blocks. Their position hints count
+UTF-16 code units in that same text. To locate a quote after the body changes,
+Paper collapses whitespace and compares the nearest 24 characters on each
+side, or all available context on a shorter side. It trims whitespace from
+the ends of the quote. A word at the start or end of the article must still
+have a word boundary there. Paper maps the match back to the original offsets.
+
+To roll back v24, stop Paper. Copy the current `paper.sqlite` and any
+`paper.sqlite-wal` and `paper.sqlite-shm` files to a separate directory.
+Copy `paper.sqlite.before-annotations-v24` over `paper.sqlite`, remove any
+stale `paper.sqlite-wal` and `paper.sqlite-shm` from the data directory,
+then start the previous release. Restoring a pre-v21 backup instead would
+discard all changes made since that backup.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh

@@ -1,5 +1,7 @@
 import { EnclosurePlayers } from './components/EnclosurePlayers'
 import { MAX_DISPLAYED_SEARCH_IDS, searchHint as getSearchHint } from '../server/search-query'
+import { ArticleNotes, Highlights, useAnnotations, usePassageRanges } from './components/Annotations'
+import { anchorPassage, passageText } from './passage'
 import { AccessSettings } from './components/AccessSettings'
 import { OrganizationSidebar } from './components/OrganizationSidebar'
 import { FeedMark } from './components/FeedMark'
@@ -84,6 +86,8 @@ interface EntryContextState {
 }
 
 interface SelectionContextState {
+  entryId: string
+  save?: () => void
   quote: string
   left: number
   top: number
@@ -156,6 +160,7 @@ export default function App() {
   const [settingsFeedView, setSettingsFeedView] = useState<'manage' | 'discover'>('manage')
   const [entryContext, setEntryContext] = useState<EntryContextState | null>(null)
   const [selectionContext, setSelectionContext] = useState<SelectionContextState | null>(null)
+  useEffect(() => setSelectionContext(null), [online, view, selectedId])
   const [discussionTarget, setDiscussionTarget] = useState<{ entry: Entry; quote: string } | null>(null)
   useEffect(() => {
     if (discussionTarget && (discussionTarget.entry.id !== selectedId || view !== 'reader')) setDiscussionTarget(null)
@@ -211,8 +216,8 @@ export default function App() {
     : listedEntry, [listedEntry, refreshOffline, offlineMedia])
   const readerGeneration = useRef(0)
   useLayoutEffect(() => { readerGeneration.current += 1 }, [view, stream.kind, stream.id, unreadOnly, query, libraryMode, searchStream.kind, searchStream.id, searchUnread, after, before, pulseContext?.id])
-  const currentReader = useRef({ stream, selected, previousContinuation, entries })
-  currentReader.current = { stream, selected, previousContinuation, entries }
+  const currentReader = useRef({ stream, selected, previousContinuation, entries, libraryMode })
+  currentReader.current = { stream, selected, previousContinuation, entries, libraryMode }
   const selectedIndex = selected ? entries.findIndex(entry => entry.id === selected.id) : -1
   const adjacentSources = stream.kind === 'category' ? navigation?.folders || [] : stream.kind === 'feed' ? navigationFeeds(navigation) : []
   const currentFolderIndex = adjacentSources.findIndex(source => source.id === stream.id)
@@ -905,9 +910,10 @@ export default function App() {
     }
   }, [loadNavigation, notify, openStream, pushLocation])
 
-  const openBriefings = useCallback(() => {
-    pushLocation({ view: 'briefings', selectedId: '', query: '', mobilePane: 'stories', collection: undefined })
-    setView('briefings')
+  const openLibraryView = useCallback((view: 'briefings' | 'highlights') => {
+    setPulseContext(null)
+    pushLocation({ view, selectedId: '', query: '', mobilePane: 'stories', collection: undefined })
+    setView(view)
     setSelectedId('')
     setQuery('')
     setMobilePane('stories')
@@ -1146,7 +1152,7 @@ export default function App() {
   }, [automaticFullFeeds, fetchFullText, mobilePane, selected, fullMode, online])
 
   useEffect(() => {
-    if (!online || !autoRead || !selected || !shouldAutoMarkRead(selected, mobilePane, manuallyUnreadId.current)) return
+    if (view !== 'reader' || !online || !autoRead || !selected || !shouldAutoMarkRead(selected, mobilePane, manuallyUnreadId.current)) return
     let timer: number | undefined
     const schedule = () => {
       window.clearTimeout(timer)
@@ -1165,7 +1171,7 @@ export default function App() {
       window.removeEventListener('focus', schedule)
       window.removeEventListener('blur', cancel)
     }
-  }, [selected, mobilePane, setEntryState, autoRead, online])
+  }, [view, selected, mobilePane, setEntryState, autoRead, online])
 
   const move = useCallback((direction: 1 | -1): Promise<boolean> => articleNavigation.run(async signal => {
     if (pulseContext && selected) {
@@ -1487,6 +1493,8 @@ export default function App() {
       if (typing || overlays.command || overlays.help || overlays.settings || overlays.appearance) return
       const key = event.key
       const direction = movementDirection(key)
+      if (view === 'highlights' && (direction || key === 'Enter' || key === 'u' || key === 'Escape')) return
+      if ((event.shiftKey && key.startsWith('Arrow')) || (key === 'Enter' && target.closest('a,button,summary'))) return
       if (direction) {
         event.preventDefault()
         void move(direction)
@@ -1530,7 +1538,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [closeEntry, move, openEntry, overlays, selected, refresh, fetchFullText, markAllRead, chooseSaveFor, startSave, setEntryState, discussionTarget, bulkPreview, reportEntry, selectionContext, entryContext])
+  }, [view, closeEntry, move, openEntry, overlays, selected, refresh, fetchFullText, markAllRead, chooseSaveFor, startSave, setEntryState, discussionTarget, bulkPreview, reportEntry, selectionContext, entryContext])
 
   function openSettings() {
     setSettingsFeedId('')
@@ -1589,7 +1597,8 @@ export default function App() {
           <SourceButton active={view === 'reader' && libraryMode === 'stream' && !query && stream.kind === 'starred'} icon="star" label="Starred" count={navigation?.starred || 0} onClick={() => openStream(starredStream)} />
           <SourceButton active={view === 'reader' && libraryMode === 'recent'} icon="reader" label="Continue reading" count={0} onClick={() => openLibrary('recent')} />
           <SourceButton active={view === 'reader' && libraryMode === 'offline'} icon="feed" label="Offline articles" count={0} onClick={() => openLibrary('offline')} />
-          <SourceButton active={view === 'briefings'} icon="reader" label="Briefings" count={0} onClick={openBriefings} />
+          <SourceButton active={view === 'briefings'} icon="reader" label="Briefings" count={0} onClick={() => openLibraryView('briefings')} />
+          <SourceButton active={view === 'highlights'} icon="bookmark" label="Highlights" count={0} onClick={() => openLibraryView('highlights')} />
           <SourceButton active={view === 'pulse'} icon="topics" label="Pulse" count={0} onClick={openTopics} />
           <div className="nav-rule" />
           {mobileLayout && navigation && unreadOnly && navigation.unread === 0 && visibleFolders.length === 0 && visibleUncategorized.length === 0 && <div className="sources-empty">
@@ -1692,7 +1701,11 @@ export default function App() {
           onRefreshText={() => void fetchFullText(selected, false, true)}
           onOffline={() => { setOfflineBusy(true); void saveOffline(selected).then(() => notify('Saved for offline reading on this device')).catch(error => notify(error.message)).finally(() => setOfflineBusy(false)) }}
           offlineBusy={offlineBusy}
-          onRemoveOffline={libraryMode === 'offline' ? () => void removeOffline(selected.id).then(() => { setSelectedId(''); void loadEntries() }) : undefined}
+          onRemoveOffline={libraryMode === 'offline' ? () => void removeOffline(selected.id).then(() => {
+            if (currentReader.current.libraryMode !== 'offline') return
+            setSelectedId(current => current === selected.id ? '' : current)
+            void loadEntries()
+          }) : undefined}
           onPrevious={() => void move(-1)} onNext={() => void move(1)}
           onToggleRead={() => void setEntryState(selected, selected.read ? 'unread' : 'read')}
           onToggleStar={() => void setEntryState(selected, selected.starred ? 'unstar' : 'star')}
@@ -1701,7 +1714,8 @@ export default function App() {
           onFullText={() => { const full = fullVersions.current.get(selected.id); if (full) updateEntry(selected.id, articleContent(full)); else void fetchFullText() }}
           onReport={() => setReportEntry(selected)}
           discussionConfigured={status.discussionConfigured}
-          selectionActionsConfigured={status.discussionConfigured || status.kirbyConfigured}
+          onKirby={status.kirbyConfigured ? createKirbyNote : undefined}
+          notify={notify}
           onDiscuss={() => setDiscussionTarget({ entry: selected, quote: '' })}
           fullTextBusy={fetchingFullTextId === selected.id}
           onAppearance={() => setOverlays({ ...closedOverlays, appearance: true })}
@@ -1714,8 +1728,9 @@ export default function App() {
           previousTitle={previousArticleTitle}
           nextTitle={nextArticleTitle}
           onSelectionContext={setSelectionContext}
+          onTextSelected={revealReaderChrome}
         /> : <ReaderEmpty onCommand={() => setOverlays({ ...closedOverlays, command: true })} />}
-      </main></> : view === 'briefings'
+      </main></> : view === 'highlights' ? <Highlights online={online} onBack={openSources} /> : view === 'briefings'
         ? <BriefingLibrary onBack={openSources} refreshKey={topicsRefreshKey} onOpenEntry={id => void openTopicEntry(id)} onMarkedRead={ids => {
           const changed = new Set(ids)
           setEntries(current => current.map(entry => changed.has(entry.id) ? { ...entry, read: true } : entry))
@@ -1733,7 +1748,7 @@ export default function App() {
 
       <MobileTabs boundaryStore={articleBoundaryStore}>
         <button className={view === 'reader' && mobilePane === 'sources' ? 'active' : ''} onClick={openSources}><Icon name="folder" /><span>Sources</span></button>
-        <button className={view !== 'reader' || mobilePane === 'stories' ? 'active' : ''} onClick={() => view === 'briefings' ? openBriefings() : view === 'pulse' ? openTopics() : changeMobilePane('stories')}><Icon name={view === 'briefings' ? 'reader' : view === 'pulse' ? 'topics' : 'feed'} /><span>{view === 'briefings' ? 'Briefings' : view === 'pulse' ? 'Pulse' : 'Stories'}</span></button>
+        <button className={view !== 'reader' || mobilePane === 'stories' ? 'active' : ''} onClick={() => view === 'briefings' || view === 'highlights' ? openLibraryView(view) : view === 'pulse' ? openTopics() : changeMobilePane('stories')}><Icon name={view === 'highlights' ? 'bookmark' : view === 'briefings' ? 'reader' : view === 'pulse' ? 'topics' : 'feed'} /><span>{view === 'highlights' ? 'Highlights' : view === 'briefings' ? 'Briefings' : view === 'pulse' ? 'Pulse' : 'Stories'}</span></button>
         <button className={mobilePane === 'article' ? 'active' : ''} disabled={!selected} onClick={() => selected && changeMobilePane('article')}><Icon name="bookmark" /><span>Reading</span></button>
       </MobileTabs>
 
@@ -1755,7 +1770,7 @@ export default function App() {
       </Modal>}
       {overlays.help === 'shortcuts' && <ShortcutHelp onSearchHelp={() => setOverlays({ ...closedOverlays, help: 'search' })} onClose={() => setOverlays(closedOverlays)} />}
       {entryContext && <EntryContextMenu key={entryContext.entry.id} state={entryContext} unsubscribeAvailable={Boolean(organization?.capabilities.unsubscribe && uniqueFeeds(navigation).some(feed => feed.id === entryContext.entry.feedId))} relativeAvailable={libraryMode === 'stream' && online} onClose={() => setEntryContext(null)} onOpen={() => { setEntryContext(null); openEntry(entryContext.entry) }} onCopyUrl={() => { void copyArticleUrl(entryContext.entry); setEntryContext(null) }} onToggleRead={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.read ? 'unread' : 'read') }} onToggleStar={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.starred ? 'unstar' : 'star') }} onReport={() => { setReportEntry(entryContext.entry); setEntryContext(null) }} onMarkAbove={() => void markRelativeRead(entryContext.entry, 'above')} onMarkBelow={() => void markRelativeRead(entryContext.entry, 'below')} onUnsubscribe={() => void unsubscribeFeed({ id: entryContext.entry.feedId, title: entryContext.entry.feedTitle })} />}
-      {selectionContext && (status.kirbyConfigured || status.discussionConfigured) && <SelectionContextMenu state={selectionContext} kirbyConfigured={status.kirbyConfigured} discussionConfigured={status.discussionConfigured} onClose={() => setSelectionContext(null)} onCreate={() => void createKirbyNote(selectionContext.quote)} onDiscuss={() => { if (!status.discussionConfigured) return notify('Article discussion is not configured'); if (selected) setDiscussionTarget({ entry: selected, quote: selectionContext.quote }); setSelectionContext(null) }} />}
+      {online && selectionContext && selectionContext.entryId === selectedId && (selectionContext.save || status.kirbyConfigured || status.discussionConfigured) && <SelectionContextMenu state={selectionContext} kirbyConfigured={status.kirbyConfigured} discussionConfigured={status.discussionConfigured} onClose={() => setSelectionContext(null)} onCreate={() => void createKirbyNote(selectionContext.quote)} onDiscuss={() => { if (!status.discussionConfigured) return notify('Article discussion is not configured'); if (selected) setDiscussionTarget({ entry: selected, quote: selectionContext.quote }); setSelectionContext(null) }} />}
       {discussionTarget && <ArticleDiscussion key={discussionTarget.entry.id} entry={discussionTarget.entry} initialQuote={discussionTarget.quote} onClose={() => setDiscussionTarget(null)} />}
       {overlays.settings && <Settings backend={status.backend} section={settingsSection} setSection={setSettingsSection} initialFeedId={settingsFeedId} initialFeedView={settingsFeedView} navigation={navigation} onChanged={loadNavigation} onFiltersChanged={reloadFilteredLibrary} onFiltersMatching={setFiltersMatching} notify={notify} onConnectionsChanged={loadStatus} autoRead={autoRead} setAutoRead={value => { setAutoRead(value); localStorage.setItem('paper-auto-read', value ? 'automatic' : 'manual') }} onOpenEntry={id => { setOverlays(closedOverlays); void openTopicEntry(id) }} onClose={() => { setOverlays(closedOverlays); setSettingsFeedView('manage') }} />}
       {overlays.appearance && <AppearancePopover theme={theme} setTheme={setTheme} readerFont={readerFont} setReaderFont={setReaderFont} readerSize={readerSize} setReaderSize={setReaderSize} readerSpacing={readerSpacing} setReaderSpacing={setReaderSpacing} readerWidth={readerWidth} setReaderWidth={setReaderWidth} onClose={() => setOverlays(closedOverlays)} />}
@@ -1765,7 +1780,7 @@ export default function App() {
   )
 }
 
-function SourceButton({ active, icon, label, count, onClick }: { active: boolean; icon: 'feed' | 'star' | 'reader' | 'topics'; label: string; count: number; onClick: () => void }) {
+function SourceButton({ active, icon, label, count, onClick }: { active: boolean; icon: 'feed' | 'star' | 'reader' | 'topics' | 'bookmark'; label: string; count: number; onClick: () => void }) {
   return <button className={`source-row ${active ? 'active' : ''}`} onClick={onClick}><Icon name={icon} /><span className="source-label">{label}</span>{count > 0 && <span className="source-count">{count}</span>}</button>
 }
 
@@ -1855,6 +1870,7 @@ function SelectionContextMenu({ state, onClose, onCreate, onDiscuss, kirbyConfig
   }, [onClose])
 
   return <div ref={ref} className="feed-context-menu selection-context-menu" role="menu" aria-label="Selected text options" style={{ left: state.left, top: state.top }}>
+    {state.save && <button role="menuitem" onClick={() => { onClose(); state.save?.() }}><Icon name="bookmark" /> Save highlight</button>}
     {discussionConfigured && <button role="menuitem" onClick={onDiscuss}><Icon name="reader" /> Ask about this</button>}
     {kirbyConfigured && <button role="menuitem" onClick={onCreate}><Icon name="plus" /> Create note in Kirby</button>}
   </div>
@@ -1969,7 +1985,8 @@ const ArticleView = forwardRef<HTMLElement, {
   onReport: () => void
   onDiscuss: () => void
   discussionConfigured: boolean
-  selectionActionsConfigured: boolean
+  onKirby?: (quote: string) => void
+  notify: (message: string) => void
   fullTextBusy: boolean
   onAppearance: () => void
   onScroll: (event: React.UIEvent<HTMLDivElement>) => void
@@ -1980,9 +1997,14 @@ const ArticleView = forwardRef<HTMLElement, {
   nextAvailable: boolean
   previousTitle: string
   nextTitle: string
+  onTextSelected: () => void
   onSelectionContext: (state: SelectionContextState | null) => void
-}>(function ArticleView({ active, entry, feedIconUrl, players, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, saveLabel, saveCaption, saveDisabled, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onSave, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, selectionActionsConfigured, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext }, ref) {
+}>(function ArticleView({ active, entry, feedIconUrl, players, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, saveLabel, saveCaption, saveDisabled, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onSave, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, onKirby, notify, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext, onTextSelected }, ref) {
   const content = useRef<HTMLDivElement>(null)
+  const annotations = useAnnotations(online, entry.id)
+  const body = entry.fullText ? 'full' : 'feed'
+  const found = usePassageRanges(content, annotations.items, body, entry.contentHtml)
+  const [notesFor, setNotesFor] = useState('')
   const chrome = useRef<HTMLDivElement>(null)
   const [hasSelection, setHasSelection] = useState(false)
   useLayoutEffect(() => {
@@ -2001,28 +2023,46 @@ const ArticleView = forwardRef<HTMLElement, {
     return () => observer?.disconnect()
   }, [active, entry.id, collectionTitle, online, actionError, fullTextError, hasSelection])
   useEffect(() => {
-    const update = () => setHasSelection(Boolean(content.current && selectedTextWithin(content.current)))
+    const update = () => {
+      const root = onKirby || discussionConfigured ? content.current : content.current?.querySelector<HTMLElement>('.article-content')
+      const selected = Boolean(root && selectedTextWithin(root))
+      setHasSelection(selected)
+      if (selected) onTextSelected()
+    }
     document.addEventListener('selectionchange', update)
     return () => document.removeEventListener('selectionchange', update)
-  }, [])
-  const selectedPassage = () => {
-    const quote = content.current ? selectedTextWithin(content.current) : ''
-    if (quote) onSelectionContext({ quote, left: Math.max(8, Math.min(24, window.innerWidth - 240)), top: Math.min(160, window.innerHeight - 130) })
+  }, [discussionConfigured, onKirby, onTextSelected])
+  const articleBody = () => content.current?.querySelector<HTMLElement>('.article-content')
+  const selectedPassage = (left: number, top: number) => {
+    const quote = content.current && selectedTextWithin(content.current)
+    if (!quote || !online) return false
+    const root = articleBody()
+    const selection = window.getSelection()
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null
+    const projection = root && range && root.contains(range.commonAncestorContainer) ? passageText(root) : null
+    const position = projection && range && projection.selection(range)
+    const anchor = position && projection ? anchorPassage(projection.text, position, body) : null
+    if (!anchor && !onKirby && !discussionConfigured) return false
+    onSelectionContext({
+      entryId: entry.id, quote, left: Math.max(8, Math.min(left, window.innerWidth - 232)),
+      top: Math.max(8, Math.min(top, window.innerHeight - 164)),
+      save: anchor ? () => {
+        void api.addAnnotation({ entryId: entry.id, anchor }).then(() => {
+          annotations.refresh()
+          notify('Highlight saved')
+        }).catch(error => notify(error.message))
+      } : undefined,
+    })
+    return true
   }
   const openSelectionContext = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!selectionActionsConfigured) return
-    const quote = selectedTextWithin(event.currentTarget)
-    if (!quote) return
-    event.preventDefault()
-    event.stopPropagation()
-    onSelectionContext({
-      quote,
-      left: Math.max(8, Math.min(event.clientX, window.innerWidth - 224)),
-      top: Math.max(8, Math.min(event.clientY, window.innerHeight - 100)),
-    })
+    if (selectedPassage(event.clientX, event.clientY)) { event.preventDefault(); event.stopPropagation() }
   }
-
-  return <article className={`article-view kind-${entry.kind}`} tabIndex={-1} ref={ref}>
+  return <article className={`article-view kind-${entry.kind}`} tabIndex={-1} ref={ref} onKeyDown={event => {
+    if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && selectedPassage(24, 160)) event.preventDefault()
+  }}>
+    {notesFor === entry.id && <ArticleNotes online={online} key={entry.id} entryId={entry.id} {...annotations} found={found} onKirby={onKirby}
+      passage={() => { const root = articleBody(); return { body, text: root ? passageText(root).text : '' } }} onClose={() => setNotesFor('')} />}
     <div ref={chrome} className="reader-chrome">
       <div className="reader-toolbar">
         <button className="reader-back-button" onClick={onBack} aria-label={backLabel} title={backLabel}><Icon name="back" /></button>
@@ -2047,14 +2087,27 @@ const ArticleView = forwardRef<HTMLElement, {
         <details><summary>Article options</summary><div className="article-options-menu">
           {entry.kind === 'article' && <><button disabled={!entry.fullText || !online} onClick={onFeedText}>Show feed version</button><button disabled={fullTextBusy || !online} onClick={onRefreshText}>Refresh full article</button><label>Full text for this feed<select value={fullMode} onChange={event => onFullMode(event.target.value as FullTextMode)}><option value="auto">Auto</option><option value="always">Always</option><option value="never">Never automatically</option></select></label></>}
           {saveLabel && <button disabled={saveDisabled} onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); onSave() }}>{saveLabel}</button>}
+          <button disabled={!online} onClick={event => {
+            const details = event.currentTarget.closest('details')
+            if (details) { details.open = false; details.querySelector('summary')?.focus() }
+            annotations.refresh()
+            setNotesFor(entry.id)
+          }}>Article notes</button>
           <button disabled={offlineBusy} onClick={onOffline}>{offlineBusy ? 'Saving offline...' : 'Save offline'}</button>
-          {onRemoveOffline && <button onClick={onRemoveOffline}>Remove offline copy</button>}
+          {onRemoveOffline && <button onClick={async () => {
+            let needsConfirmation = true
+            if (online && navigator.onLine) {
+              try { needsConfirmation = (await api.annotationPage({ entryId: entry.id, limit: 1 })).items.length > 0 }
+              catch { /* Confirm when the server cannot verify the article. */ }
+            }
+            if ((!needsConfirmation && navigator.onLine) || window.confirm('Remove this offline copy? Any highlights and notes stay on the server.')) onRemoveOffline()
+          }}>Remove offline copy</button>}
         </div></details>
-        {hasSelection && <button onPointerDown={event => event.preventDefault()} onClick={selectedPassage}>Use selected text</button>}
+        {online && hasSelection && <button onPointerDown={event => event.preventDefault()} onClick={() => selectedPassage(24, 160)}>Use selected text</button>}
       </div>
     </div>
     {navigationBusy && <div className="article-navigation-status" role="status">Loading article...</div>}
-    <div ref={content} className="article-scroll" onScroll={onScroll} onTouchEndCapture={() => onTouchEnd(false)} onTouchCancelCapture={() => onTouchEnd(true)} onContextMenu={openSelectionContext}>
+    <div ref={content} className="article-scroll" onScroll={onScroll} onTouchEndCapture={() => onTouchEnd(Boolean(content.current && selectedTextWithin(content.current)))} onTouchCancelCapture={() => onTouchEnd(true)} onContextMenu={openSelectionContext}>
       <ArticleEdgeZone direction="previous" title={previousTitle} available={previousAvailable} store={boundaryStore} />
       <div key={entry.id} className="article-document">
         {entry.kind !== 'article' ? <SocialArticle entry={entry} feedIconUrl={feedIconUrl}>{players}</SocialArticle> : <StandardArticle entry={entry} feedIconUrl={feedIconUrl}>{players}</StandardArticle>}

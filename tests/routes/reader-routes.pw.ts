@@ -25,7 +25,7 @@ for (const width of [1280, 390]) test(`direct navigation and refresh for every r
   const paths = ['/', '/starred', `/feed/${feed.linkNumber}/synthetic-feed`, `/folder/${folder.linkNumber}/a`,
     `/feed/${emptySlug.linkNumber}`, `/a/${article.linkNumber}`, `/starred/a/${article.linkNumber}`,
     `/feed/${feed.linkNumber}/synthetic-feed/a/${article.linkNumber}`, `/folder/${folder.linkNumber}/a/a/${article.linkNumber}`,
-    `/collection/${collection.linkNumber}`, `/collection/${collection.linkNumber}/a/${article.linkNumber}`, '/recent', '/offline', '/briefings', '/pulse']
+    `/collection/${collection.linkNumber}`, `/collection/${collection.linkNumber}/a/${article.linkNumber}`, '/recent', '/offline', '/briefings', '/pulse', '/highlights']
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   for (const path of paths) {

@@ -77,6 +77,7 @@ export class RetentionStore {
         OR EXISTS (SELECT 1 FROM pulse_memberships WHERE entry_id = e.id)
         OR EXISTS (SELECT 1 FROM briefing_entries WHERE entry_id = e.id)
         OR EXISTS (SELECT 1 FROM retention_briefing_entries WHERE entry_id = e.id)
+        OR EXISTS (SELECT 1 FROM annotations WHERE entry_id = e.id)
         OR EXISTS (SELECT 1 FROM article_reports WHERE entry_id = e.id)
         OR EXISTS (SELECT 1 FROM reading_progress WHERE entry_id = e.id AND updated_at >= ?)
         OR e.id IN (SELECT entry_id FROM reading_progress ORDER BY updated_at DESC LIMIT 100)

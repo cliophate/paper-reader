@@ -30,3 +30,11 @@ it('preserves the full-text capacity error for the reader', async () => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ error: message }), { status: 503 }))
   await expect(api.fullText('https://example.test/article')).rejects.toMatchObject({ message, status: 503 })
 })
+
+it('includes the search term in the article request', async () => {
+  const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ items: [] }))
+  await api.entries({ kind: 'all', id: 'all', title: 'All articles' }, false, 'missing & unrelated')
+  const url = new URL(String(fetch.mock.calls[0][0]), 'https://example.test')
+  expect(url.pathname).toBe('/api/entries')
+  expect(url.searchParams.get('q')).toBe('missing & unrelated')
+})

@@ -29,12 +29,12 @@ article and cache runs and errors.
 
 ## What stays
 
-The table covers every article reference in schema v14, including references
-stored as JSON or URLs.
+These rules also cover references stored as JSON or URLs.
 
 | Table or field | Retention decision |
 | --- | --- |
 | `entries.starred` | Protect starred articles. |
+| `annotations.entry_id` | Keep articles with a highlight or personal note, even if the passage has changed. |
 | `discussions.entry_id` | Protect every article with a discussion, including an empty discussion. |
 | `pulse_memberships.entry_id` | Protect every saved Pulse collection member. `pulse_collections` and `pulse_visits` remain. |
 | `briefing_entries.entry_id`, `retention_briefing_entries.entry_id` | Protect articles included in saved briefings. The retention table also indexes background and image article IDs from `briefings.selection_json`, HTML and text. `briefing_feedback` remains. |
