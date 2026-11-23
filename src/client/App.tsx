@@ -15,8 +15,9 @@ import { useDialogFocus, useMenuFocus } from './dialogFocus'
 import { useReadingProgress } from './readingProgress'
 import { MAX_ENCLOSURES } from '../server/enclosure-limits'
 import { clearOffline, offlineArticles, removeOffline, saveOffline } from './offline'
-import { fullTextMode, setFullTextMode, type FullTextMode } from './fullTextPreferences'
 import { FeedOverrides } from './components/FeedOverrides'
+import type { FullTextMode } from '../server/reading-preference-values'
+import { PreferenceNotice, ReadingPreferencesProvider, ReadingSettings, useReadingPreferences } from './components/ReadingPreferences'
 import { FeedRepair } from './components/FeedRepair'
 import { ArticleDiscussion } from './components/ArticleDiscussion'
 import { BackendSettings } from './components/BackendSettings'
@@ -33,7 +34,7 @@ import { StaleThresholds } from './components/StaleThresholds'
 import { useFeedChecksView } from './components/FeedChecks'
 import type { FeedMaintenance } from '../shared/feed-checks'
 import { duplicateFeedGroups, feedMatchesAge, type FeedFilter } from './feedFilters'
-import { automaticFullTextFeeds, recordFullTextSuccess } from './fullTextPreferences'
+import { recordFullTextSuccess } from './fullTextPreferences'
 import { movementDirection } from './keyboard'
 import { readReaderLocation, readerLocationUrl, resolveReaderLocation, type ReaderLinks, type MobilePane, type ReaderLocation } from './location'
 import { articleEdgeState, swipeDirection, type GesturePoint } from './mobileGestures'
@@ -94,6 +95,10 @@ interface SelectionContextState {
 }
 
 export default function App() {
+  return <ReadingPreferencesProvider><Reader /></ReadingPreferencesProvider>
+}
+
+function Reader() {
   const [initialLocation] = useState(() => readReaderLocation())
   const [pendingLocation, setPendingLocation] = useState<ReaderLocation | null>(initialLocation)
   const resolvingLocation = useRef(true)
@@ -129,8 +134,10 @@ export default function App() {
   const [statusError, setStatusError] = useState('')
   const navigationRequest = useRef<AbortController | null>(null)
   const statusRequest = useRef<AbortController | null>(null)
-  const [autoRead, setAutoRead] = useState(() => localStorage.getItem('paper-auto-read') !== 'manual')
-  const [fullMode, setFullMode] = useState<FullTextMode>('auto')
+  const preferences = useReadingPreferences()
+  const { store: readingPreferences } = preferences
+  const preferencesReady = preferences.state.hasSnapshot || !!preferences.state.legacy
+  const autoRead = preferencesReady && preferences.value('markRead') === 'automatic'
   const feedVersions = useRef(new Map<string, Entry>())
   const fullVersions = useRef(new Map<string, Entry>())
   const [saveBusy, setSaveBusy] = useState(false)
@@ -168,17 +175,16 @@ export default function App() {
   const [reportEntry, setReportEntry] = useState<Entry | null>(null)
   const [toast, setToast] = useState<ToastState | null>(null)
   const [theme, setTheme] = useState(() => localStorage.getItem('paper-theme') || 'system')
-  const [readerFont, setReaderFont] = useState<ReaderFont>(() => localStorage.getItem('paper-reader-font') === 'source' ? 'source' : 'literata')
+  const readerFont = preferences.value('font') as ReaderFont
   const [readerSize, setReaderSize] = useState<ReaderSize>(() => storedChoice('paper-reader-size', ['small', 'medium', 'large'], 'medium'))
-  const [readerSpacing, setReaderSpacing] = useState<ReaderSpacing>(() => storedChoice('paper-reader-spacing', ['compact', 'comfortable', 'spacious'], 'comfortable'))
-  const [readerWidth, setReaderWidth] = useState<ReaderWidth>(() => storedChoice('paper-reader-width', ['narrow', 'standard', 'wide'], 'standard'))
+  const readerSpacing = preferences.value('spacing') as ReaderSpacing
+  const readerWidth = preferences.value('width') as ReaderWidth
   const [pullDistance, setPullDistance] = useState(0)
   const [sourcePullDistance, setSourcePullDistance] = useState(0)
   const [readerChromeHidden, setReaderChromeHidden] = useState(false)
   const [articleBoundaryStore] = useState(createArticleBoundaryStore)
   const [articleNavigation] = useState(createArticleNavigation)
   const [articleNavigationBusy, setArticleNavigationBusy] = useState(false)
-  const [automaticFullFeeds, setAutomaticFullFeeds] = useState(() => automaticFullTextFeeds(localStorage))
   const [status, setStatus] = useState({ backend: 'freshrss' as 'freshrss' | 'standalone' | 'miniflux', discussionConfigured: false, readwiseConfigured: false, saveDestinations: [] as SaveDestination[], kirbyConfigured: false, briefingConfigured: false })
   const listRef = useRef<HTMLDivElement>(null)
   const selectedIdRef = useRef(selectedId)
@@ -214,6 +220,8 @@ export default function App() {
   const selected = useMemo(() => listedEntry && refreshOffline && offlineMedia?.id === listedEntry.id && !offlineMedia.useCached
     ? { ...listedEntry, enclosures: offlineMedia.enclosures }
     : listedEntry, [listedEntry, refreshOffline, offlineMedia])
+  const fullMode = selected ? preferences.value(`fullText:${selected.feedId}`) as FullTextMode : 'auto'
+  const learnedFullText = !!selected && preferences.value(`learned:${selected.feedId}`) === 'on'
   const readerGeneration = useRef(0)
   useLayoutEffect(() => { readerGeneration.current += 1 }, [view, stream.kind, stream.id, unreadOnly, query, libraryMode, searchStream.kind, searchStream.id, searchUnread, after, before, pulseContext?.id])
   const currentReader = useRef({ stream, selected, previousContinuation, entries, libraryMode })
@@ -272,7 +280,6 @@ export default function App() {
     window.addEventListener('online', update); window.addEventListener('offline', update)
     return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update) }
   }, [])
-  useEffect(() => { const update = () => setFullMode(selected ? fullTextMode(selected.feedId) : 'auto'); update(); window.addEventListener('paper-preferences', update); return () => window.removeEventListener('paper-preferences', update) }, [selected?.feedId])
   const loadStatus = useCallback(async () => {
     statusRequest.current?.abort()
     const controller = new AbortController()
@@ -761,7 +768,6 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.dataset.readerFont = readerFont
-    localStorage.setItem('paper-reader-font', readerFont)
   }, [readerFont])
 
   useEffect(() => {
@@ -769,8 +775,6 @@ export default function App() {
     document.documentElement.dataset.readerSpacing = readerSpacing
     document.documentElement.dataset.readerWidth = readerWidth
     localStorage.setItem('paper-reader-size', readerSize)
-    localStorage.setItem('paper-reader-spacing', readerSpacing)
-    localStorage.setItem('paper-reader-width', readerWidth)
   }, [readerSize, readerSpacing, readerWidth])
 
   useLayoutEffect(() => {
@@ -1131,8 +1135,8 @@ export default function App() {
       fullVersions.current.set(target.id, full)
       updateEntry(target.id, articleContent(full))
       if (!quiet) {
-        const preference = recordFullTextSuccess(localStorage, target.feedId, target.id)
-        if (preference.enabled) setAutomaticFullFeeds(current => new Set(current).add(target.feedId))
+        const preference = recordFullTextSuccess(localStorage, target.feedId, target.id, readingPreferences.value(`learned:${target.feedId}`) === 'on')
+        if (preference.becameEnabled) readingPreferences.set(`learned:${target.feedId}`, 'on')
         notify(preference.becameEnabled
           ? `Future ${target.feedTitle} articles will load in full automatically`
           : article.cached ? 'Full article loaded from cache' : 'Full article loaded')
@@ -1143,13 +1147,13 @@ export default function App() {
     } finally {
       setFetchingFullTextId('')
     }
-  }, [fetchingFullTextId, notify, selected, updateEntry])
+  }, [fetchingFullTextId, notify, readingPreferences, selected, updateEntry])
 
   useEffect(() => {
-    if (!online || !selected || selected.fullText || selected.kind !== 'article' || mobilePane !== 'article' || fullMode === 'never' || (fullMode !== 'always' && !shouldAutomaticallyFetchFullArticle(selected, automaticFullFeeds.has(selected.feedId))) || automaticFullTextAttempts.current.has(selected.id)) return
+    if (!online || !selected || selected.fullText || selected.kind !== 'article' || mobilePane !== 'article' || !preferencesReady || fullMode === 'never' || (fullMode !== 'always' && !shouldAutomaticallyFetchFullArticle(selected, learnedFullText)) || automaticFullTextAttempts.current.has(selected.id)) return
     const timer = window.setTimeout(() => { automaticFullTextAttempts.current.add(selected.id); void fetchFullText(selected, true) }, 120)
     return () => window.clearTimeout(timer)
-  }, [automaticFullFeeds, fetchFullText, mobilePane, selected, fullMode, online])
+  }, [learnedFullText, preferencesReady, fetchFullText, mobilePane, selected, fullMode, online])
 
   useEffect(() => {
     if (view !== 'reader' || !online || !autoRead || !selected || !shouldAutoMarkRead(selected, mobilePane, manuallyUnreadId.current)) return
@@ -1546,7 +1550,8 @@ export default function App() {
   }
 
   const appClass = `app ${sidebarVisible ? '' : 'sidebar-hidden'} ${readerChromeHidden ? 'mobile-reader-chrome-hidden' : ''}`
-  return (
+  return (<>
+    {!overlays.settings && <PreferenceNotice />}
     <div
       className={`${appClass}${discussionTarget ? ' discussion-open' : ''}`}
       data-mobile-pane={mobilePane}
@@ -1696,7 +1701,7 @@ export default function App() {
           saveCaption={savedToReadwise ? 'Saved' : saveBusy ? 'Saving...' : readwiseOnly ? 'Readwise' : 'Save'}
           online={online}
           fullMode={fullMode}
-          onFullMode={mode => { setFullMode(mode); setFullTextMode(selected.feedId, mode); automaticFullTextAttempts.current.delete(selected.id) }}
+          onFullMode={mode => { preferences.set(`fullText:${selected.feedId}`, mode); automaticFullTextAttempts.current.delete(selected.id) }}
           onFeedText={() => { const feed = feedVersions.current.get(selected.id); if (feed) { automaticFullTextAttempts.current.add(selected.id); updateEntry(selected.id, articleContent(feed)) } else void api.entry(selected.id).then(result => { if (result.entry) { automaticFullTextAttempts.current.add(selected.id); updateEntry(selected.id, articleContent(result.entry)) } }).catch(error => notify(error.message)) }}
           onRefreshText={() => void fetchFullText(selected, false, true)}
           onOffline={() => { setOfflineBusy(true); void saveOffline(selected).then(() => notify('Saved for offline reading on this device')).catch(error => notify(error.message)).finally(() => setOfflineBusy(false)) }}
@@ -1772,12 +1777,12 @@ export default function App() {
       {entryContext && <EntryContextMenu key={entryContext.entry.id} state={entryContext} unsubscribeAvailable={Boolean(organization?.capabilities.unsubscribe && uniqueFeeds(navigation).some(feed => feed.id === entryContext.entry.feedId))} relativeAvailable={libraryMode === 'stream' && online} onClose={() => setEntryContext(null)} onOpen={() => { setEntryContext(null); openEntry(entryContext.entry) }} onCopyUrl={() => { void copyArticleUrl(entryContext.entry); setEntryContext(null) }} onToggleRead={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.read ? 'unread' : 'read') }} onToggleStar={() => { const entry = entryContext.entry; setEntryContext(null); void setEntryState(entry, entry.starred ? 'unstar' : 'star') }} onReport={() => { setReportEntry(entryContext.entry); setEntryContext(null) }} onMarkAbove={() => void markRelativeRead(entryContext.entry, 'above')} onMarkBelow={() => void markRelativeRead(entryContext.entry, 'below')} onUnsubscribe={() => void unsubscribeFeed({ id: entryContext.entry.feedId, title: entryContext.entry.feedTitle })} />}
       {online && selectionContext && selectionContext.entryId === selectedId && (selectionContext.save || status.kirbyConfigured || status.discussionConfigured) && <SelectionContextMenu state={selectionContext} kirbyConfigured={status.kirbyConfigured} discussionConfigured={status.discussionConfigured} onClose={() => setSelectionContext(null)} onCreate={() => void createKirbyNote(selectionContext.quote)} onDiscuss={() => { if (!status.discussionConfigured) return notify('Article discussion is not configured'); if (selected) setDiscussionTarget({ entry: selected, quote: selectionContext.quote }); setSelectionContext(null) }} />}
       {discussionTarget && <ArticleDiscussion key={discussionTarget.entry.id} entry={discussionTarget.entry} initialQuote={discussionTarget.quote} onClose={() => setDiscussionTarget(null)} />}
-      {overlays.settings && <Settings backend={status.backend} section={settingsSection} setSection={setSettingsSection} initialFeedId={settingsFeedId} initialFeedView={settingsFeedView} navigation={navigation} onChanged={loadNavigation} onFiltersChanged={reloadFilteredLibrary} onFiltersMatching={setFiltersMatching} notify={notify} onConnectionsChanged={loadStatus} autoRead={autoRead} setAutoRead={value => { setAutoRead(value); localStorage.setItem('paper-auto-read', value ? 'automatic' : 'manual') }} onOpenEntry={id => { setOverlays(closedOverlays); void openTopicEntry(id) }} onClose={() => { setOverlays(closedOverlays); setSettingsFeedView('manage') }} />}
-      {overlays.appearance && <AppearancePopover theme={theme} setTheme={setTheme} readerFont={readerFont} setReaderFont={setReaderFont} readerSize={readerSize} setReaderSize={setReaderSize} readerSpacing={readerSpacing} setReaderSpacing={setReaderSpacing} readerWidth={readerWidth} setReaderWidth={setReaderWidth} onClose={() => setOverlays(closedOverlays)} />}
+      {overlays.settings && <Settings backend={status.backend} section={settingsSection} setSection={setSettingsSection} initialFeedId={settingsFeedId} initialFeedView={settingsFeedView} navigation={navigation} onChanged={loadNavigation} onFiltersChanged={reloadFilteredLibrary} onFiltersMatching={setFiltersMatching} notify={notify} onConnectionsChanged={loadStatus} onOpenEntry={id => { setOverlays(closedOverlays); void openTopicEntry(id) }} onClose={() => { setOverlays(closedOverlays); setSettingsFeedView('manage') }} />}
+      {overlays.appearance && <AppearancePopover theme={theme} setTheme={setTheme} readerFont={readerFont} setReaderFont={value => preferences.set('font', value)} readerSize={readerSize} setReaderSize={setReaderSize} readerSpacing={readerSpacing} setReaderSpacing={value => preferences.set('spacing', value)} readerWidth={readerWidth} setReaderWidth={value => preferences.set('width', value)} onClose={() => setOverlays(closedOverlays)} />}
       {reportEntry && <ReportProblemModal entry={reportEntry} onClose={() => setReportEntry(null)} onSaved={() => { setReportEntry(null); notify('Problem reported') }} />}
       {toast && <div className="toast" role="status"><span>{toast.message}</span>{toast.action && <button onClick={() => { toast.action?.(); setToast(null) }}>{toast.actionLabel}</button>}</div>}
     </div>
-  )
+  </>)
 }
 
 function SourceButton({ active, icon, label, count, onClick }: { active: boolean; icon: 'feed' | 'star' | 'reader' | 'topics' | 'bookmark'; label: string; count: number; onClick: () => void }) {
@@ -2438,7 +2443,7 @@ function ShortcutHelp({ onClose, onSearchHelp }: { onClose: () => void; onSearch
   return <Modal title="Keyboard shortcuts" onClose={onClose} className="help-modal"><button onClick={onSearchHelp}>Search syntax</button><dl>{shortcuts.map(([key, label]) => <div key={key}><dt>{key}</dt><dd>{label}</dd></div>)}</dl></Modal>
 }
 
-function Settings({ backend, section, setSection, initialFeedId, initialFeedView, navigation, onChanged, onFiltersChanged, onFiltersMatching, notify, onConnectionsChanged, autoRead, setAutoRead, onOpenEntry, onClose }: {
+function Settings({ backend, section, setSection, initialFeedId, initialFeedView, navigation, onChanged, onFiltersChanged, onFiltersMatching, notify, onConnectionsChanged, onOpenEntry, onClose }: {
   backend: 'standalone' | 'freshrss' | 'miniflux'
   section: SettingsSection
   setSection: (value: SettingsSection) => void
@@ -2449,8 +2454,6 @@ function Settings({ backend, section, setSection, initialFeedId, initialFeedView
   onFiltersChanged: () => Promise<unknown>
   onFiltersMatching: (matching: boolean) => void
   notify: (message: string) => void
-  autoRead: boolean
-  setAutoRead: (value: boolean) => void
   onConnectionsChanged: () => Promise<void>
   onOpenEntry: (id: string) => void
   onClose: () => void
@@ -2464,7 +2467,7 @@ function Settings({ backend, section, setSection, initialFeedId, initialFeedView
         : section === 'activity'
           ? <ActivitySettings />
           : <div className="connections-settings">
-            <h3>Reading</h3><label className="reading-preference">Mark articles read<select value={autoRead ? 'automatic' : 'manual'} onChange={event => setAutoRead(event.target.value === 'automatic')}><option value="automatic">After opening for one second</option><option value="manual">Only when I mark them read</option></select></label>
+            <ReadingSettings feeds={uniqueFeeds(navigation)} />
             <ConnectionSettings onChanged={onConnectionsChanged} />
           </div>
   return <Modal title="Settings" onClose={onClose} className="settings-modal">
@@ -2505,7 +2508,7 @@ function AppearancePopover({ theme, setTheme, readerFont, setReaderFont, readerS
   }, [onClose])
 
   return <div className="appearance-layer" onMouseDown={event => event.target === event.currentTarget && onClose()}><section ref={dialog} tabIndex={-1} className="appearance-popover" role="dialog" aria-modal="true" aria-label="Appearance">
-    <header><div><h2>Appearance</h2><p>Changes appear in the article behind this panel.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><Icon name="close" /></button></header>
+    <header><div><h2>Appearance</h2><p>Theme and size stay on this device. Manage shared values and device overrides in Reading &amp; connections.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><Icon name="close" /></button></header>
     <div className="appearance-group">
       <h3>Theme</h3>
       <ChoiceRow values={['light', 'dark', 'system', 'e-ink']} active={theme} onChange={setTheme} />

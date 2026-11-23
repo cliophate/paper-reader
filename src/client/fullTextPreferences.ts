@@ -13,30 +13,23 @@ export function automaticFullTextFeeds(storage: Pick<Storage, 'getItem'>): Set<s
   return new Set(Object.entries(preferences).filter(([, preference]) => preference.enabled).map(([feedId]) => feedId))
 }
 
-export function recordFullTextSuccess(storage: Pick<Storage, 'getItem' | 'setItem'>, feedId: string, entryId: string): { enabled: boolean; becameEnabled: boolean } {
+export function recordFullTextSuccess(storage: Pick<Storage, 'getItem' | 'setItem'>, feedId: string, entryId: string, learned?: boolean): { enabled: boolean; becameEnabled: boolean } {
   const preferences = readPreferences(storage)
-  const previous = preferences[feedId] || { articles: [], enabled: false }
-  const articles = [...new Set([...previous.articles, entryId])].slice(-ENABLE_AFTER)
-  const enabled = previous.enabled || articles.length >= ENABLE_AFTER
-  preferences[feedId] = { articles, enabled }
-  storage.setItem(STORAGE_KEY, JSON.stringify(preferences))
-  return { enabled, becameEnabled: enabled && !previous.enabled }
+  const previous = Object.hasOwn(preferences, feedId) ? preferences[feedId] : undefined
+  // A shared reset or a device override can turn off a previously learned preference.
+  const wasEnabled = learned ?? previous?.enabled ?? false
+  const history = previous?.enabled && !wasEnabled ? [] : previous?.articles ?? []
+  const articles = [...new Set([...history, entryId])].slice(-ENABLE_AFTER)
+  const enabled = wasEnabled || articles.length >= ENABLE_AFTER
+  storage.setItem(STORAGE_KEY, JSON.stringify({ ...preferences, [feedId]: { articles, enabled } }))
+  return { enabled, becameEnabled: enabled && !wasEnabled }
 }
 
 function readPreferences(storage: Pick<Storage, 'getItem'>): PreferenceMap {
   try {
     const parsed = JSON.parse(storage.getItem(STORAGE_KEY) || '{}') as PreferenceMap
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
-    return parsed
+    return Object.fromEntries(Object.entries(parsed).filter(([, item]) => item && typeof item.enabled === 'boolean'
+      && Array.isArray(item.articles) && item.articles.every(id => typeof id === 'string')))
   } catch { return {} }
-}
-
-export type FullTextMode = 'auto' | 'always' | 'never'
-export function fullTextMode(feedId: string): FullTextMode {
-  const value = localStorage.getItem(`paper-full-mode:${feedId}`)
-  return value === 'always' || value === 'never' ? value : 'auto'
-}
-export function setFullTextMode(feedId: string, mode: FullTextMode) {
-  localStorage.setItem(`paper-full-mode:${feedId}`, mode)
-  window.dispatchEvent(new Event('paper-preferences'))
 }

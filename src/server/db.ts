@@ -2,6 +2,7 @@ import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { privateFeedRef, migrateFeedMaintenance } from './feed-maintenance.js'
 import { FeedOverrideStore, migrateFeedOverrides } from './feed-overrides.js'
 import { ENCLOSURE_SCHEMA_VERSION, entryEnclosures, migrateEnclosures, replaceEnclosures } from './enclosure-store.js'
+import { ReadingPreferenceStore, migrateReadingPreferences, READING_PREFERENCES_VERSION } from './reading-preference-store.js'
 import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
@@ -199,6 +200,7 @@ export class PaperDatabase {
   readonly feedOverrides: FeedOverrideStore
   readonly feedFetch: FeedFetchStore
   readonly feedIcons: FeedIconStore
+  readonly readingPreferences: ReadingPreferenceStore
   readonly briefingDelivery: BriefingDeliveryStore
   private activeBackendId = ''
   private closed = false
@@ -243,11 +245,14 @@ export class PaperDatabase {
           if (version > 0) this.backupBeforeMigration(20, 'briefing-delivery')
           migrateBriefingDelivery(this.db)
         }
-        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < FEED_MAINTENANCE_VERSION) {
+        // Pre-release preferences used v21 and v22 before these feed migrations landed.
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < FEED_MAINTENANCE_VERSION
+          || (version === FEED_MAINTENANCE_VERSION && !this.db.prepare("SELECT 1 FROM pragma_table_info('feed_fetch_state') WHERE name = 'redirects_json'").get())) {
           if (version > 0) this.backupBeforeMigration(FEED_MAINTENANCE_VERSION, 'feed-maintenance')
           migrateFeedMaintenance(this.db)
         }
-        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < FEED_OVERRIDE_VERSION) {
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < FEED_OVERRIDE_VERSION
+          || (version === FEED_OVERRIDE_VERSION && !this.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'feed_overrides'").get())) {
           if (version > 0) this.backupBeforeMigration(FEED_OVERRIDE_VERSION, 'feed-overrides')
           migrateFeedOverrides(this.db)
         }
@@ -258,6 +263,10 @@ export class PaperDatabase {
         if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < ANNOTATIONS_VERSION) {
           if (version > 0) this.backupBeforeMigration(ANNOTATIONS_VERSION, 'annotations')
           migrateAnnotations(this.db)
+        }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < READING_PREFERENCES_VERSION) {
+          if (version > 0) this.backupBeforeMigration(READING_PREFERENCES_VERSION, 'reading-preferences')
+          migrateReadingPreferences(this.db)
         }
       }
       this.db.function('checked_url_match', { directOnly: true }, matched => {
@@ -277,6 +286,7 @@ export class PaperDatabase {
       this.feedFetch = new FeedFetchStore(this.db, id => this.assertLocalBackend(id))
       this.organization = new LocalOrganizationService(this.db, id => this.assertLocalBackend(id), () => this.localNavigation())
       this.feedIcons = new FeedIconStore(this.db, id => this.organization.subscriptionChanged(id), id => this.assertLocalBackend(id))
+      this.readingPreferences = new ReadingPreferenceStore(this.db)
       this.briefingDelivery = new BriefingDeliveryStore(this.db)
     } catch (error) {
       this.db.close()

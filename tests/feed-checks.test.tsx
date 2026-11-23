@@ -3,11 +3,12 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { api } from '../src/client/api'
+import { ReadingPreferencesProvider } from '../src/client/components/ReadingPreferences'
 import { FeedRepair } from '../src/client/components/FeedRepair'
 import { FeedChecks, FeedCheckDetails } from '../src/client/components/FeedChecks'
 import type { FeedChecksView } from '../src/shared/feed-checks'
 
-vi.mock('../src/client/api', () => ({ api: { feedChecks: vi.fn(), repairFeed: vi.fn(), checkFeeds: vi.fn(), setCheckInterval: vi.fn() } }))
+vi.mock('../src/client/api', () => ({ api: { readingPreferences: vi.fn(async () => ({ revision: 0, generation: 0, values: {} })), feedChecks: vi.fn(), repairFeed: vi.fn(), checkFeeds: vi.fn(), setCheckInterval: vi.fn() } }))
 let root: Root, container: HTMLDivElement, view: FeedChecksView
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -110,11 +111,11 @@ it('offers one-click repair for the suggested address and only displays a tempor
     lastPublishedAt: null, lastCheckedAt: null, lastErrorAt: null, broken: false }
   const changed = vi.fn(async () => {})
   const temporary = { redirects: [{ status: 307, url: next }], declaredUrl: '', suggestedUrl: '' }
-  await act(async () => root.render(<FeedRepair feed={feed} move={temporary} onChanged={changed} />))
+  await act(async () => root.render(<ReadingPreferencesProvider><FeedRepair feed={feed} move={temporary} onChanged={changed} /></ReadingPreferencesProvider>))
   expect(container.textContent).toContain('Temporary redirect (HTTP 307)')
   expect(button('Use new address')).toBeUndefined()
   const declared = { redirects: [], declaredUrl: next, suggestedUrl: next, repairRef: 'fixture-reference' }
-  await act(async () => root.render(<FeedRepair feed={feed} move={declared} onChanged={changed} />))
+  await act(async () => root.render(<ReadingPreferencesProvider><FeedRepair feed={feed} move={declared} onChanged={changed} /></ReadingPreferencesProvider>))
   expect(api.repairFeed).not.toHaveBeenCalled()
   await click('Use new address')
   expect(api.repairFeed).toHaveBeenCalledExactlyOnceWith('feed-1', { repairRef: declared.repairRef }, original)

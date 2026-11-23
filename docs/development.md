@@ -74,6 +74,29 @@ stale `paper.sqlite-wal` and `paper.sqlite-shm` from the data directory,
 then start the previous release. Restoring a pre-v21 backup instead would
 discard all changes made since that backup.
 
+Schema v25 adds shared reading preferences and creates
+`paper.sqlite.before-reading-preferences-v25` before upgrading an existing database.
+Each written key gets a fresh random 128-bit token. A tab records the token of the
+value it displayed when it queues an edit in IndexedDB. An absent key uses
+`none`. If the token has changed, HTTP 409 returns the current snapshot and the
+tab shows which setting changed. Each tab has a random writer ID. The server
+keeps its last accepted sequence and tokens so retries return the original
+receipt. Queued edits to the same key use the preceding edit's returned token.
+An import requires revision zero. A reset clears the keys and advances the reset
+generation, including when the store is empty.
+
+| Setting or browser state | Where Paper keeps it |
+| --- | --- |
+| Typeface, line spacing, column width, automatic or manual marking as read | Shared, with optional device overrides |
+| Full-text mode (Auto, Always, Never) and learned short-article preference | Shared separately for each feed, with optional device overrides |
+| Theme (including system and e-ink) and reader text size | Device only |
+| Article IDs used to learn a feed's preference after three manual loads | Device only |
+| Scroll positions | Browser cache and the existing server reading-progress store |
+| Offline articles and images, cached shared values, queued edits, device overrides, login flags | Device only |
+| Pulse return location and collection navigation context | Current browser tab |
+| Reader controls, viewport layout and gesture state | Memory on the current device |
+| Article order within a stream | Existing server stream-order setting |
+
 Use Node 24 or newer. From the repository root:
 
 ```sh

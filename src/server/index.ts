@@ -1,4 +1,6 @@
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
+import { ReadingPreferenceConflict } from './reading-preference-store.js'
+import { validReadingWrite } from './reading-preference-values.js'
 import { GreaderAuth } from './greader-auth.js'
 import { greaderRoutes } from './greader-routes.js'
 import { RetentionService } from './retention.js'
@@ -255,6 +257,14 @@ app.get('/api/status', (_request, response) => response.json({
   openReports: database.openArticleReportCount(),
   headlines: headlines.status(),
 }))
+
+app.get('/api/settings/reading', (_request, response) => {
+  response.set('Cache-Control', 'no-store').json(database.readingPreferences.snapshot())
+})
+app.patch('/api/settings/reading', (request, response) => {
+  if (!validReadingWrite(request.body)) return response.status(400).json({ error: 'Invalid reading preference.' })
+  response.json(database.readingPreferences.write(request.body))
+})
 
 app.get('/api/settings/connections', async (_request, response) => {
   response.set('Cache-Control', 'no-store').json({ ...connectionSettings.view(), aiRuntime: await providerAvailability(config) })
@@ -983,6 +993,8 @@ app.use((error: Error, request: Request, response: Response, _next: NextFunction
   if (error instanceof SearchLimitError) return response.status(400).json({ error: error.message })
   if (error instanceof AnnotationError) return response.status(error.status).json({ error: error.message })
   if (error instanceof SearchUnavailableError) return response.status(503).json({ error: error.message })
+  if ((error as Error & { type?: string }).type === 'entity.too.large') return response.status(413).json({ error: 'Request body is too large.' })
+  if (error instanceof ReadingPreferenceConflict) return response.status(409).json({ error: error.message, code: error.code, snapshot: error.snapshot })
   if (error instanceof StateConflictError) return response.status(409).json({ code: 'state-conflict', error: error.message, states: error.states })
   if (error instanceof UndoExpiredError) return response.status(410).json({ error: error.message })
   if (error instanceof BackendValidationError || (error instanceof FeedHttpError && error.code === 'policy')) return response.status(400).json({ error: error.message })

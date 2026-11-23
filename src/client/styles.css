@@ -1333,3 +1333,19 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
 .annotation-row small, .annotation-row time { color: var(--muted); font-size: 12px; }
 .annotation-row p, .annotation-row blockquote { white-space: pre-wrap; }
 .annotation-row blockquote { margin: 10px 0; padding-left: 12px; border-left: 3px solid var(--signal); font-family: var(--reader-font); }
+.reading-settings { display: grid; gap: 12px; margin-bottom: 28px; }
+.reading-settings > p, .preference-notice p { margin: 0; font-size: 13px; line-height: 1.5; }
+.preference-control { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; margin-block: 5px; }
+.preference-control small { align-self: center; color: var(--muted); }
+.preference-control button, .preference-notice button, .reading-settings > button { width: fit-content; padding: 5px 8px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; cursor: pointer; }
+.preference-notice { padding: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.preference-notice button { margin: 5px 4px 0 0; }
+#root > .preference-notice {
+  position: fixed; z-index: 100; inset-inline: 12px; bottom: calc(72px + env(safe-area-inset-bottom));
+  width: fit-content; max-width: min(32rem, calc(100% - 24px)); margin-inline: auto; box-shadow: var(--shadow);
+}
+@media (max-width: 1040px) {
+  #root > .preference-notice:has(+ .app[data-view='pulse']) {
+    bottom: calc(128px + env(safe-area-inset-bottom));
+  }
+}

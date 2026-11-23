@@ -2,6 +2,7 @@ import type { FeedOverrideView, FeedOverrideUpdate } from '../shared/feed-overri
 import { PlaybackQueue, type PlaybackPosition } from './playback'
 import { checkSearchSize, SEARCH_SIZE_HINT } from '../server/search-query'
 import type { Annotation, AnnotationPage, NewAnnotation } from '../shared/annotations'
+import type { ReadingSnapshot, ReadingWrite, ReadingWriteResult } from '../server/reading-preference-values'
 import type { RetentionPolicy, RetentionPreview, RetentionView } from '../shared/retention'
 import type { FeedMaintenance, StaleDays, FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarget } from '../shared/feed-checks'
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
@@ -13,7 +14,7 @@ import type { DeliveryHistoryItem, SmtpUpdate } from '../shared/briefing-deliver
 import type { ActivityRecord, ArticleReport, BriefingDetail, BriefingSummary, CoverageFeedback, Entry, EntryPage, FullArticle, MuteFilter, NavigationPayload, StreamRef, XThreadPost } from './types'
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code?: string, readonly currentRevision?: number, readonly states?: Record<string, { read: boolean; starred: boolean; revision: number }>) { super(message) }
+  constructor(message: string, readonly status: number, readonly code?: string, readonly currentRevision?: number, readonly states?: Record<string, { read: boolean; starred: boolean; revision: number }>, readonly snapshot?: ReadingSnapshot) { super(message) }
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -23,7 +24,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
   const payload = await response.json().catch(() => null)
-  if (!response.ok) throw new ApiError(payload?.error || `Request failed with ${response.status}`, response.status, payload?.code, payload?.currentRevision, payload?.states)
+  if (!response.ok) throw new ApiError(payload?.error || `Request failed with ${response.status}`, response.status, payload?.code, payload?.currentRevision, payload?.states, payload?.snapshot)
   return payload as T
 }
 
@@ -62,6 +63,8 @@ export const api = {
   addAnnotation: (data: NewAnnotation) => request<{ id: number }>('/api/annotations', { method: 'POST', body: JSON.stringify(data) }),
   editNote: (id: number, revision: number, note: string) => request<{ ok: boolean }>(`/api/annotations/${id}`, { method: 'PATCH', body: JSON.stringify({ revision, note }) }),
   removeAnnotation: (id: number, revision: number) => request<{ ok: boolean }>(`/api/annotations/${id}`, { method: 'DELETE', body: JSON.stringify({ revision }) }),
+  readingPreferences: () => request<ReadingSnapshot>('/api/settings/reading', { cache: 'no-store' }),
+  saveReadingPreferences: (write: ReadingWrite) => request<ReadingWriteResult>('/api/settings/reading', { method: 'PATCH', body: JSON.stringify(write) }),
   retention: () => request<RetentionView>('/api/retention'),
   previewRetention: (policy: RetentionPolicy) => request<RetentionPreview>('/api/retention/preview', { method: 'POST', body: JSON.stringify({ policy }) }),
   saveRetention: (policy: RetentionPolicy, revision: number, token?: string) => request<RetentionView>('/api/retention', { method: 'POST', body: JSON.stringify({ policy, revision, token }) }),

@@ -1,3 +1,4 @@
+import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import { ANNOTATIONS_PER_ARTICLE } from '../src/server/annotations'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -322,7 +323,7 @@ it('upgrades schema v23 before adding annotations and restores highlights and no
   db.close()
   const file = path.join(directory, 'test.sqlite')
   db = new PaperDatabase(file)
-  expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(24)
+  expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
   const backup = file + '.before-annotations-v24'
   expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
   const previous = new DatabaseSync(backup, { readOnly: true })

@@ -11,7 +11,7 @@ const entry = (id: string, paragraphs = 40): Entry => ({
   read: true, starred: false, readingMinutes: 5, thumbnailUrl: '', kind: 'article',
 })
 
-async function openReader(page: Page, short = false, crossFeeds = false, episode?: Partial<Entry>) {
+async function openReader(page: Page, short = false, crossFeeds = false, episode?: Partial<Entry>, preferencesReady?: Promise<void>) {
   const items = [{ ...entry('a', short ? 1 : 40), ...episode }, entry('b')]
   const navigation = { unread: 0, starred: 0, uncategorized: [{ id: 'fixture', title: 'Synthetic feed', url: 'https://example.test/feed', unread: 0 }], folders: [] }
   if (crossFeeds) navigation.uncategorized.push({ id: 'second', title: 'Second synthetic feed', url: 'https://example.test/second', unread: 0 })
@@ -23,6 +23,10 @@ async function openReader(page: Page, short = false, crossFeeds = false, episode
       if (!file) return route.fulfill({ status: 404, json: {} })
       if (updatedAt > (file.updatedAt ?? 0)) Object.assign(file, { position, updatedAt })
       return route.fulfill({ json: { position: file.position, updatedAt: file.updatedAt } })
+    }
+    if (pathname === '/api/settings/reading' && preferencesReady) {
+      await preferencesReady
+      return route.fulfill({ json: { revision: 0, generation: 0, values: {} } })
     }
     const json = pathname === '/api/organization' ? { backend: 'freshrss', revision: null, capabilities: FRESHRSS_ORGANIZATION_CAPABILITIES, navigation }
       : pathname === '/api/status' ? { backend: 'freshrss', backendInstance: 'fixture', discussionConfigured: false, readwiseConfigured: true, saveDestinations: [{ id: 'linkding', name: 'Linkding' }], kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } }
@@ -477,4 +481,27 @@ test('plays attachments on demand and leaves them out of offline downloads', asy
   })
   await play.click()
   await expect.poll(() => audio.getAttribute('data-resume').then(Number)).toBeCloseTo(5, 1)
+})
+
+test('the upgrade choice leaves the 390px reader in place when it appears and when dismissed by keyboard', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.addInitScript(() => localStorage.setItem('paper-reader-width', 'standard'))
+  let release!: () => void
+  const preferencesReady = new Promise<void>(resolve => { release = resolve })
+  await openReader(page, false, false, undefined, preferencesReady)
+  const before = await geometry(page)
+  const status = page.locator('#root > section').getByRole('status')
+  await expect(status).toBeEmpty()
+  const initialRegion = await status.elementHandle()
+  release()
+  const notice = page.getByRole('region', { name: 'Reading preferences' })
+  await expect(notice.getByRole('status')).toContainText('Use this browser')
+  expect(await initialRegion!.evaluate(node => node.isConnected && node.textContent)).toContain('Use this browser')
+  expect(await geometry(page)).toEqual(before)
+  await notice.getByRole('button', { name: 'Share preferences' }).focus()
+  await page.keyboard.press('Tab')
+  await expect(notice.getByRole('button', { name: 'Keep on this device' })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(notice).toHaveCount(0)
+  expect(await geometry(page)).toEqual(before)
 })

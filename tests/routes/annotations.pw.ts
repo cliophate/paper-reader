@@ -38,7 +38,7 @@ test('article navigation in Highlights leaves hidden articles unread', async ({ 
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   const settings = page.getByRole('dialog', { name: 'Settings' })
   await settings.getByRole('button', { name: 'Reading & connections' }).click()
-  await settings.getByLabel('Mark articles read').selectOption('automatic')
+  await settings.getByRole('combobox', { name: 'Mark articles read' }).selectOption('automatic')
   await settings.getByRole('button', { name: 'Close' }).click()
   await page.getByRole('button', { name: 'Highlights', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Highlights' })).toBeFocused()

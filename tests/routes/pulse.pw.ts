@@ -69,7 +69,9 @@ test('shows cited summaries and feedback only in an expanded Pulse thread', asyn
   await expect(page.locator('.article-header h1')).toHaveText(older.title)
 
   await page.route('**/api/pulse/feedback', route => route.fulfill({ status: 201, json: { id: 'synthetic-correction' } }))
-  await page.evaluate(() => localStorage.setItem('paper-reader-font', 'source'))
+  await page.getByRole('button', { name: 'Appearance' }).click()
+  await page.getByRole('button', { name: /Source Sans 3/ }).click()
+  await page.getByRole('dialog', { name: 'Appearance' }).getByRole('button', { name: 'Close' }).click()
   await page.goto(`/collection/${collection.linkNumber}`)
   await expect(background.locator('.pulse-background')).toHaveCSS('font-family', /Source Sans 3/)
   await options.click()
