@@ -95,7 +95,7 @@ generation, including when the store is empty.
 | Full-text mode (Auto, Always, Never) and learned short-article preference | Shared separately for each feed, with optional device overrides |
 | Theme (including system and e-ink) and reader text size | Device only |
 | Article IDs used to learn a feed's preference after three manual loads | Device only |
-| Scroll positions | Browser cache and the existing server reading-progress store |
+| Scroll positions | Browser cache, pending edits in IndexedDB and the server reading-progress store |
 | Offline articles and images, cached shared values, queued edits, device overrides, login flags | Device only |
 | Pulse return location and collection navigation context | Current browser tab |
 | Reader controls, viewport layout and gesture state | Memory on the current device |
@@ -297,6 +297,24 @@ part of an undo; Paper reports that failure and asks the reader to refresh.
 These requests are not one atomic transaction. FreshRSS has no conditional undo,
 so a failed action can leave completed batches applied; its Undo sends the
 inverse operation for all IDs.
+
+## Offline downloads and replay
+
+The download iterator in `src/client/offline.ts` accepts a `DownloadQuery` with
+a stream, search expression, unread filter and date range. Saved-view downloads pass the view ID. The server looks
+up its current query and scopes each continuation to that query.
+
+The browser stores article edits in the `paper-offline-edits` IndexedDB database.
+Read and star edits each keep the value the reader saw and the latest choice.
+Replay reads standalone state from `entry_state` or asks the remote backend
+directly. A standalone write includes the live revision. A revision conflict
+gets one fresh check before the next replay. Reading positions use
+`reading_progress.updated_at` independently of read status and stars.
+
+Replay and owner sign-out share the `paper-offline-replay` Web Lock. Browsers
+without Web Locks can serialize replay only within one tab. Sign-out sets a
+shared storage flag before waiting for replay and purging the browser data.
+Offline search reads the saved copies and keeps no separate persistent index.
 
 ## Owner authentication tests
 

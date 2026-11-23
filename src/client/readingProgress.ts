@@ -1,9 +1,19 @@
-import { useEffect, useLayoutEffect, type RefObject } from 'react'
+import { articleEditsLocked, queueArticleEdit } from './offlineQueue'
+import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react'
 import { api } from './api'
 import type { Entry } from './types'
 interface Position { position: number; at: string }
 function stored(): Record<string, Position> { try { return JSON.parse(localStorage.getItem('paper-reading-positions') || '{}') } catch { return {} } }
-export function useReadingProgress(entry: Entry | null, ref: RefObject<HTMLElement | null>, enabled: boolean, onRestore: () => void) {
+export function rememberPosition(id: string, position: number, at: string) {
+  if (articleEditsLocked()) return
+  const values = stored()
+  values[id] = { position, at }
+  const limited = Object.fromEntries(Object.entries(values).sort((a, b) => b[1].at.localeCompare(a[1].at)).slice(0, 200))
+  try { localStorage.setItem('paper-reading-positions', JSON.stringify(limited)) } catch { /* IndexedDB also holds pending progress. */ }
+}
+export function useReadingProgress(entry: Entry | null, ref: RefObject<HTMLElement | null>, enabled: boolean, onRestore: () => void, onError: (message: string) => void) {
+  const latest = useRef(entry)
+  latest.current = entry
   useLayoutEffect(() => {
     if (!entry || !enabled) return
     const scroll = ref.current?.querySelector<HTMLElement>('.article-scroll')
@@ -49,18 +59,23 @@ export function useReadingProgress(entry: Entry | null, ref: RefObject<HTMLEleme
     let timer: ReturnType<typeof setTimeout> | undefined
     let position = entry.readingPosition || 0
     let dirty = false
+    let base = entry.lastReadAt ?? null
     const flush = () => {
       clearTimeout(timer)
       if (!dirty) return
       dirty = false
-      const values = stored()
-      values[id] = { position, at: new Date().toISOString() }
-      const limited = Object.fromEntries(Object.entries(values).sort((a, b) => b[1].at.localeCompare(a[1].at)).slice(0, 200))
-      try { localStorage.setItem('paper-reading-positions', JSON.stringify(limited)) } catch { /* Server progress remains available. */ }
-      if (navigator.onLine && api.saveProgress) void api.saveProgress(id, position).catch(() => undefined)
+      rememberPosition(id, position, new Date().toISOString())
+      if (typeof indexedDB === 'undefined' && navigator.onLine) {
+        void api.saveProgress?.(id, position).catch(() => onError('Could not save the reading position.'))
+      } else {
+        void queueArticleEdit({ id, kind: 'progress', base, position })
+          .catch(() => onError('Could not queue the reading position on this device.'))
+      }
     }
     const inset = window.matchMedia('(max-width: 1040px)').matches ? 96 : 0
     const update = () => {
+      const observed = latest.current?.id === id ? latest.current : entry
+      base = observed.lastReadAt ?? null
       const maximum = scroll.scrollHeight - scroll.clientHeight - inset * 2
       position = maximum > 0 ? Math.max(0, Math.min(1, (scroll.scrollTop - inset) / maximum)) : 1
       dirty = true; clearTimeout(timer); timer = setTimeout(flush, 800)

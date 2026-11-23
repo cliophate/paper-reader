@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { startRegistration, startAuthentication } from '@simplewebauthn/browser'
 import type { PublicKeyCredentialCreationOptionsJSON, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/browser'
-import { authRequest, requireLogin, type AuthStatus } from '../auth'
+import { authRequest, signOut, type AuthStatus } from '../auth'
 import { clearOffline, setOfflineLocked } from '../offline'
+import { ownerSignedOut, signOutKey, signOutPending } from '../offlineAccess'
+import { withReplayLock } from '../offlineQueue'
 import { SourceSetup } from './SourceSetup'
 import { subscribeLoginReturn } from '../subscribe'
 
@@ -38,11 +40,15 @@ export function LoginPage({ status, onSignedIn }: { status: AuthStatus; onSigned
   async function login(passkey: boolean) {
     setBusy(true); setError('')
     try {
-      if (passkey) {
-        const options = await authRequest<PublicKeyCredentialRequestOptionsJSON>('/passkeys/options', {})
-        const response = await startAuthentication({ optionsJSON: options })
-        await authRequest('/passkeys/verify', response)
-      } else await authRequest('/login', { username, password })
+      await withReplayLock(async () => {
+        if (signOutPending()) throw new Error('Sign-out pending.')
+        if (passkey) {
+          const options = await authRequest<PublicKeyCredentialRequestOptionsJSON>('/passkeys/options', {})
+          const response = await startAuthentication({ optionsJSON: options })
+          await authRequest('/passkeys/verify', response)
+        } else await authRequest('/login', { username, password })
+        localStorage.removeItem(signOutKey)
+      })
       setPassword(''); localStorage.removeItem('paper-login-required'); onSignedIn()
     } catch { setError('Could not sign in. Check your credentials or try again later. If you lost access, use the recovery command on the server.') }
     finally { setBusy(false) }
@@ -67,8 +73,10 @@ export function AuthBoundary({ children }: { children: React.ReactNode }) {
     try {
       const value = await authRequest<AuthStatus>('/status')
       if (version !== requestVersion.current) return
+      if (!value.enabled && !signOutPending()) localStorage.removeItem(signOutKey)
+      if (ownerSignedOut()) value.authenticated = false
       setOfflineLocked(value.enabled && !value.authenticated)
-      if (value.enabled && !value.authenticated) { await clearOffline(); localStorage.setItem('paper-login-required', 'true') }
+      if (value.enabled && !value.authenticated) { await withReplayLock(clearOffline); localStorage.setItem('paper-login-required', 'true') }
       if (version !== requestVersion.current) return
       if (value.authenticated || !value.enabled) localStorage.removeItem('paper-login-required')
       localStorage.setItem('paper-login-enabled', String(value.enabled))
@@ -93,6 +101,10 @@ export function AuthBoundary({ children }: { children: React.ReactNode }) {
     const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void load() }, 60_000)
     return () => { requestVersion.current++; window.removeEventListener('paper-login-required', expired); document.removeEventListener('visibilitychange', visible); clearInterval(timer) }
   }, [])
+  if (signOutPending()) return <main className="login-page"><section className="login-card">
+    <h1>Sign in to Paper</h1>
+    <p role="status">Paper couldn't end your server session yet. It will keep retrying until you're signed out.</p>
+  </section></main>
   if (!status) return <main className="login-page"><section className="login-card"><p role="status">{error || 'Opening Paper...'}</p>{error && <button onClick={() => void load()}>Try again</button>}</section></main>
   if (status.enabled && !status.authenticated) return <LoginPage status={status} onSignedIn={() => void load()} />
   if (status.setup) return <SourceSetup initial={status.setup} onSaved={() => void load()} />
@@ -130,7 +142,7 @@ export function AccessSettings() {
         <button disabled={busy}>Add passkey</button>
       </form>
       <div className="settings-list">{access.passkeys.map(key => <article className="settings-list-row" key={key.id}><div><strong>{key.name}</strong><span>Added {date(key.created)} · Last used {date(key.used)}</span></div><button disabled={busy || (!access.passwordEnabled && access.passkeys.length === 1)} aria-label={`Remove passkey ${key.name}`} onClick={() => { if (confirm(`Remove passkey ${key.name}?`)) void run(() => authRequest(`/passkeys/${encodeURIComponent(key.id)}`, undefined, 'DELETE')) }}>Remove</button></article>)}</div>
-      <h4>Sessions</h4><div className="access-actions"><button disabled={busy} onClick={() => void run(() => authRequest('/sessions/sign-out-others', {}), 'Other sessions signed out.')}>Sign out other sessions</button><button disabled={busy} onClick={() => void run(async () => { await authRequest('/logout', {}); requireLogin() })}>Sign out</button></div>
+      <h4>Sessions</h4><div className="access-actions"><button disabled={busy} onClick={() => void run(() => authRequest('/sessions/sign-out-others', {}), 'Other sessions signed out.')}>Sign out other sessions</button><button disabled={busy} onClick={() => void run(signOut)}>Sign out</button></div>
       <div className="settings-list">{access.sessions.map(session => <article className="settings-list-row" key={session.id}><div><strong>{session.current ? 'This session' : 'Other session'}</strong><span>{session.agent || 'Unknown browser'}</span><span>Created {date(session.created)} · Last seen {date(session.seen)}</span></div></article>)}</div>
       <h4>App passwords</h4><p>Use a separate password for each reader app. These passwords authorize the Google Reader sync API. It does not grant access to Settings or an owner session.</p>
       <form className="access-form" onSubmit={event => { event.preventDefault(); void run(async () => { const result = await authRequest<{ password: string }>('/apps', { name: appName, scope: 'reader-sync', articleLabels }); setAppPassword(result.password); setAppName(''); setArticleLabels(false) }, 'App password created.') }}>

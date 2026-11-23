@@ -1,3 +1,5 @@
+import { ownerSignedOut } from './offlineAccess'
+
 export interface PlaybackPosition {
   position: number
   updatedAt: number
@@ -65,7 +67,7 @@ export class PlaybackQueue {
   }
 
   async save(item: PendingPlayback) {
-    if (this.locked) return
+    if (this.locked || ownerSignedOut()) return
     const key = keyFor(item)
     try { localStorage.setItem(key, JSON.stringify(item)) }
     catch { this.fallback.set(key, item) }
@@ -88,11 +90,11 @@ export class PlaybackQueue {
   private flush(key: string) {
     const running = this.writes.get(key)
     if (running) return running
-    if (this.locked || !navigator.onLine) return
+    if (this.locked || ownerSignedOut() || !navigator.onLine) return
     const item = this.read(key)
     if (!item) return
     const write = this.send(item).then(stored => {
-      if (this.locked) return
+      if (this.locked || ownerSignedOut()) return
       if (stored.updatedAt >= item.updatedAt) this.remove(key)
       for (const listener of this.listeners) listener({ ...item, ...stored })
     }).finally(() => this.writes.delete(key))

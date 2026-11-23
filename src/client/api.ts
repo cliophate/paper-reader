@@ -1,4 +1,5 @@
 import type { SavedView, ViewCount } from '../shared/saved-views'
+import type { OfflineEdit, OfflineReceipt } from '../shared/offline'
 import type { FeedOverrideView, FeedOverrideUpdate } from '../shared/feed-overrides'
 import { PlaybackQueue, type PlaybackPosition } from './playback'
 import { checkSearchSize, SEARCH_SIZE_HINT } from '../server/search-query'
@@ -111,6 +112,13 @@ export const api = {
   connections: () => request<ConnectionsSettings>('/api/settings/connections'),
   updateConnections: (settings: ConnectionsUpdate) => request<ConnectionsSettings>('/api/settings/connections', { method: 'PATCH', body: JSON.stringify(settings) }),
   recentReading: () => request<Entry[]>('/api/reading'),
+  offlineState: async (id: string) => {
+    const { state } = await request<{ state: { read: boolean; starred: boolean; stateRevision?: number; modifiedAtMs?: number } | null }>(
+      '/api/entries/offline-state', { method: 'POST', body: JSON.stringify({ id }) })
+    if (state !== null && (typeof state?.read !== 'boolean' || typeof state.starred !== 'boolean')) throw new Error('Incomplete article state.')
+    return state
+  },
+  reconcileOffline: (edit: Extract<OfflineEdit, { kind: 'progress' }>) => request<OfflineReceipt>('/api/reading/offline', { method: 'POST', body: JSON.stringify(edit) }),
   saveProgress: (id: string, position: number) => request<{ ok: boolean }>('/api/reading', { method: 'POST', body: JSON.stringify({ id, position }), keepalive: true }),
   previewRule: (query: string) => request<{ count: number; items: Array<Pick<Entry, 'id' | 'title' | 'feedTitle'>> }>('/api/rules/preview', { method: 'POST', body: JSON.stringify({ query }) }),
   addRule: (query: string, actions: MuteFilter['actions'], targetId: string, applyExisting: boolean) =>
@@ -192,14 +200,16 @@ export const api = {
     const revisions: Record<string, number> = {}
     const undoTokens: string[] = []
     let completed = 0
+    let modifiedAtMs: number | undefined
     let canUndo = options.undo === true
     try {
       for (let offset = 0; offset < uniqueIds.length; offset += 1000) {
         const batch = uniqueIds.slice(offset, offset + 1000)
         const expectedRevisions = options.expectedRevisions && Object.fromEntries(batch.filter(id => Object.hasOwn(options.expectedRevisions!, id)).map(id => [id, options.expectedRevisions![id]]))
-        const result = await request<{ ok: boolean; revisions?: Record<string, number>; undoToken?: string }>('/api/entries/state', {
+        const result = await request<{ ok: boolean; revisions?: Record<string, number>; modifiedAtMs?: number; undoToken?: string }>('/api/entries/state', {
           method: 'POST', body: JSON.stringify({ ids: batch, operation, origin, ...options, expectedRevisions }),
         })
+        if (uniqueIds.length === 1) modifiedAtMs = result.modifiedAtMs
         canUndo &&= result.revisions !== undefined
         Object.assign(revisions, result.revisions)
         if (result.undoToken) undoTokens.push(result.undoToken)
@@ -214,7 +224,7 @@ export const api = {
       }
       throw error
     }
-    return { ok: true, revisions, undoToken: undoTokens.length === 1 ? undoTokens[0] : undoTokens.length ? undoTokens : undefined }
+    return { ok: true, revisions, modifiedAtMs, undoToken: undoTokens.length === 1 ? undoTokens[0] : undoTokens.length ? undoTokens : undefined }
   },
   markStreamRead: (stream: StreamRef) =>
     request<{ ok: boolean; count: number; undoToken?: string }>('/api/streams/mark-read', { method: 'POST', body: JSON.stringify(stream) }),
@@ -240,8 +250,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ title, sourceUrl, quote }),
     }),
-  fullText: (url: string, refresh = false, entryId?: string) =>
-    request<FullArticle>('/api/fulltext', { method: 'POST', body: JSON.stringify({ url, refresh, entryId }) }),
+  fullText: (url: string, refresh = false, entryId?: string, signal?: AbortSignal) =>
+    request<FullArticle>('/api/fulltext', { signal: sourceRequestSignal(signal), method: 'POST', body: JSON.stringify({ url, refresh, entryId }) }),
   xThread: (url: string) =>
     request<{ posts: XThreadPost[] }>('/api/x/thread', { method: 'POST', body: JSON.stringify({ url }) }),
   addFeed: (url: string, title = '', folder = '') => request<{ ok: boolean }>('/api/feeds', { method: 'POST', body: JSON.stringify({ url, title, folder }) }),

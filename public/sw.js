@@ -2,7 +2,7 @@ const SHELL = 'paper-shell-v5'
 const MEDIA = 'paper-offline-media-v1'
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
-    const assets = await fetch('/offline-assets.json').then(response => { if (!response.ok) throw new Error('Offline manifest unavailable'); return response.json() })
+    const assets = await fetch('/offline-assets.json', { cache: 'no-store' }).then(response => { if (!response.ok) throw new Error('Offline manifest unavailable'); return response.json() })
     const cache = await caches.open(SHELL)
     await cache.addAll(['/', '/manifest.webmanifest', '/favicon.svg', '/brand/paper-logo.svg', '/brand/paper-logo-light.svg', ...assets])
     await self.skipWaiting()
@@ -17,7 +17,14 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const request = event.request
   const url = new URL(request.url)
-  if (request.method !== 'GET' || /^\/(?:api|_offline|health)(?:\/|$)/.test(url.pathname)) return
+  // Decode the saved image without contacting its publisher again.
+  if (request.method === 'GET' && request.destination === 'image' && url.origin === self.location.origin && url.pathname === '/_offline/image') {
+    event.respondWith(caches.open(MEDIA).then(cache => cache.match(url.searchParams.get('url'))).then(image => image || Response.error()))
+    return
+  }
+  if (request.method !== 'GET') return
+  const paperImage = request.destination === 'image' && url.pathname === '/api/x/media'
+  if (url.origin === self.location.origin && !paperImage && /^\/(?:api|_offline|health)(?:\/|$)/.test(url.pathname)) return
   if (request.destination === 'image') {
     event.respondWith(caches.open(MEDIA).then(cache => cache.match(request)).then(cached => cached || fetch(request)))
     return

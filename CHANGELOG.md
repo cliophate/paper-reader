@@ -4,6 +4,10 @@
 
 - Save named article views in the sidebar. Combine feeds, folders, keywords,
   authors, dates, reading time and read or star status. Views sync across devices.
+- Download folders, saved views, search results or selected articles for offline reading.
+  Search saved copies, check missing images and set a device storage limit.
+  Paper queues read status, stars and reading positions across restarts.
+  Paper checks each field against the live article before replaying it.
 - The web reader, Reader apps and article cleanup now read status and stars from the indexed article state table.
 - Connect FreshRSS or Miniflux on first start, or choose standalone. Test the
   connection during setup or later in Settings > Backend & data.

@@ -44,12 +44,15 @@ describe('reader link numbers', () => {
       fts: connection.prepare('SELECT rowid, * FROM entries_fts WHERE entry_id = ?').all(article.id),
       results: connection.prepare("SELECT entry_id FROM entries_fts WHERE entries_fts MATCH 'searchneedle'").all(),
     }))
+    db.saveReadingProgress(article.id, 0.45)
+    const decorated = db.localEntry(article.id)!
     const before = snapshot()
     expect(before.muted).toHaveLength(1)
     expect(before.results).toHaveLength(1)
     for (const response of [{ ...existing, contentHtml: '' }, existing]) {
       const numbered = db.numberEntries([response])
-      expect(numbered[0]).toEqual({ ...response, linkNumber: db.localEntry(article.id)!.linkNumber })
+      expect(numbered[0]).toEqual({ ...response, linkNumber: decorated.linkNumber, stateRevision: decorated.stateRevision,
+        modifiedAtMs: decorated.modifiedAtMs, lastReadAt: decorated.lastReadAt, readingPosition: 0.45 })
       expect(snapshot()).toEqual(before)
     }
     const fresh = { ...article, id: 'tag:google.com,2005:reader/item/0000000000000004' }

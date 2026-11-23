@@ -51,7 +51,7 @@ const entryColumns = `entries.id, entries.feed_id, entries.feed_title, entries.f
   entries.author, entries.url, entries.content_html, entries.content_text, entries.full_content_text,
   entries.excerpt, entries.published_at, entries.timestamp, entries.crawled_at, entries.enclosures_checked,
   entries.reading_minutes, entries.thumbnail_url, entries.kind, entry_state.read, entry_state.starred,
-  entry_state.state_revision`
+  entry_state.state_revision, entry_state.greader_modified_ms`
 
 export interface BriefingRecord {
   id: string
@@ -504,6 +504,11 @@ export class PaperDatabase {
     if (backendId !== this.activeBackendId || this.identities.backend(backendId).kind !== 'standalone') throw new Error('Local state requires the active standalone backend')
   }
 
+  offlineState(id: string) {
+    const row = this.db.prepare('SELECT read, starred, state_revision, greader_modified_ms FROM entry_state WHERE entry_id = ?').get(id)
+    return row && { read: Boolean(row.read), starred: Boolean(row.starred), stateRevision: Number(row.state_revision), modifiedAtMs: Number(row.greader_modified_ms) }
+  }
+
   entryState(id: string): { read: boolean; starred: boolean; revision: number } | null {
     const row = this.db.prepare('SELECT read, starred, state_revision FROM entry_state WHERE entry_id = ?').get(id)
     return row ? { read: Boolean(row.read), starred: Boolean(row.starred), revision: Number(row.state_revision) } : null
@@ -945,7 +950,11 @@ export class PaperDatabase {
         }
       }
       this.upsertEntries([...fresh.values()])
-      return entries.map(entry => this.numberEntry(entry))
+      return entries.map(entry => {
+        const state = this.offlineState(entry.id)
+        const matches = state && (fresh.has(entry.id) || entry.read === state.read && entry.starred === state.starred)
+        return this.decorateEntry(matches ? { ...entry, ...state } : entry)
+      })
     })
   }
 
@@ -1735,10 +1744,19 @@ export class PaperDatabase {
     return current ? { position: Number(current.position), updatedAt: Number(current.updated_at) } : undefined
   }
 
-  saveReadingProgress(id: string, position: number) {
-    if (!this.localEntry(id)) return
-    this.db.prepare('INSERT INTO reading_progress VALUES (?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET position=excluded.position, updated_at=excluded.updated_at')
-      .run(id, Math.max(0, Math.min(1, position)), new Date().toISOString())
+  saveReadingProgress(id: string, position: number, base?: string | null) {
+    return transaction(this.db, () => {
+      if (!this.db.prepare('SELECT 1 FROM entries WHERE id = ?').get(id)) return { outcome: 'removed', current: {} } as const
+      const old = this.db.prepare('SELECT position, updated_at FROM reading_progress WHERE entry_id = ?').get(id)
+      if (base !== undefined && base !== (old?.updated_at ?? null)) {
+        return { outcome: 'superseded', current: old ? { readingPosition: Number(old.position), lastReadAt: String(old.updated_at) } : {} } as const
+      }
+      const lastReadAt = new Date(Math.max(Date.now(), old ? Date.parse(String(old.updated_at)) + 1 : 0)).toISOString()
+      const readingPosition = Math.max(0, Math.min(1, position))
+      this.db.prepare('INSERT INTO reading_progress VALUES (?, ?, ?) ON CONFLICT(entry_id) DO UPDATE SET position=excluded.position, updated_at=excluded.updated_at')
+        .run(id, readingPosition, lastReadAt)
+      return { outcome: 'saved', current: { readingPosition, lastReadAt } } as const
+    })
   }
 
   recentReading(): Entry[] {
@@ -2605,6 +2623,7 @@ function entryFromRow(row: Record<string, string | number>): Entry {
     read: Boolean(row.read),
     starred: Boolean(row.starred),
     stateRevision: Number(row.state_revision),
+    modifiedAtMs: Number(row.greader_modified_ms),
     enclosuresUnchecked: row.enclosures_checked === 0 || undefined,
     readingMinutes: contentChanged ? readingMinutes(contentHtml) : Number(row.reading_minutes),
     thumbnailUrl: normalizeFeedThumbnail({ url, thumbnailUrl: String(row.thumbnail_url), contentHtml, originalContentHtml: storedContentHtml }),

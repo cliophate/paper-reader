@@ -15,7 +15,7 @@ vi.mock('../src/client/api', async () => ({ ...await vi.importActual('../src/cli
   setStreamOrder: vi.fn(), removeFeed: vi.fn(), fullText: vi.fn(), previewRead: vi.fn(), confirmRead: vi.fn(), filters: vi.fn(),
 } }))
 
-vi.mock('../src/client/offline', () => ({ offlineArticles: vi.fn(), saveOffline: vi.fn(), removeOffline: vi.fn() }))
+vi.mock('../src/client/offline', async () => ({ ...await vi.importActual('../src/client/offline'), offlineArticles: vi.fn(), saveOffline: vi.fn(), removeOffline: vi.fn() }))
 
 const post = (id: string): Entry => ({
   id, linkNumber: [...id].reduce((n, char) => n * 31 + char.charCodeAt(0), 1), feedId: id, feedTitle: `Instagram ${id}`, feedUrl: 'https://example.com/feed',

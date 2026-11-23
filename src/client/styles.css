@@ -1059,6 +1059,13 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .entry-unsubscribe small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 3px; color: var(--muted); font-size: 11px; }
 
 /* Reader recovery, archive search and article controls. */
+.offline-downloads { padding: 6px 14px; font-size: 12px; border-bottom: 1px solid var(--line); max-height: 35%; overflow: auto; }
+.offline-downloads summary { cursor: pointer; }
+.offline-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 8px; }
+.offline-actions button { text-decoration: underline; }
+.offline-downloads input { width: 7em; }
+.story-row:has(.download-check) { padding-left: 42px; }
+.download-check { position: absolute; left: 12px; top: 20px; z-index: 2; }
 .reader-status { padding: 8px 14px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .reader-status button, .list-error button { margin-left: 8px; text-decoration: underline; }
 .search-controls { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); }
