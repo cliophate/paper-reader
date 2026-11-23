@@ -5,6 +5,11 @@
 - Connect FreshRSS or Miniflux on first start, or choose standalone. Test the
   connection during setup or later in Settings > Backend & data.
 - Standalone Reader apps can label articles and import subscriptions from OPML.
+- Paper backs up the database before copying article read status and stars into
+  a separate table in schema v30. On the test machine, downtime was about
+  25 seconds for 200,000 articles and 5 minutes for 1 million, mostly for the
+  backup. Custom Compose files should give the reader the same `10m` health
+  check start period as the shipped file.
 - Queued webhooks honor feed and folder changes, and briefings apply feed exclusions before filling their article lists.
 - Manage feeds can set a user agent and cookie per feed, select the article
   body, remove elements, fix lazy images and strip tracking parameters. Preview

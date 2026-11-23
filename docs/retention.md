@@ -42,7 +42,7 @@ These rules also cover references stored as JSON or URLs.
 | `article_reports.entry_id` | Protect reported articles, including resolved reports, because their notes are user-authored. |
 | `retention_present.entry_id` | Protect articles in the latest committed successful feed body, including ambiguous identity candidates. A 304 or failed fetch leaves this list intact. |
 | `article_identities`, `article_aliases`, `article_fingerprints` | Keep identity records as tombstones until expiry. |
-| `article_urls`, `article_arrivals` | Delete with the article. Arrival numbers are never reused, even after removal notices expire. |
+| `article_urls`, `article_arrivals`, `entry_state` | Delete with the article. Arrival numbers are never reused, even after removal notices expire. |
 | `retention_auto_read` | Record the first retention auto-read time and later unread exemption. Cascade with the article. |
 | `retention_removals` | Keep the arrival number, removal time, feed ID and title for one year. No article body or URL. |
 | `entry_search_rows`, `entries_fts` | Existing indexed triggers remove search data in the deletion transaction. |

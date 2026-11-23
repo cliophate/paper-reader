@@ -1,3 +1,6 @@
+import { archivedBackup } from './fixtures/migration-backup.js'
+import { dropEntryState, expectMatchingEntryState } from './fixtures/entry-state.js'
+import { ENTRY_STATE_VERSION } from '../src/server/entry-state-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -25,6 +28,95 @@ afterEach(() => {
 })
 
 describe('Paper read model', () => {
+  it('backs up article state and preserves its arrival key through edits, mute rules and VACUUM', async () => {
+    const file = database.searchDatabasePath
+    const backup = file + '.before-entry-state-v' + ENTRY_STATE_VERSION
+    const sql = database.greaderDatabase
+    sql.exec(dropEntryState + 'PRAGMA user_version = ' + (ENTRY_STATE_VERSION - 1))
+    // Older remote libraries can have articles whose feeds are absent from navigation.
+    database.upsertEntries([entry({ id: 'discard' }), entry({ id: 'keep', read: true, starred: true })])
+    sql.exec("DELETE FROM entries WHERE id = 'discard'; UPDATE entries SET state_revision = 7")
+    const arrival = sql.prepare("SELECT sequence FROM article_arrivals WHERE entry_id = 'keep'").get()!.sequence
+    database.close()
+    database = new PaperDatabase(file)
+    expect(database.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(ENTRY_STATE_VERSION)
+    expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
+    const prior = new DatabaseSync(backup, { readOnly: true })
+    try {
+      expect(prior.prepare('PRAGMA user_version').get()!.user_version).toBe(ENTRY_STATE_VERSION - 1)
+      expect(prior.prepare("SELECT name FROM sqlite_master WHERE name = 'entry_state'").get()).toBeUndefined()
+      expect(prior.prepare("SELECT read, starred, state_revision FROM entries WHERE id = 'keep'").get())
+        .toEqual({ read: 1, starred: 1, state_revision: 7 })
+    } finally { prior.close() }
+    const current = database.greaderDatabase
+    expectMatchingEntryState(current)
+    current.exec('VACUUM')
+    expect(current.prepare("SELECT arrival_sequence FROM entry_state WHERE entry_id = 'keep'").get()?.arrival_sequence).toBe(arrival)
+    database.upsertEntries([entry({ id: 'keep', title: 'Revised title', timestamp: 100, feedId: 'updated-feed' })])
+    expectMatchingEntryState(current)
+    const filter = await database.createMuteFilter('revised', 'title')
+    await database.backfillMuteFilters()
+    expect(database.muteFilters()[0].matchCount).toBe(1)
+    expectMatchingEntryState(current)
+    database.deleteMuteFilter(filter.id)
+    expectMatchingEntryState(current)
+    database.setSyncValue('fulltext_search_v1', '')
+    database.close()
+    database = new PaperDatabase(file)
+    expectMatchingEntryState(database.greaderDatabase)
+    expect(fs.readdirSync(directory).filter(name => name.includes('.before-entry-state'))).toHaveLength(1)
+  })
+
+  it('replaces an interrupted backup and archives the last complete copy on retry', () => {
+    const file = database.searchDatabasePath
+    const backup = file + '.before-entry-state-v' + ENTRY_STATE_VERSION
+    const sql = database.greaderDatabase
+    sql.exec(dropEntryState + 'PRAGMA user_version = ' + (ENTRY_STATE_VERSION - 1))
+    sql.prepare('VACUUM INTO ?').run(backup)
+    const previous = fs.readFileSync(backup)
+    database.upsertEntries([entry({ id: 'since-first-backup' })])
+    database.close()
+    fs.writeFileSync(backup + '.tmp', 'interrupted copy')
+
+    database = new PaperDatabase(file)
+    expect(archivedBackup(backup)).toEqual(previous)
+    expect(fs.readdirSync(directory).filter(name => name.startsWith(path.basename(backup)))).toHaveLength(2)
+    expect(fs.existsSync(backup + '.tmp')).toBe(false)
+    const fresh = new DatabaseSync(backup, { readOnly: true })
+    try {
+      expect(fresh.prepare('SELECT id FROM entries').all()).toEqual([{ id: 'since-first-backup' }])
+    } finally { fresh.close() }
+  })
+
+  it('keeps the published backup in place when the new copy fails verification', () => {
+    const file = database.searchDatabasePath
+    const backup = file + '.before-entry-state-v' + ENTRY_STATE_VERSION
+    const sql = database.greaderDatabase
+    sql.exec(dropEntryState + 'PRAGMA user_version = ' + (ENTRY_STATE_VERSION - 1))
+    sql.prepare('VACUUM INTO ?').run(backup)
+    const previous = fs.readFileSync(backup)
+    const prepare = DatabaseSync.prototype.prepare
+    vi.spyOn(DatabaseSync.prototype, 'prepare').mockImplementation(function (this: DatabaseSync, query) {
+      if (query === 'PRAGMA quick_check(1)') return prepare.call(this, "SELECT 'damaged page' AS quick_check")
+      return prepare.call(this, query)
+    })
+
+    expect(() => new PaperDatabase(file)).toThrow('Migration backup failed verification')
+    expect(fs.readdirSync(directory).filter(name => name.startsWith(path.basename(backup)))).toEqual([path.basename(backup)])
+    expect(fs.readFileSync(backup)).toEqual(previous)
+  })
+
+  it('rolls back the state migration if an article has lost its arrival number', () => {
+    const sql = database.greaderDatabase
+    const file = database.searchDatabasePath
+    sql.exec(dropEntryState + 'PRAGMA user_version = ' + (ENTRY_STATE_VERSION - 1))
+    database.upsertEntries([entry({ id: 'missing-arrival' })])
+    sql.exec('DELETE FROM article_arrivals')
+    expect(() => new PaperDatabase(file)).toThrow(/missing its arrival number/)
+    expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(ENTRY_STATE_VERSION - 1)
+    expect(sql.prepare("SELECT name FROM sqlite_master WHERE name = 'entry_state'").get()).toBeUndefined()
+  })
+
   it('waits for another process to commit before binding the standalone backend', async () => {
     const child = spawn(process.execPath, ['--import', 'tsx', 'tests/fixtures/database-write-worker.ts', path.join(directory, 'paper.sqlite')], {
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'], env: { PATH: process.env.PATH, NODE_NO_WARNINGS: '1' },

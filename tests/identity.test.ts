@@ -1,3 +1,4 @@
+import { dropEntryState, expectMatchingEntryState } from './fixtures/entry-state.js'
 import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -116,6 +117,7 @@ describe('stable article identity', () => {
     const first = ingest(feed, { externalId: 'z' }, { timestamp: 999 })
     const second = ingest(feed, { externalId: 'a' }, { timestamp: 1 })
     ingest(feed, { externalId: 'z' }, { timestamp: 1000 })
+    expectMatchingEntryState(db.greaderDatabase)
     reopen()
     expect(db.syncEntryIds(all)).toEqual([second, first])
     expect(db.localEntriesPage(all).items.map(item => item.id)).toEqual([first, second])
@@ -208,6 +210,7 @@ describe('local state ownership', () => {
     service.onStateChanged(listener)
     sql(c => c.exec("CREATE TRIGGER reject_activity BEFORE INSERT ON activity_events BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END"))
     expect(() => service.editEntries([id], 'read')).toThrow(/synthetic failure/)
+    expectMatchingEntryState(db.greaderDatabase)
     expect(db.entryState(id)?.revision).toBe(0)
     expect(db.entryState(id)?.read).toBe(false)
     expect(listener).not.toHaveBeenCalled()
@@ -223,6 +226,7 @@ describe('local state ownership', () => {
     service.onStateChanged(events)
     const undo = { token: 'synthetic-undo', expiresAt: new Date(Date.now() + 60000).toISOString() }
     service.editEntries([id], 'read', { undo })
+    expectMatchingEntryState(db.greaderDatabase)
     expect(db.getUndo(undo.token)).toMatchObject({ backendId: backend.id, expectedRevisions: { [id]: 1 } })
     expect(events).toHaveBeenCalledOnce()
     service.editEntries([id], 'star')
@@ -231,6 +235,7 @@ describe('local state ownership', () => {
     expect(db.entryState(id)).toMatchObject({ read: true, starred: true })
     service.editEntries([id], 'unread', { undo: { ...undo, token: 'second' } })
     expect(service.undo('second').ids).toEqual([id])
+    expectMatchingEntryState(db.greaderDatabase)
     expect(db.getUndo('second')).toBeNull()
     expect(() => service.undo('second')).toThrow(/expired/)
     db.createUndo({ ...undo, token: 'legacy', operation: 'unread', entryIds: [id] })
@@ -308,6 +313,7 @@ describe('FreshRSS identity binding', () => {
 // v7 additions. This fixture does not depend on Git or a checked-out old release.
 function downgradeFixtureToV6() {
   sql(c => c.exec(`
+    ${dropEntryState}
     DROP TRIGGER entry_arrival;
     DROP TRIGGER entry_url_insert;
     DROP TRIGGER entry_url_update;

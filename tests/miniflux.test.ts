@@ -1,3 +1,4 @@
+import { expectMatchingEntryState } from './fixtures/entry-state.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -290,16 +291,19 @@ describe('native change synchronization', () => {
     const synchronizer = sync()
     await synchronizer.syncNow()
     expect(database!.entryCount()).toBe(3)
+    expectMatchingEntryState(database!.greaderDatabase)
     expect(database!.getSyncValue('backfill_complete')).toBe('true')
     expect((await synchronizer.parity()).ready).toBe(true)
     database!.saveReadingProgress(id('entry', 1), .42)
     await synchronizer.editEntries([id('entry', 1)], 'star')
+    expectMatchingEntryState(database!.greaderDatabase)
     database!.setSyncValue('native_changed_until', new Date(Date.now() - 3600000).toISOString())
     fixture.entries[0].title = 'Updated old article'; fixture.entries[0].status = 'read'
     fixture.entries[0].changed_at = new Date(Date.now() - 1000).toISOString()
     fixture.entries.push({ ...fixture.entries[1], id: 4, published_at: '2001-01-01T00:00:00Z', changed_at: new Date(Date.now() - 1000).toISOString() })
     await synchronizer.syncNow()
     expect(database!.localEntry(id('entry', 1))).toMatchObject({ title: 'Updated old article', read: true, starred: true, readingPosition: .42 })
+    expectMatchingEntryState(database!.greaderDatabase)
     expect(database!.localEntry(id('entry', 4))?.publishedAt).toBe('2001-01-01T00:00:00.000Z')
     expect(database!.organizationCapabilities.stableFolderIds).toBe(true)
     fixture.failures.push({ path: 'v1/entries/ids', method: 'GET', remaining: 10, status: 500 })

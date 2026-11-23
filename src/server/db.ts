@@ -8,6 +8,7 @@ import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
 import { ARTICLE_LABELS_VERSION, migrateArticleLabels, migrateGreader } from './greader-schema.js'
+import { ENTRY_STATE_VERSION, migrateEntryState } from './entry-state-schema.js'
 import { ANNOTATIONS_VERSION, AnnotationStore, hasAnnotations, migrateAnnotations } from './annotations.js'
 import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION, FEED_OVERRIDE_VERSION, migrateAuth } from './auth-schema.js'
 import { AuthStore } from './auth-store.js'
@@ -302,6 +303,10 @@ export class PaperDatabase {
           if (version > 0) this.backupBeforeMigration(ARTICLE_LABELS_VERSION, 'article-labels')
           migrateArticleLabels(this.db)
         }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < ENTRY_STATE_VERSION) {
+          if (version > 0 && version < ENTRY_STATE_VERSION) this.backupBeforeMigration(ENTRY_STATE_VERSION, 'entry-state')
+          migrateEntryState(this.db)
+        }
       }
       this.db.function('checked_url_match', { directOnly: true }, matched => {
         const now = performance.now()
@@ -350,13 +355,21 @@ export class PaperDatabase {
     if (version > DATABASE_VERSION) throw new Error('This database was created by a newer Paper version')
     if (!version || version >= target) return
     const backupPath = `${this.databasePath}.before-${name}-v${target}`
-    if (fs.existsSync(backupPath)) {
-      fs.renameSync(backupPath, `${backupPath}.${Date.now()}-${crypto.randomUUID()}`)
-    }
-    const temporaryPath = `${backupPath}.${crypto.randomUUID()}.tmp`
+    const temporaryPath = `${backupPath}.tmp`
+    fs.rmSync(temporaryPath, { force: true })
     fs.closeSync(fs.openSync(temporaryPath, 'wx', 0o600))
     try {
       this.db.prepare('VACUUM INTO ?').run(temporaryPath)
+      const backup = new DatabaseSync(temporaryPath, { readOnly: true })
+      try {
+        if (backup.prepare('PRAGMA user_version').get()?.user_version !== version
+          || backup.prepare('PRAGMA quick_check(1)').get()?.quick_check !== 'ok') {
+          throw new Error('Migration backup failed verification')
+        }
+      } finally { backup.close() }
+      if (fs.existsSync(backupPath)) {
+        fs.renameSync(backupPath, `${backupPath}.${Date.now()}-${crypto.randomUUID()}`)
+      }
       fs.renameSync(temporaryPath, backupPath)
     } finally { fs.rmSync(temporaryPath, { force: true }) }
   }
