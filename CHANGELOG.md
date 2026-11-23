@@ -48,8 +48,8 @@
 - Follow, mute or snooze stories in Pulse. Followed stories stay at the top of
   Active when coverage goes quiet. Muting preserves each article's read status.
   Pulse settings can apply follows and mutes to briefings.
-- Mark a collection or a whole section as read from the Pulse list. Undo
-  restores the articles you marked.
+- Mark a collection or all displayed collections in a section as read from the
+  Pulse list. Undo restores the articles you marked.
 - Catch-ups in expanded threads cite the articles behind each Latest and
   Background item. Paper asks for details the sources state and generates new
   summaries only for active collections with at least three articles.

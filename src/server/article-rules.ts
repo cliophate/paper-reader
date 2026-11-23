@@ -207,10 +207,23 @@ export class ArticleRules {
 
   private scheduled?: NodeJS.Immediate
   private closed = false
+  private hiddenNotice?: NodeJS.Timeout
+  private lastHiddenNotice = 0
 
   close() {
     this.closed = true
     clearImmediate(this.scheduled)
+    clearTimeout(this.hiddenNotice)
+  }
+
+  // A broad regex backfill commits many batches; refresh open readers at most once a second.
+  private noticeHiddenMatches() {
+    if (this.hiddenNotice) return
+    this.hiddenNotice = setTimeout(() => {
+      this.hiddenNotice = undefined
+      this.lastHiddenNotice = Date.now()
+      this.onHiddenMatches?.()
+    }, Math.max(0, this.lastHiddenNotice + 1000 - Date.now()))
   }
 
   scheduleRegex() {
@@ -268,7 +281,7 @@ export class ArticleRules {
           }
         })
       })
-      if (inserted) this.onHiddenMatches?.()
+      if (inserted) this.noticeHiddenMatches()
     }
     return true
   }
