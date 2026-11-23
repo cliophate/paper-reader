@@ -4,14 +4,14 @@ import { DatabaseSync } from 'node:sqlite'
 import { explicit, metadata, page, type Query } from './greader-query.js'
 import { ReaderError } from './greader-auth.js'
 
-process.once('message', (job: { path: string; kind: string; backend: string; query: Query; ids: string[]; order: string }) => {
+process.once('message', (job: { path: string; kind: string; backend: string; query: Query; ids: string[]; order: string; articleLabels: boolean }) => {
   const lock = acquireStateLock(path.dirname(job.path), 'shared')
   const db = new DatabaseSync(job.path, { readOnly: true, timeout: 50 })
   let message: { body?: string; error?: string; status?: number }
   try {
     db.exec('PRAGMA query_only = ON; BEGIN')
-    const result = job.kind === 'ids' || job.kind === 'page' ? page(db, job.query, job.kind === 'page')
-      : job.kind === 'contents' ? explicit(db, job.backend, job.ids, job.order) : metadata(db, job.kind, job.backend)
+    const result = job.kind === 'ids' || job.kind === 'page' ? page(db, job.query, job.kind === 'page', job.articleLabels)
+      : job.kind === 'contents' ? explicit(db, job.backend, job.ids, job.order, job.articleLabels) : metadata(db, job.kind, job.backend, job.articleLabels)
     db.exec('COMMIT')
     const body = JSON.stringify(result)
     const limit = job.kind === 'ids' ? 128 * 1024 : ['page', 'contents'].includes(job.kind) ? 20 * 1024 * 1024 : 4 * 1024 * 1024

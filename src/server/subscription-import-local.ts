@@ -1,8 +1,43 @@
 import type { PaperDatabase } from './db.js'
 import type { OrganizationCommand } from './organization.js'
 import type { SubscriptionImportStore } from './subscription-import.js'
-import { ImportConflictError } from './subscription-import.js'
-import { SubscriptionInputError } from './opml.js'
+import { ImportConflictError, validateFolderNames } from './subscription-import.js'
+import { parseOpml, previewOpml, SubscriptionInputError } from './opml.js'
+
+function createImportFeed(db: PaperDatabase, backendId: string, row: { title: string; url: string }, names: string[]) {
+  const id = db.saveLocalSubscription(backendId, { title: row.title, url: row.url })
+  db.organization.addImportFolders(backendId, id, names)
+  return id
+}
+
+// Reader clients cannot resolve ambiguous preview rows. Keep exact matches and
+// send the owner to the web preview when the document needs a decision.
+export function importReaderOpml(db: PaperDatabase, backendId: string, xml: string, authorize: () => void) {
+  const document = parseOpml(xml)
+  // parseOpml merges repeated memberships with the same identity and URL.
+  const identities = new Set<string>()
+  for (const { identity, problem } of document.subscriptions) {
+    if (!identity || problem) continue
+    if (identities.has(identity)) throw new ImportConflictError(null, 'This import needs a choice. Review the OPML in Settings > Feeds.')
+    identities.add(identity)
+  }
+  db.transaction(() => {
+    authorize()
+    const { navigation } = db.organization.snapshot(backendId)
+    const rows = previewOpml(document, navigation, backendId)
+    for (const row of rows) {
+      if (row.problem) throw new SubscriptionInputError(row.problem)
+      if (row.folderConflict || row.identityConflict || (!row.suggestedId && (row.matches.length || row.repeatedUrl))) {
+        throw new ImportConflictError(null, 'This import needs a choice. Review the OPML in Settings > Feeds.')
+      }
+      if (row.suggestedId) continue
+      const names = row.folders.filter(Boolean)
+      if (names.length > 32) throw new SubscriptionInputError('Choose at most 32 folders per subscription.')
+      validateFolderNames(names, navigation)
+      createImportFeed(db, backendId, row, names)
+    }
+  })
+}
 
 // Imports into the bound standalone backend. Snapshot and database guards
 // reject FreshRSS or another backend; this never binds or selects one.
@@ -35,10 +70,7 @@ export function localImportStore(db: PaperDatabase, backendId: string): Subscrip
     async create(row, names, expected) {
       return db.transaction(() => {
         check(expected)
-        // This entry point also owns endpoint generation and scheduler lifecycle.
-        const id = db.saveLocalSubscription(backendId, { title: row.title, url: row.url })
-        folders(id, names, snapshot().revision)
-        return id
+        return createImportFeed(db, backendId, row, names)
       })
     },
     async setFolders(id, names, expected) { folders(id, names, expected) },

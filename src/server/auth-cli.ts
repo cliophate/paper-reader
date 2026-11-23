@@ -15,10 +15,11 @@ if (!['app-password', 'reader-api'].includes(action) && (!allowed.includes(actio
     storage = await openCoordinatedStorage(stateDirectory())
     if (action === 'app-password') {
       const command = process.argv[3], arg = process.argv[4]
-      if (command === 'create' && arg) console.log((await storage.database.auth.createApp(arg, null)).password)
-      else if (command === 'list') console.log(JSON.stringify(storage.database.auth.apps().map(({ id, name, created, used }) => ({ id, name, created, used }))))
+      if (command === 'create' && arg && (process.argv.length === 5 || process.argv.length === 6 && process.argv[5] === '--article-labels')) {
+        console.log((await storage.database.auth.createApp(arg, null, process.argv[5] === '--article-labels')).password)
+      } else if (command === 'list') console.log(JSON.stringify(storage.database.auth.apps().map(({ id, name, created, used, articleLabels }) => ({ id, name, created, used, articleLabels }))))
       else if (command === 'revoke' && arg) storage.database.auth.revokeApp(arg)
-      else throw new AuthError('Usage: app-password create <name>|list|revoke <id>')
+      else throw new AuthError('Usage: app-password create <name> [--article-labels]|list|revoke <id>')
     } else if (action === 'reader-api') {
       const api = new GreaderAuth(storage.database.greaderDatabase, storage.database.auth, readerSourceConfiguration().backend === 'standalone', process.env.PUBLIC_URL || 'http://localhost:8080')
       const command = process.argv[3]

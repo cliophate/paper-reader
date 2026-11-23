@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest'
 import { PaperDatabase } from '../src/server/db'
 import { GreaderOrganization } from '../src/server/greader-organization'
 import { LABEL, item, resolveStream, STATE, explicit, metadata, page, where, scanPageFrom } from '../src/server/greader-query'
+import { ARTICLE_LABELS_VERSION } from '../src/server/greader-schema'
 import { GreaderPool } from '../src/server/greader-pool'
 import { GreaderAuth } from '../src/server/greader-auth'
 
@@ -27,6 +28,25 @@ it('backs up v15 privately, migrates once and preserves settings on reopen', () 
   const key = db.greaderDatabase.prepare('SELECT key FROM greader_settings').get()!.key
   db.close(); db = new PaperDatabase(path.join(directory,'paper.sqlite'))
   expect(db.greaderDatabase.prepare('SELECT key FROM greader_settings').get()!.key).toBe(key)
+})
+it('backs up the prior schema before adding labels and preserves feeds and app settings', async () => {
+  const app = await db.auth.createApp('Existing app', null)
+  const file = db.searchDatabasePath
+  const key = db.greaderDatabase.prepare('SELECT key FROM greader_settings').get()!.key
+  db.greaderDatabase.exec(`DROP TABLE entry_labels; DROP TABLE article_labels; ALTER TABLE auth_apps DROP COLUMN article_labels; PRAGMA user_version = ${ARTICLE_LABELS_VERSION - 1}`)
+  db.close()
+  db = new PaperDatabase(file)
+  expect(db.auth.apps()).toContainEqual(expect.objectContaining({ id: app.id, articleLabels: false }))
+  expect(db.greaderDatabase.prepare('SELECT * FROM article_labels').all()).toEqual([])
+  expect(db.greaderDatabase.prepare('SELECT key FROM greader_settings').get()?.key).toBe(key)
+  expect(db.organization.metadata(backend).feeds.map(row => row.id)).toContain(feed)
+  const backup = file + '.before-article-labels-v' + ARTICLE_LABELS_VERSION
+  expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
+  const prior = new DatabaseSync(backup, { readOnly: true })
+  try {
+    expect(prior.prepare('PRAGMA user_version').get()?.user_version).toBe(ARTICLE_LABELS_VERSION - 1)
+    expect(prior.prepare("SELECT name FROM sqlite_master WHERE name = 'article_labels'").get()).toBeUndefined()
+  } finally { prior.close() }
 })
 it('rolls back organization batches, rejects ambiguous moves, and retains empty folders', () => {
   const organization = new GreaderOrganization(db, backend, async () => { throw new Error() })

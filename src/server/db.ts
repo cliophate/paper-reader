@@ -7,7 +7,7 @@ import { AI_ACTIVITY_VERSION, AiActivityStore, migrateAiActivity } from './ai-ac
 import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
-import { migrateGreader } from './greader-schema.js'
+import { ARTICLE_LABELS_VERSION, migrateArticleLabels, migrateGreader } from './greader-schema.js'
 import { ANNOTATIONS_VERSION, AnnotationStore, hasAnnotations, migrateAnnotations } from './annotations.js'
 import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION, FEED_OVERRIDE_VERSION, migrateAuth } from './auth-schema.js'
 import { AuthStore } from './auth-store.js'
@@ -298,6 +298,10 @@ export class PaperDatabase {
             migrateAiActivity(this.db)
           })
         }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < ARTICLE_LABELS_VERSION) {
+          if (version > 0) this.backupBeforeMigration(ARTICLE_LABELS_VERSION, 'article-labels')
+          migrateArticleLabels(this.db)
+        }
       }
       this.db.function('checked_url_match', { directOnly: true }, matched => {
         const now = performance.now()
@@ -470,7 +474,7 @@ export class PaperDatabase {
     } else if (!owner) throw new Error('Resolve local article identity before importing content')
   }
 
-  private assertLocalBackend(backendId: string) {
+  assertLocalBackend(backendId: string) {
     if (backendId !== this.activeBackendId || this.identities.backend(backendId).kind !== 'standalone') throw new Error('Local state requires the active standalone backend')
   }
 

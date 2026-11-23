@@ -41,13 +41,9 @@ describe('subscription import application', () => {
     db.saveLocalSubscription(store.backendId, { title: 'Existing', url: 'https://existing.test/rss' })
     const before = await store.snapshot()
     const save = vi.spyOn(db, 'saveLocalSubscription')
-    const apply = db.organization.apply.bind(db.organization)
-    vi.spyOn(db.organization, 'apply').mockImplementation((backendId, revision, commands) => {
-      if (commands.some(command => failure === 'folder'
-        ? command.type === 'create-folder' && command.title === 'Second'
-        : command.type === 'add-membership')) throw new Error('Synthetic folder failure')
-      return apply(backendId, revision, commands)
-    })
+    const target = failure === 'folder' ? "folders WHEN new.title = 'Second'" : 'feed_folders'
+    db.greaderDatabase.exec(`CREATE TRIGGER fail_import BEFORE INSERT ON ${target}
+      BEGIN SELECT RAISE(ABORT, 'Synthetic folder failure'); END`)
     await expect(store.create({ title: 'New', url: 'https://new.test/rss' }, ['First', 'Second'], before.revision)).rejects.toThrow('Synthetic folder failure')
     const id = save.mock.results[0].value as string
     expect(await store.snapshot()).toEqual(before)

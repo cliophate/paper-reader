@@ -133,6 +133,12 @@ To roll back v28, stop Paper and preserve the current data directory. Restore
 `paper.sqlite.before-ai-activity-v28` as `paper.sqlite` in a separate copy without
 the newer WAL and SHM files, then start the previous build against that copy.
 
+Schema v29 adds standalone article labels and their article memberships.
+Paper saves `paper.sqlite.before-article-labels-v29` before upgrading an existing
+database. To roll back, stop Paper and preserve the data directory. Restore that
+backup as `paper.sqlite` in a separate copy without the newer WAL and SHM files,
+then start the previous build against that copy.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh

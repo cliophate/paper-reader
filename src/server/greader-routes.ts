@@ -1,4 +1,5 @@
-import { SubscriptionInputError } from './opml.js'
+import { labelName, LABEL } from './greader-labels.js'
+import { OPML_LIMITS, SubscriptionInputError } from './opml.js'
 import type { Request, Response, NextFunction } from 'express'
 import type { PaperDatabase } from './db.js'
 import { AuthError } from './auth-store.js'
@@ -18,23 +19,27 @@ export const GREADER_ENDPOINTS: Record<string, { method: string; fields: string[
   'stream/contents': { method: 'GET', fields: ['s', 'n', 'c', 'ot', 'nt', 'it', 'xt', 'r'] },
   'stream/items/contents': { method: 'POST', fields: ['i', 'T', 'r'] },
   'edit-tag': { method: 'POST', fields: ['i', 'a', 'r', 'T'] },
+  'subscription/import': { method: 'POST', fields: ['T'] },
   'subscription/quickadd': { method: 'POST', fields: ['quickadd', 'T'] },
   'subscription/edit': { method: 'POST', fields: ['s', 'ac', 't', 'a', 'r', 'T'] },
   'rename-tag': { method: 'POST', fields: ['s', 'dest', 'T'] }, 'disable-tag': { method: 'POST', fields: ['s', 'T'] },
 }
-async function params(req: Request, login: boolean) {
-  const query = new URL(req.originalUrl, 'http://localhost').searchParams
-  if (req.originalUrl.length > 262144 || query.size > 4096) throw new ReaderError('Request is too large.', 413)
-  if (login && query.size) throw new ReaderError('Login parameters belong in the request body.')
-  if (req.method !== 'POST') return query
-  if (!/^application\/x-www-form-urlencoded(?:;|$)/i.test(req.header('content-type') || '')) throw new ReaderError('Use form encoding.')
-  const cap = login ? 8192 : 262144
+async function readBody(req: Request, cap: number) {
   if (Number(req.header('content-length')) > cap) throw new ReaderError('Request is too large.', 413)
   const chunks: Buffer[] = []; let length = 0
   const timer = setTimeout(() => req.destroy(), 15_000)
   try { for await (const chunk of req) { length += chunk.length; if (length > cap) throw new ReaderError('Request is too large.', 413); chunks.push(chunk) } }
   finally { clearTimeout(timer) }
-  const body = new URLSearchParams(Buffer.concat(chunks).toString('utf8'))
+  return Buffer.concat(chunks).toString('utf8')
+}
+async function params(req: Request, login: boolean, rawBody: boolean) {
+  const query = new URL(req.originalUrl, 'http://localhost').searchParams
+  if (req.originalUrl.length > 262144 || query.size > 4096) throw new ReaderError('Request is too large.', 413)
+  if (login && query.size) throw new ReaderError('Login parameters belong in the request body.')
+  if (req.method !== 'POST' || rawBody) return query
+  if (!/^application\/x-www-form-urlencoded(?:;|$)/i.test(req.header('content-type') || '')) throw new ReaderError('Use form encoding.')
+  const cap = login ? 8192 : 262144
+  const body = new URLSearchParams(await readBody(req, cap))
   if (body.size + query.size > 4096) throw new ReaderError('Too many fields.', 413)
   for (const key of new Set(body.keys())) {
     if (query.has(key) && JSON.stringify(query.getAll(key)) !== JSON.stringify(body.getAll(key))) throw new ReaderError('Conflicting parameters.')
@@ -69,13 +74,13 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
   checkpointTimer.unref()
   let discoveries = 0
   let countsCache: { key: string; expires: number; body: string } | undefined
-  const cacheKey = () => JSON.stringify([db.greaderDatabase.prepare('PRAGMA data_version').get(), db.greaderDatabase.prepare('SELECT total_changes() AS n').get()])
+  const cacheKey = (articleLabels: boolean) => JSON.stringify([articleLabels, db.greaderDatabase.prepare('PRAGMA data_version').get(), db.greaderDatabase.prepare('SELECT total_changes() AS n').get()])
   const handler = async (req: Request, res: Response, next: NextFunction) => {
     if (!greaderPath(req.path)) return next()
     res.set('Cache-Control', 'no-store').set('Date', new Date().toUTCString())
     const abort = new AbortController(); res.once('close', () => abort.abort())
     try {
-      if (!auth.enabled()) throw new ReaderError('Not found.', 404)
+      if (!auth.enabled()) throw new ReaderError(auth.standalone ? 'Not found.' : 'Paper serves the Reader API in standalone mode only. Connect your app directly to your feed server.', 404)
       if ((req.header('origin') && req.header('origin') !== new URL(auth.publicUrl).origin) || req.header('sec-fetch-site') === 'cross-site') throw new ReaderError('Cross-site requests are not allowed.', 403)
       const path = req.path.slice('/api/greader.php'.length)
       const login = path === '/accounts/ClientLogin'
@@ -86,7 +91,7 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
         endpoint = 'stream/contents'
       }
       if (login ? req.method !== 'POST' : !GREADER_ENDPOINTS[endpoint] || GREADER_ENDPOINTS[endpoint].method !== req.method) throw new ReaderError('Not found.', 404)
-      const p = await params(req, login)
+      const p = await params(req, login, endpoint === 'subscription/import')
       const allowed = login ? ['Email', 'Passwd', 'output', 'client', 'accountType', 'service'] : [...GREADER_ENDPOINTS[endpoint].fields, 'output', 'client', 'ck']
       for (const key of p.keys()) if (!allowed.includes(key)) throw new ReaderError('Unsupported parameter.')
       const repeated = endpoint === 'edit-tag' ? ['i', 'a', 'r'] : endpoint === 'subscription/edit' ? ['s', 'a', 'r'] : endpoint === 'disable-tag' ? ['s'] : endpoint === 'stream/items/contents' ? ['i'] : ['stream/items/ids', 'stream/contents'].includes(endpoint) ? ['it', 'xt'] : []
@@ -102,7 +107,8 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
       if (!connections.register('', res, () => { try { auth.authenticate(header); return true } catch { return false } })) return
       const authorize = () => { abort.signal.throwIfAborted(); assertReaderCredential(db.greaderDatabase, app) }
       const mutation = req.method === 'POST' && endpoint !== 'stream/items/contents'
-      if ((mutation || p.has('T')) && !equal((p.get('T') || '').replace(/\r?\n$/, ''), auth.token(app, 'T'))) { res.set('X-Reader-Google-Bad-Token', 'true'); throw new ReaderError('Invalid token.', 403) }
+      const xmlImport = endpoint === 'subscription/import' && req.is(['text/xml', 'application/xml', 'application/*+xml', 'text/x-opml'])
+      if (((mutation && !xmlImport) || p.has('T')) && !equal((p.get('T') || '').replace(/\r?\n$/, ''), auth.token(app, 'T'))) { res.set('X-Reader-Google-Bad-Token', 'true'); throw new ReaderError('Invalid token.', 403) }
       if (p.has('output') && p.get('output') !== 'json') throw new ReaderError('Only JSON is supported.')
       if (['subscription/edit', 'rename-tag', 'disable-tag'].includes(endpoint)) organizationSources(p)
       await limits.acquire(app.id, mutation, abort.signal)
@@ -111,24 +117,33 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
       if (endpoint === 'token') { res.type('text/plain').send(`${auth.token(app, 'T')}\n`); return }
       if (endpoint === 'user-info') { res.json({ userId: 'paper', userName: String(auth.settings().username), userProfileId: 'paper', userEmail: '' }); return }
       const sql = db.greaderDatabase
+      const { articleLabels } = app
       if (['stream/items/contents', 'edit-tag'].includes(endpoint)) {
         const ids = [...new Set(p.getAll('i').map(value => String(itemNumber(value))))]
         if (!ids.length || ids.length > (mutation ? 1000 : 250)) throw new ReaderError('Invalid item batch size.', 413)
         if (!mutation) {
           const r = p.get('r') || 'd'; if (!['d', 'n', 'o'].includes(r)) throw new ReaderError('Invalid order.')
-          const body = await reads.run({ path: db.searchDatabasePath, kind: 'contents', backend, ids, order: r === 'o' ? 'ASC' : 'DESC' }, abort.signal, true)
+          const body = await reads.run({ path: db.searchDatabasePath, kind: 'contents', backend, articleLabels, ids, order: r === 'o' ? 'ASC' : 'DESC' }, abort.signal, true)
           jsonResponse(res, { id: READING, updated: Math.floor(Date.now() / 1000), items: JSON.parse(body) }, 20 * 1024 * 1024); return
         }
         const fields: { read?: boolean; starred?: boolean } = {}
+        const labels = new Map<string, boolean>()
         for (const [key, value] of p) if (key === 'a' || key === 'r') {
           const tag = value.replace(/^user\/paper\//, 'user/-/')
-          if (![`${STATE}read`, `${STATE}starred`].includes(tag)) throw new ReaderError('Article labels are unsupported.')
+          if (articleLabels && tag.startsWith(LABEL)) {
+            const name = labelName(tag), set = key === 'a'
+            if (labels.has(name) && labels.get(name) !== set) throw new ReaderError('Conflicting label changes.')
+            labels.set(name, set)
+            continue
+          }
+          if (![`${STATE}read`, `${STATE}starred`].includes(tag)) throw new ReaderError('Unknown article state.')
           const field = tag === `${STATE}read` ? 'read' : 'starred', set = key === 'a'
           if (fields[field] !== undefined && fields[field] !== set) throw new ReaderError('Conflicting state changes.')
           fields[field] = set
         }
-        if (!Object.keys(fields).length) throw new ReaderError('Supply a state change.')
-        state!.editReaderNumbers(ids.map(BigInt), fields, authorize)
+        if (!Object.keys(fields).length && !labels.size) throw new ReaderError('Supply a state or label change.')
+        if (labels.size * ids.length > 4096) throw new ReaderError('Too many article label changes.', 413)
+        state!.editReaderNumbers(ids.map(BigInt), fields, authorize, labels)
       } else if (['stream/items/ids', 'stream/contents'].includes(endpoint)) {
         if (p.getAll('s').length > 1 || p.getAll('r').length > 1) throw new ReaderError('Supply one stream and order.')
         const streamName = pathStream || p.get('s') || ''
@@ -146,16 +161,23 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
           if (saved.v !== 1 || saved.expires <= Date.now() || saved.binding !== binding || saved.query.backend !== backend) throw new ReaderError('Invalid continuation.')
           q = { ...saved.query, n: Math.min(n, 250) }
         } else q = { backend, stream: resolveStream(sql, streamName), it: raw.it.map(s => resolveStream(sql, s)), xt: raw.xt.map(s => resolveStream(sql, s)), ot: raw.ot, nt: raw.nt, order: order === 'o' ? 'ASC' : 'DESC', n: Math.min(n, 250) }
-        const result = JSON.parse(await reads.run({ path: db.searchDatabasePath, kind: endpoint === 'stream/items/ids' ? 'ids' : 'page', query: q }, abort.signal, true))
+        const result = JSON.parse(await reads.run({ path: db.searchDatabasePath, kind: endpoint === 'stream/items/ids' ? 'ids' : 'page', query: q, articleLabels }, abort.signal, true))
         let continuation: string | undefined
         if (result.last) { const payload = Buffer.from(JSON.stringify({ v: 1, binding, expires: Date.now() + 86400000, query: { ...q, high: result.high, last: result.last } })).toString('base64url'); continuation = `${payload}.${auth.sign('cursor', payload)}` }
         jsonResponse(res, endpoint === 'stream/items/ids' ? { itemRefs: result.values, ...(continuation ? { continuation } : {}) } : { id: streamName, updated: Math.floor(Date.now() / 1000), items: result.values, ...(continuation ? { continuation } : {}) }, endpoint === 'stream/items/ids' ? 128 * 1024 : 20 * 1024 * 1024); return
       } else if (['subscription/list', 'tag/list', 'unread-count'].includes(endpoint)) {
-        const key = cacheKey()
+        const key = cacheKey(articleLabels)
         if (endpoint === 'unread-count' && countsCache?.key === key && countsCache.expires > Date.now()) { res.type('json').send(countsCache.body); return }
-        const body = await reads.run({ path: db.searchDatabasePath, kind: endpoint, backend }, abort.signal, true)
-        if (endpoint === 'unread-count' && key === cacheKey()) countsCache = { key, expires: Date.now() + 1000, body }
+        const body = await reads.run({ path: db.searchDatabasePath, kind: endpoint, backend, articleLabels }, abort.signal, true)
+        if (endpoint === 'unread-count' && key === cacheKey(articleLabels)) countsCache = { key, expires: Date.now() + 1000, body }
         res.type('json').send(body); return
+      } else if (endpoint === 'subscription/import' || articleLabels && (endpoint === 'rename-tag' || endpoint === 'disable-tag')) {
+        p.delete('T')
+        const job = endpoint === 'subscription/import' ? { kind: 'import', xml: await readBody(req, OPML_LIMITS.bytes) }
+          : { kind: endpoint, params: p.toString() }
+        await writer.run({ ...job, path: db.searchDatabasePath, backend,
+          app: { id: app.id, generation: app.generation, globalGeneration: app.globalGeneration } }, abort.signal)
+        state?.invalidate()
       } else if (endpoint === 'subscription/quickadd') {
         limits.discovery()
         if (discoveries >= 2) throw new ReaderError('Discovery is busy.', 503)

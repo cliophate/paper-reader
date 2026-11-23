@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { AuthStore } from '../src/server/auth-store'
 import { migrateAuth } from '../src/server/auth-schema'
+import { migrateArticleLabels } from '../src/server/greader-schema'
 import { authGate, authRoutes, trustedProxyHops } from '../src/server/auth-routes'
 import { requireAllowedHost, requireSameOrigin } from '../src/server/request-origin'
 import { softwareAuthenticator } from './fixtures/software-authenticator'
@@ -17,7 +18,7 @@ let activeStreams: Response[] = []
 let pending: (() => void) | undefined
 const password = 'synthetic owner password'
 beforeEach(async () => {
-  db = new DatabaseSync(':memory:'); migrateAuth(db); store = new AuthStore(db); cookies = new Map()
+  db = new DatabaseSync(':memory:'); migrateAuth(db); migrateArticleLabels(db); store = new AuthStore(db); cookies = new Map()
   activeStreams = []
   const app = express(); app.set('trust proxy', trustedProxyHops())
   app.use(requireAllowedHost('http://localhost')); app.use(requireSameOrigin('http://localhost'))
@@ -128,13 +129,14 @@ it('binds passkey registration to the current session and rejects invalid regist
 })
 it('returns app secrets only on creation and redacts malformed request bodies', async () => {
   await setup()
-  const created = await (await call('/api/auth/apps', { name: 'Phone', scope: 'reader-sync' })).json()
+  const created = await (await call('/api/auth/apps', { name: 'Phone', scope: 'reader-sync', articleLabels: true })).json()
   expect(created.password).toBeTruthy()
   const access = await (await call('/api/auth/access')).json()
   expect(JSON.stringify(access)).not.toContain(created.password)
   expect(JSON.stringify(access)).not.toContain('scrypt1')
   const malformed = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"password":"secret-not-to-echo"' })
   expect(await malformed.text()).not.toContain('secret-not-to-echo')
+  expect(access.apps).toContainEqual(expect.objectContaining({ id: created.id, articleLabels: true }))
   await call('/api/auth/apps/' + created.id, undefined, 'DELETE')
   expect(store.apps()).toEqual([])
 })

@@ -11,7 +11,7 @@ interface Access {
   username: string; passwordEnabled: boolean
   passkeys: Array<{ id: string; name: string; created: number; used: number | null }>
   sessions: Array<{ id: string; created: number; seen: number; agent: string; current: boolean }>
-  apps: Array<{ id: string; name: string; scope: string; created: number; used: number | null }>
+  apps: Array<{ id: string; name: string; scope: string; articleLabels: boolean; created: number; used: number | null }>
 }
 const date = (value: number | null) => value ? new Date(value).toLocaleString() : 'Never'
 
@@ -104,6 +104,7 @@ export function AccessSettings() {
   const [access, setAccess] = useState<Access | null>(null), [enabled, setEnabled] = useState<boolean | null>(null)
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState('')
   const [keyName, setKeyName] = useState(''), [appName, setAppName] = useState(''), [appPassword, setAppPassword] = useState('')
+  const [articleLabels, setArticleLabels] = useState(false)
   const load = async () => { const status = await authRequest<AuthStatus & { reader?: ReaderStatus }>('/status'); setEnabled(status.enabled); if (status.reader) { setReader(status.reader); setApiUsername(status.reader.username) } if (status.enabled) setAccess(await authRequest<Access>('/access')) }
   useEffect(() => { void load().catch(reason => setError((reason as Error).message)) }, [])
   const run = async (work: () => Promise<unknown>, success = 'Saved.') => {
@@ -132,12 +133,15 @@ export function AccessSettings() {
       <h4>Sessions</h4><div className="access-actions"><button disabled={busy} onClick={() => void run(() => authRequest('/sessions/sign-out-others', {}), 'Other sessions signed out.')}>Sign out other sessions</button><button disabled={busy} onClick={() => void run(async () => { await authRequest('/logout', {}); requireLogin() })}>Sign out</button></div>
       <div className="settings-list">{access.sessions.map(session => <article className="settings-list-row" key={session.id}><div><strong>{session.current ? 'This session' : 'Other session'}</strong><span>{session.agent || 'Unknown browser'}</span><span>Created {date(session.created)} · Last seen {date(session.seen)}</span></div></article>)}</div>
       <h4>App passwords</h4><p>Use a separate password for each reader app. These passwords authorize the Google Reader sync API. It does not grant access to Settings or an owner session.</p>
-      <form className="access-form" onSubmit={event => { event.preventDefault(); void run(async () => { const result = await authRequest<{ password: string }>('/apps', { name: appName, scope: 'reader-sync' }); setAppPassword(result.password); setAppName('') }, 'App password created.') }}>
+      <form className="access-form" onSubmit={event => { event.preventDefault(); void run(async () => { const result = await authRequest<{ password: string }>('/apps', { name: appName, scope: 'reader-sync', articleLabels }); setAppPassword(result.password); setAppName(''); setArticleLabels(false) }, 'App password created.') }}>
         <label>App name<input required maxLength={80} value={appName} onChange={event => setAppName(event.target.value)} placeholder="Phone reader" /></label>
-        <label>Scope<select disabled><option>reader-sync</option></select></label><button disabled={busy}>Create app password</button>
+        <label>Scope<select disabled><option>reader-sync</option></select></label>
+        <label className="access-toggle"><input type="checkbox" checked={articleLabels} onChange={event => setArticleLabels(event.target.checked)} /> Article labels</label>
+        <p>Some apps show article labels as folders.</p>
+        <button disabled={busy}>Create app password</button>
       </form>
       {appPassword && <div className="access-secret"><label>Copy this password now. Paper will not show it again.<input readOnly autoFocus value={appPassword} onFocus={event => event.target.select()} /></label><div className="access-actions"><button onClick={() => void navigator.clipboard.writeText(appPassword).then(() => setMessage('Copied.'), () => setError('Select and copy the password above.'))}>Copy password</button><button onClick={() => setAppPassword('')}>Done</button></div></div>}
-      <div className="settings-list">{access.apps.map(app => <article className="settings-list-row" key={app.id}><div><strong>{app.name}</strong><span>{app.scope} · Created {date(app.created)} · Last used {date(app.used)}</span></div><button disabled={busy} aria-label={`Revoke app password ${app.name}`} onClick={() => { if (confirm(`Revoke app password ${app.name}?`)) void run(() => authRequest(`/apps/${app.id}`, undefined, 'DELETE')) }}>Revoke</button></article>)}</div>
+      <div className="settings-list">{access.apps.map(app => <article className="settings-list-row" key={app.id}><div><strong>{app.name}</strong><span>{app.scope} · Article labels {app.articleLabels ? 'on' : 'off'} · Created {date(app.created)} · Last used {date(app.used)}</span></div><button disabled={busy} aria-label={`Revoke app password ${app.name}`} onClick={() => { if (confirm(`Revoke app password ${app.name}?`)) void run(() => authRequest(`/apps/${app.id}`, undefined, 'DELETE')) }}>Revoke</button></article>)}</div>
       <button disabled={busy || !access.apps.length} onClick={() => { if (confirm('Revoke every app password?')) void run(async () => { await authRequest('/apps', undefined, 'DELETE'); setAppPassword('') }) }}>Revoke all app passwords</button>
     </>}
     {reader && <>
@@ -152,7 +156,7 @@ export function AccessSettings() {
         <pre>npm run paper-auth -- app-password create &lt;name&gt;{'\n'}npm run paper-auth -- reader-api enable &lt;username&gt;{'\n'}npm run paper-auth -- reader-api disable</pre>
         <p>API username: {reader.username || 'Not configured'}</p>
       </>}
-      <p>Choose FreshRSS in each app. Use the API username and its app password.</p>
+      <p>Choose FreshRSS in each app. Use the API username and its app password. In standalone mode, apps can import subscriptions from OPML.</p>
       <p>NetNewsWire: <code>{reader.addresses.netNewsWire}</code></p>
       <p>Read You: <code>{reader.addresses.readYou}</code></p>
       <p>Capy Reader: <code>{reader.addresses.capyReader}</code></p>

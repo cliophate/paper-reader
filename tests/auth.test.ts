@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { AuthError, AuthStore, ABSOLUTE_MS, IDLE_MS, SETUP_MS, digest } from '../src/server/auth-store'
 import { migrateAuth } from '../src/server/auth-schema'
+import { migrateArticleLabels } from '../src/server/greader-schema'
 import { modelEnvironment } from '../src/server/model-process'
 
 let db: DatabaseSync, store: AuthStore, now: number
 const password = 'a synthetic owner password'
-beforeEach(() => { now = 1_800_000_000_000; db = new DatabaseSync(':memory:'); migrateAuth(db); store = new AuthStore(db, () => now) })
+beforeEach(() => { now = 1_800_000_000_000; db = new DatabaseSync(':memory:'); migrateAuth(db); migrateArticleLabels(db); store = new AuthStore(db, () => now) })
 afterEach(() => db.close())
 const setup = async () => { const code = store.setupCode(); await store.setup(code, 'owner', password); return store.newSession('', 'test browser') }
 

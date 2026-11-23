@@ -113,7 +113,8 @@ Use HTTPS for remote access. An existing authenticated proxy can stay in place.
 See [access and recovery](docs/access.md) before exposing Paper.
 
 Standalone installs can enable [Reader apps](docs/greader-api.md) for Google
-Reader-compatible sync. Access starts disabled and requires app passwords.
+Reader-compatible sync, article labels and OPML import. Access starts disabled
+and requires app passwords.
 
 ### Connect a feed server on first start
 
