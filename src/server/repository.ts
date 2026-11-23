@@ -6,6 +6,8 @@ export type { EntrySource } from './backend.js'
 
 const REMOTE_PAGE_SIZE = 250
 const MAX_REMOTE_BRIEFING_PAGES = 5
+// Excluded feeds don't count toward the scan, so bound the pages separately.
+const MAX_EXCLUDED_BRIEFING_PAGES = 20
 
 export async function briefingCandidates(source: EntrySource, stream: StreamRef, options: BriefingEntryOptions): Promise<Entry[]> {
   if (source.briefingEntries) return source.briefingEntries(stream, options)
@@ -18,7 +20,7 @@ export async function briefingCandidates(source: EntrySource, stream: StreamRef,
   const cursors = new Set<string>()
   let continuation = ''
   let remaining = REMOTE_PAGE_SIZE * MAX_REMOTE_BRIEFING_PAGES
-  while (remaining > 0) {
+  for (let pageIndex = 0; remaining > 0 && pageIndex < MAX_EXCLUDED_BRIEFING_PAGES; pageIndex++) {
     options.signal?.throwIfAborted()
     const page = await source.entriesPage(stream, { ...options, limit: REMOTE_PAGE_SIZE, continuation })
     const candidates = excludedFeeds?.size ? page.items.filter(entry => !excludedFeeds.has(entry.feedId)).slice(0, remaining) : page.items
