@@ -5,8 +5,9 @@ FreshRSS or Miniflux mode, that backend stores subscriptions and upstream read/s
 Paper stores additional user state. Back up each application you use.
 
 Paper's data directory contains paper.sqlite and potentially its SQLite WAL
-and shared-memory files. It includes reading positions, cached full text,
+and shared-memory files. It includes shared reading preferences, reading positions, cached full text,
 discussions, highlights and personal notes, filters, briefing history, Pulse collections, and feedback.
+Device overrides, theme and reader text size live in each browser.
 An empty remote-backend cache can resync articles but cannot recover that additional
 state. An empty standalone database cannot recover subscriptions or reading state.
 The same directory also holds connections.json when connections have been edited

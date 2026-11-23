@@ -158,6 +158,28 @@ See [Miniflux setup and behavior](docs/miniflux.md).
 To use a different local port, change `PAPER_PORT` and `PUBLIC_URL` in `.env`.
 For access from other devices, follow the [remote access guide](docs/access.md).
 
+## Reading preferences
+
+In source builds after 0.2.0-alpha.3, open **Settings > Reading & connections**
+to choose how articles look and when Paper marks them read. Typeface, line
+spacing and column width follow you across browsers. Each feed's full-text mode also follows you. In Auto mode, Paper learns
+to load short articles from a feed after you request full text for three different
+articles on one device. Paper shares that choice and keeps the article IDs local.
+Theme and text size stay on each device.
+
+Choose **Override on this device** before changing a setting just for this
+browser. **Use shared value** makes it follow the server again. **Reset shared
+preferences** restores Paper's defaults across devices and keeps local overrides.
+
+After upgrading, Paper asks whether to share your browser's existing choices.
+If another device already set shared values, Paper keeps differences as local
+overrides and tells you. Offline, Paper uses the last values it received and
+keeps edits until it can sync. An open browser checks on reconnect, when you
+return to Paper, and every 30 seconds while reading. If another device has changed
+the same setting since your browser last saw it, Paper keeps the server value
+and tells you which offline change it replaced. Edits to different settings
+sync independently. A shared reset clears edits queued before the reset.
+
 ## Optional connections
 
 Open **Settings > Reading & connections** to enable:

@@ -3,7 +3,7 @@ import { transaction } from './transaction.js'
 
 export const FEED_MAINTENANCE_VERSION = 21
 export const FEED_OVERRIDE_VERSION = 22
-export { ANNOTATIONS_VERSION as DATABASE_VERSION } from './annotations.js'
+export { READING_PREFERENCES_VERSION as DATABASE_VERSION } from './reading-preference-store.js'
 
 export function migrateAuth(db: DatabaseSync) {
   transaction(db, () => db.exec(`
