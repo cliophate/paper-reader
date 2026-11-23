@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import fs from 'node:fs'
+import express from 'express'
 import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -11,6 +12,59 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 // Each operation runs in a fresh process with a 4 GiB V8 heap limit.
 const script = fileURLToPath(import.meta.url)
 const [mode, file, modulePath, operation] = process.argv.slice(2)
+async function measureRuleArrivals(db) {
+  const { webAccess } = await import('../dist-server/web-access.js')
+  const { AuthConnections } = await import('../dist-server/auth-connections.js')
+  const app = express()
+  const server = app.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const base = `http://127.0.0.1:${server.address().port}`
+  webAccess(app, base, db.auth, new AuthConnections(db.auth))
+  const entries = Array.from({ length: 1000 }, (_, i) => ({
+    id: `arrival-${i}`, feedId: 'synthetic', feedTitle: 'Synthetic', feedUrl: 'https://example.test',
+    title: `Story cohort${i % 50}x`, author: 'Writer', url: `https://example.test/arrival/${i}`,
+    contentHtml: '<p>Synthetic arrival body.</p>', excerpt: '', publishedAt: '2026-01-01', timestamp: i,
+    read: false, starred: false, readingMinutes: 1, thumbnailUrl: '', kind: 'article',
+  }))
+  const results = []
+  try {
+    for (const ruleCount of [0, 50]) {
+      assert.equal(db.entryCount(), 200_000)
+      for (let rule = 0; rule < ruleCount; rule++) {
+        const terms = Array.from({ length: 22 }, (_, term) => `absent${rule}x${term}`)
+        terms.push('title:article', `title:cohort${rule}x`)
+        db.rules.save({ query: terms.join(' OR '), actions: ['hide'] })
+      }
+      let done = false, healthError
+      const probes = []
+      const health = (async () => {
+        do {
+          const start = performance.now()
+          const response = await fetch(base + '/health', { signal: AbortSignal.timeout(2000) })
+          assert.equal((await response.json()).status, 'ok')
+          probes.push(performance.now() - start)
+        } while (!done)
+      })().catch(error => { healthError = error })
+      const started = performance.now()
+      let wallMs
+      try { await db.upsertEntriesInChunks(entries); wallMs = performance.now() - started }
+      finally { done = true; await health }
+      if (healthError) throw healthError
+      const matches = db.muteFilters().reduce((sum, rule) => sum + rule.matchCount, 0)
+      assert.equal(matches, ruleCount ? 1000 : 0)
+      const report = { operation: 'rule-arrivals', ruleCount, termsPerRule: ruleCount ? 24 : 0,
+        arrivals: entries.length, wallMs, matches, healthProbes: probes.length, healthMaxMs: Math.max(...probes) }
+      console.log(JSON.stringify(report))
+      assert.ok(probes.length > 1 && report.healthMaxMs < 2000)
+      results.push(report)
+      if (!ruleCount) {
+        db.greaderDatabase.prepare('DELETE FROM entries WHERE id IN (SELECT value FROM json_each(?))').run(JSON.stringify(entries.map(entry => entry.id)))
+      }
+    }
+    return results
+  } finally { await new Promise(resolve => server.close(resolve)) }
+}
+
 if (mode === 'worker') {
   const { PaperDatabase } = await import(pathToFileURL(modulePath))
   const db = new PaperDatabase(file)
@@ -112,6 +166,9 @@ if (mode === 'worker') {
       }
     }
   }
+  sql.exec('PRAGMA foreign_keys=ON; DELETE FROM muted_entries; DELETE FROM mute_filters')
+  const rulesDb = new PaperDatabase(databasePath)
+  try { reports.push(...await measureRuleArrivals(rulesDb)) } finally { rulesDb.close() }
   sql.close()
   fs.writeFileSync(path.join(temporary, 'results.json'), JSON.stringify(reports, null, 2))
   console.log(`Synthetic fixture and results retained in ${temporary}`)

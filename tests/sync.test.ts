@@ -416,3 +416,60 @@ function deferred() {
   const promise = new Promise<void>(complete => { resolve = complete })
   return { promise, resolve }
 }
+
+it('never replays a rule star after a lost response and a newer upstream unstar', async () => {
+  const source = new FakeBackend([{ items: [entry()], continuation: '' }])
+  const sync = new BackendSynchronizer(database, source, true, [28, 58])
+  const ruleId = database.rules.save({ query: 'author:Ada', actions: ['star'] })
+  const write = vi.spyOn(source, 'editEntries').mockImplementationOnce(async ids => {
+    source.starredIds = ids
+    throw new Error('Lost response with synthetic-secret')
+  })
+  await sync.syncNow()
+  await sync.flushRuleState()
+  expect(source.starredIds).toEqual(['one'])
+  source.starredIds = []
+  await sync.stop()
+  database.close()
+  database = new PaperDatabase(path.join(directory, 'paper.sqlite'))
+  const restarted = new BackendSynchronizer(database, source, true, [28, 58])
+  await restarted.syncNow()
+  await restarted.flushRuleState()
+  expect(write).toHaveBeenCalledTimes(1)
+  expect(database.entryState('one')?.starred).toBe(false)
+  const event = database.activity().find(event => event.origin === 'rule')
+  expect(event).toMatchObject({ summary: expect.stringContaining('did not confirm'), details: {
+    operation: 'star', ruleId, articles: [database.localEntry('one')!.linkNumber],
+  } })
+  expect(Date.parse(event!.occurredAt)).toBeGreaterThan(0)
+  expect(JSON.stringify(database.activity())).not.toContain('synthetic-secret')
+})
+
+it.each(['lost', 'confirmed'])('keeps the latest snapshot while a rule acknowledgement is %s', async outcome => {
+  const source = new FakeBackend([{ items: [entry(), entry({ id: 'other', author: 'Grace' })], continuation: '' }])
+  const sync = new BackendSynchronizer(database, source, true, [28, 58])
+  database.rules.save({ query: 'author:Ada', actions: ['star'] })
+  const started = deferred(), release = deferred()
+  vi.spyOn(source, 'editEntries').mockImplementation(async () => {
+    started.resolve()
+    await release.promise
+    if (outcome === 'lost') throw new Error('FreshRSS request failed with 403 for /synthetic-secret')
+  })
+  try {
+    await sync.syncNow()
+    await started.promise
+    source.starredIds = ['other']
+    source.unreadIds = ['other']
+    await sync.syncNow()
+    expect(database.entryState('other')).toMatchObject({ read: false, starred: true })
+  } finally { release.resolve(); await sync.flushRuleState() }
+  expect(database.entryState('one')?.starred).toBe(false)
+  if (outcome === 'lost') {
+    expect(database.activity().find(event => event.origin === 'rule')?.details.reason).toBe('HTTP 403')
+    expect(JSON.stringify(database.activity())).not.toContain('synthetic-secret')
+  }
+  source.starredIds = []
+  await sync.syncNow()
+  expect(database.entryState('other')).toMatchObject({ read: false, starred: false })
+  expect(sync.status().lastError).toBeNull()
+})

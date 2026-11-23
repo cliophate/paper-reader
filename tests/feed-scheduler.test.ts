@@ -48,6 +48,19 @@ afterEach(async () => {
 })
 
 describe('standalone collector', () => {
+  it('commits rule actions and the feed checkpoint for a large standalone arrival', async () => {
+    const items = Array.from({ length: 257 }, (_, i) => `<item><guid>${i}</guid><title>Topic ${i}</title></item>`).join('')
+    const origin = await server((_req, res) => res.end(`<rss version="2.0"><channel><title>Fixture</title>${items}</channel></rss>`))
+    const feed = save(origin)
+    db.rules.save({ query: 'title:topic OR body', actions: ['read'] })
+    const hidden = db.rules.save({ query: 'is:unread -title:"Topic 1"', actions: ['hide'] })
+    expect(await scheduler(origin).runDue()).toMatchObject({ fetched: 1 })
+    expect(db.entryCount()).toBe(257)
+    expect(db.unreadCount()).toBe(0)
+    expect(db.muteFilters(hidden)[0].matchCount).toBe(256)
+    expect(checkpoint(feed)).toBeTruthy()
+  })
+
   it('publishes committed failures and successful checks in feed health, including 304 recovery', async () => {
     let status = 503
     const origin = await server((_req, res) => { res.writeHead(status, { ETag: '"health"' }); res.end(status === 200 ? rss() : '') })

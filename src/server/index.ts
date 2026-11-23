@@ -1,3 +1,4 @@
+import { ruleQuery } from './article-rules.js'
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { ReadingPreferenceConflict } from './reading-preference-store.js'
 import { validReadingWrite } from './reading-preference-values.js'
@@ -317,7 +318,7 @@ app.get('/api/status', (_request, response) => response.json({
   localReadsActive,
   sync: synchronizer.status(),
   storage: database.storageStatus(),
-  muteFilters: database.muteFilters().length,
+  muteFilters: database.rules.count(),
   openReports: database.openArticleReportCount(),
   headlines: headlines.status(),
 }))
@@ -489,6 +490,35 @@ app.get('/api/activity', (request, response) => {
   response.json(database.activity(Number(request.query.limit) || 100))
 })
 
+function runRuleBackfill() {
+  void database.backfillMuteFilters().then(async () => {
+    if (shuttingDown) return
+    if (synchronizer instanceof BackendSynchronizer) await synchronizer.flushRuleState()
+    else standalone?.state.invalidate()
+  }).catch(() => console.error('Paper could not finish applying article rules. Pending work will resume after restart.'))
+}
+
+app.post('/api/rules/preview', asyncRoute(async (request, response) => {
+  const query = ruleQuery(request.body?.query)
+  const preview = await withRequestSignal(request, response, signal => search.select(
+    { kind: 'all', id: 'all', title: 'All articles' }, { query }, { kind: 'rule' }, signal))
+  const items = preview.ids.flatMap(id => {
+    const entry = database.localEntry(id)
+    return entry ? [{ id, title: entry.title, feedTitle: entry.feedTitle }] : []
+  })
+  response.json({ count: preview.count, items })
+}))
+
+app.post('/api/rules', (request, response) => {
+  const id = database.rules.save(request.body)
+  if (request.body.applyExisting) runRuleBackfill()
+  response.status(201).json(database.muteFilters(id)[0])
+})
+
+app.get('/api/rules/:id/hidden', (request, response) => {
+  response.json(database.rules.hidden(request.params.id, String(request.query.after || '')))
+})
+
 app.get('/api/filters', (_request, response) => {
   response.json(database.muteFilters())
 })
@@ -510,9 +540,9 @@ app.post('/api/filters', asyncRoute(async (request, response) => {
 
 app.delete('/api/filters/:id', (request, response) => {
   const id = String(request.params.id)
-  const filter = database.muteFilters().find(item => item.id === id)
+  const filter = database.muteFilters(id)[0]
   if (!filter || !database.deleteMuteFilter(id)) return response.status(404).json({ error: 'Filter not found' })
-  database.recordActivity({ kind: 'filter', origin: 'settings', summary: `Removed mute filter "${filter.phrase}"`, count: filter.matchCount, details: { filterId: id } })
+  database.recordActivity({ kind: 'filter', origin: 'settings', summary: `Removed article rule "${filter.phrase}"`, count: filter.matchCount, details: { filterId: id } })
   response.json({ ok: true })
 })
 
@@ -1101,10 +1131,11 @@ function onListening() {
   feedIcons?.start()
   webhooks.start()
   briefingDelivery.start()
-  void database.backfillMuteFilters().catch(error => console.error('Mute filter backfill failed; it will resume after restart.', error))
+  runRuleBackfill()
 }
 if (server.listening) onListening()
 else server.listen(config.port, config.host, onListening)
+
 function parseRevisions(value: unknown): Record<string, number> | undefined {
   if (value === undefined) return undefined
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.values(value).some(revision => !Number.isSafeInteger(revision) || Number(revision) < 0)) throw new BackendValidationError('Send valid article revisions.')

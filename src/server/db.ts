@@ -1,3 +1,5 @@
+import type { ArticleRule, RuleAction } from '../shared/article-rules.js'
+import { ArticleRules, migrateRules, RULE_BATCH_SIZE, RULES_VERSION } from './article-rules.js'
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { privateFeedRef, migrateFeedMaintenance } from './feed-maintenance.js'
 import { FeedOverrideStore, migrateFeedOverrides } from './feed-overrides.js'
@@ -20,7 +22,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { normalizeFeedContent, normalizeFeedThumbnail, normalizeFeedTitle } from './feed-content.js'
 import { isEditorialLinkedFeed } from './entry-kind.js'
 import { IdentityStore, migrateIdentity, type BackendIdentity, type SourceItemIdentity, type IdentityResolution } from './identity.js'
-import { transaction } from './transaction.js'
+import { retryBusy, transaction } from './transaction.js'
 import { FeedFetchStore, migrateFeedFetchState } from './feed-fetch-state.js'
 import { migrateStandaloneSetup } from './migration-schema.js'
 import { parseSearch, SearchLimitError } from './search-query.js'
@@ -154,16 +156,7 @@ export interface ActivityRecord {
 
 export type MuteFilterScope = 'title' | 'content' | 'any'
 
-export interface MuteFilterRecord {
-  id: string
-  phrase: string
-  scope: MuteFilterScope
-  feedId: string
-  feedTitle: string
-  matchCount: number
-  matching: boolean
-  createdAt: string
-}
+export type MuteFilterRecord = ArticleRule
 
 export type ArticleReportIssue = 'content' | 'media' | 'metadata' | 'social' | 'other'
 
@@ -198,6 +191,7 @@ const BACKEND_CHECKPOINTS = new Set(['backfill_complete', 'backfill_continuation
 export class PaperDatabase {
   private readonly db: DatabaseSync
   private readonly databasePath: string
+  readonly rules: ArticleRules
   readonly annotations: AnnotationStore
   readonly retention: RetentionStore
   readonly auth: AuthStore
@@ -307,7 +301,12 @@ export class PaperDatabase {
           if (version > 0 && version < ENTRY_STATE_VERSION) this.backupBeforeMigration(ENTRY_STATE_VERSION, 'entry-state')
           migrateEntryState(this.db)
         }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < RULES_VERSION) {
+          if (version > 0 && version < RULES_VERSION) this.backupBeforeMigration(RULES_VERSION, 'article-rules')
+          migrateRules(this.db)
+        }
       }
+      this.rules = new ArticleRules(this)
       this.db.function('checked_url_match', { directOnly: true }, matched => {
         const now = performance.now()
         if (++this.urlComparisons === 1) this.urlScanStart = now
@@ -549,9 +548,11 @@ export class PaperDatabase {
       this.assertLocalBackend(backendId)
       const undo = this.getUndo(token)
       if (!undo || undo.backendId !== backendId || !undo.expectedRevisions) throw new UndoExpiredError()
-      const result = this.commitLocalEntryState(backendId, undo.entryIds, undo.operation, { expectedRevisions: undo.expectedRevisions, origin: 'undo' })
+      const both = this.db.prepare('SELECT undo_both FROM rule_undo WHERE token=?').get(token)?.undo_both
+      const result = this.commitLocalEntryState(backendId, undo.entryIds, undo.operation, { expectedRevisions: undo.expectedRevisions, origin: 'undo',
+        ...(Boolean(both) && { fields: { read: false, starred: false } }) })
       this.deleteUndo(token)
-      return result
+      return { ...result, restoredBoth: Boolean(both) }
     })
   }
 
@@ -919,13 +920,17 @@ export class PaperDatabase {
   numberEntries(entries: Entry[]): Entry[] {
     return transaction(this.db, () => {
       const arrival = this.db.prepare('SELECT sequence FROM article_arrivals WHERE entry_id = ?')
+      const fresh = new Map<string, Entry>()
       for (const entry of entries) {
-        if (!arrival.get(entry.id)) this.upsertEntries([entry])
-        else if (entry.enclosures) {
+        if (!arrival.get(entry.id) && !fresh.has(entry.id)) fresh.set(entry.id, entry)
+        else if (fresh.has(entry.id) && entry.enclosures) {
+          fresh.set(entry.id, { ...fresh.get(entry.id)!, enclosures: entry.enclosures })
+        } else if (entry.enclosures) {
           this.markEnclosuresChecked(entry.id)
           replaceEnclosures(this.db, entry.id, entry.enclosures)
         }
       }
+      this.upsertEntries([...fresh.values()])
       return entries.map(entry => this.numberEntry(entry))
     })
   }
@@ -987,6 +992,13 @@ export class PaperDatabase {
     })
   }
 
+  async upsertEntriesInChunks(entries: Entry[]) {
+    for (let offset = 0; offset < entries.length; offset += RULE_BATCH_SIZE) {
+      if (offset) await new Promise<void>(resolve => setImmediate(resolve))
+      this.upsertEntries(entries.slice(offset, offset + RULE_BATCH_SIZE))
+    }
+  }
+
   upsertEntries(entries: Entry[]) {
     if (!entries.length) return
     const now = new Date().toISOString()
@@ -1021,31 +1033,39 @@ export class PaperDatabase {
         kind = excluded.kind,
         synced_at = excluded.synced_at
     `)
-    const muteRules = this.db.prepare('SELECT id, phrase, scope, feed_id FROM mute_filters').all() as Array<{ id: string; phrase: string; scope: MuteFilterScope; feed_id: string }>
-    const clearMuteMatch = this.db.prepare('DELETE FROM muted_entries WHERE entry_id = ? AND filter_id = ?')
-    const addMuteMatch = this.db.prepare('INSERT OR IGNORE INTO muted_entries (filter_id, entry_id) VALUES (?, ?)')
     transaction(this.db, () => {
+      const applyRules = this.rules.prepareIngest(this.activeBackendId)
+      const muteRules = this.db.prepare("SELECT id, phrase, scope, feed_id FROM mute_filters WHERE scope!='query'").all() as Array<{ id: string; phrase: string; scope: MuteFilterScope; feed_id: string }>
+      const oldMuteMatches = this.db.prepare(`SELECT m.filter_id FROM muted_entries m JOIN mute_filters f ON m.filter_id=f.id
+        WHERE m.entry_id=? AND f.scope!='query'`)
+      const clearMuteMatch = this.db.prepare('DELETE FROM muted_entries WHERE entry_id = ? AND filter_id = ?')
+      const addMuteMatch = this.db.prepare('INSERT OR IGNORE INTO muted_entries (filter_id, entry_id) VALUES (?, ?)')
       const hasCachedArticles = Boolean(this.db.prepare('SELECT 1 FROM article_cache LIMIT 1').get())
       for (const entry of entries) {
         this.assertImportedIdentity(entry)
+        const contentText = plainText(entry.contentHtml)
         const canonicalUrl = normalizeUrl(entry.url)
         statement.run(
           entry.id, entry.feedId, entry.feedTitle, entry.feedUrl, entry.title, entry.author,
           entry.url, canonicalUrl, sourceDomain(canonicalUrl || entry.feedUrl), entry.contentHtml,
-          plainText(entry.contentHtml), entry.excerpt, entry.publishedAt, entry.timestamp,
+          contentText, entry.excerpt, entry.publishedAt, entry.timestamp,
           entry.crawledAt || entry.timestamp,
           entry.read ? 1 : 0, entry.starred ? 1 : 0, entry.readingMinutes,
           entry.thumbnailUrl, entry.kind, now, Date.parse(now), entry.sourceOrder || '', entry.enclosures ? 1 : 0,
         )
         if (entry.enclosures) replaceEnclosures(this.db, entry.id, entry.enclosures)
         const cached = hasCachedArticles && this.getArticleForEntry(entry.id)
-        if (cached) this.db.prepare('UPDATE entries SET full_content_text = ? WHERE id = ?').run(plainText(cached.contentHtml), entry.id)
-        const matches = new Set(muteRules.filter(rule => entryMatchesMuteFilter(entry, rule)).map(rule => rule.id))
-        for (const row of this.db.prepare('SELECT filter_id FROM muted_entries WHERE entry_id = ?').all(entry.id)) {
-          if (!matches.has(String(row.filter_id))) clearMuteMatch.run(entry.id, row.filter_id)
+        const fullContentText = cached ? plainText(cached.contentHtml) : ''
+        if (cached) this.db.prepare('UPDATE entries SET full_content_text = ? WHERE id = ?').run(fullContentText, entry.id)
+        if (muteRules.length) {
+          const matches = new Set(muteRules.filter(rule => entryMatchesMuteFilter(entry, contentText, rule)).map(rule => rule.id))
+          for (const row of oldMuteMatches.all(entry.id)) {
+            if (!matches.has(String(row.filter_id))) clearMuteMatch.run(entry.id, row.filter_id)
+          }
+          for (const id of matches) addMuteMatch.run(id, entry.id)
         }
-        for (const id of matches) addMuteMatch.run(id, entry.id)
       }
+      applyRules?.()
     })
   }
 
@@ -1099,14 +1119,13 @@ export class PaperDatabase {
     const column = operation === 'read' || operation === 'unread' ? 'read' : 'starred'
     const value = operation === 'read' || operation === 'star' ? 1 : 0
     const statement = this.db.prepare(`UPDATE entries SET ${column} = ? WHERE id = ?`)
-    this.db.exec('BEGIN IMMEDIATE')
-    try {
-      for (const id of ids) statement.run(value, id)
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
-    }
+    transaction(this.db, () => {
+      const clear = this.db.prepare('DELETE FROM rule_remote_state WHERE operation=? AND entry_id=?')
+      for (const id of ids) {
+        statement.run(value, id)
+        clear.run(column === 'read' ? 'read' : 'star', id)
+      }
+    })
   }
 
   pulseCandidates(after: number, before: number, scanned: boolean, limit: number): Entry[] {
@@ -1765,7 +1784,7 @@ export class PaperDatabase {
     // checkpoints once so they receive the shared JavaScript matcher too.
     if (!this.getSyncValue('mute_js_v1')) {
       transaction(this.db, () => {
-        const rules = this.db.prepare('SELECT id, phrase FROM mute_filters').all()
+        const rules = this.db.prepare("SELECT id, phrase FROM mute_filters WHERE scope!='query'").all()
         for (const rule of rules) {
           if (/^[\x00-\x7f]*$/.test(String(rule.phrase))) {
             this.db.prepare('DELETE FROM sync_state WHERE key = ?').run(`mute_unicode_v1:${rule.id}`)
@@ -1776,10 +1795,13 @@ export class PaperDatabase {
     }
     while (!this.closed) {
       const rule = this.db.prepare(`SELECT id, phrase, scope, feed_id FROM mute_filters
-        WHERE NOT EXISTS (SELECT 1 FROM sync_state WHERE key = 'mute_unicode_v1:' || mute_filters.id AND value = 'done')
+        WHERE scope != 'query' AND NOT EXISTS (SELECT 1 FROM sync_state WHERE key = 'mute_unicode_v1:' || mute_filters.id AND value = 'done')
         ORDER BY created_at, id LIMIT 1`).get() as (MuteRule & { id: string }) | undefined
-      if (!rule) return
-      await this.backfillMuteFilter(rule)
+      if (rule) await this.backfillMuteFilter(rule)
+      else {
+        if (!await retryBusy(() => !this.closed && this.rules.applyArchiveBatch(this.activeBackendId))) return
+        await new Promise<void>(resolve => setImmediate(resolve))
+      }
     }
   }
 
@@ -2077,26 +2099,32 @@ export class PaperDatabase {
     })
     void this.backfillMuteFilters().catch(error => console.error('Mute filter matching failed; it will resume after restart.', error))
     const feedTitle = String(this.db.prepare('SELECT title FROM feeds WHERE id = ?').get(feedId)?.title || '')
-    return { id, phrase, scope, feedId, feedTitle, createdAt, matchCount: 0, matching: true }
+    return { id, phrase, scope, feedId, feedTitle, createdAt, matchCount: 0, matching: true, actions: ['hide'], targetId: '', targetName: '', undoTokens: [] }
   }
 
-  muteFilters(): MuteFilterRecord[] {
+  muteFilters(id?: string): MuteFilterRecord[] {
     const rows = this.db.prepare(`
-      SELECT mute_filters.*, COALESCE(feeds.title, '') AS feed_title, COUNT(muted_entries.entry_id) AS match_count
-      FROM mute_filters
+      SELECT mute_filters.*, r.actions, r.target_id, t.name AS target_name, r.cursor, r.scan_end, COALESCE(feeds.title, '') AS feed_title,
+        (SELECT count(*) FROM muted_entries WHERE filter_id=mute_filters.id) AS match_count
+      FROM mute_filters JOIN article_rules r ON r.id=mute_filters.id
+      LEFT JOIN webhook_targets t ON t.id=r.target_id
       LEFT JOIN feeds ON feeds.id = mute_filters.feed_id
-      LEFT JOIN muted_entries ON muted_entries.filter_id = mute_filters.id
-      GROUP BY mute_filters.id
+      ${id === undefined ? '' : 'WHERE mute_filters.id=?'}
       ORDER BY mute_filters.created_at DESC
-    `).all() as Array<Record<string, string | number>>
+    `).all(...(id === undefined ? [] : [id])) as Array<Record<string, string | number>>
     return rows.map(row => ({
       id: String(row.id),
       phrase: String(row.phrase),
-      scope: String(row.scope) as MuteFilterScope,
+      scope: String(row.scope) as ArticleRule['scope'],
       feedId: String(row.feed_id),
-      feedTitle: String(row.feed_title),
+      feedTitle: displayFeedTitle(String(row.feed_title)),
       matchCount: Number(row.match_count),
-      matching: this.getSyncValue(`mute_unicode_v1:${row.id}`) !== 'done',
+      actions: JSON.parse(String(row.actions)) as RuleAction[],
+      targetId: String(row.target_id || ''),
+      targetName: String(row.target_name || ''),
+      undoTokens: this.db.prepare(`SELECT u.token FROM rule_undo u JOIN undo_actions a ON a.token=u.token
+        WHERE u.rule_id=? AND a.expires_at>?`).all(row.id, new Date().toISOString()).map(u => String(u.token)),
+      matching: row.scope === 'query' ? row.cursor < row.scan_end : this.getSyncValue(`mute_unicode_v1:${row.id}`) !== 'done',
       createdAt: String(row.created_at),
     }))
   }
@@ -2569,10 +2597,10 @@ function matchesMuteFields(rule: MuteRule, feedId: string, fields: string[]): bo
   return Boolean(phrase) && fields.some(value => value.toLowerCase().includes(phrase))
 }
 
-function entryMatchesMuteFilter(entry: Entry, rule: MuteRule): boolean {
+function entryMatchesMuteFilter(entry: Entry, contentText: string, rule: MuteRule): boolean {
   const fields = rule.scope === 'title' ? [entry.title]
-    : rule.scope === 'content' ? [entry.excerpt, plainText(entry.contentHtml)]
-    : [entry.title, entry.excerpt, plainText(entry.contentHtml), entry.feedTitle, entry.author]
+    : rule.scope === 'content' ? [entry.excerpt, contentText]
+    : [entry.title, entry.excerpt, contentText, entry.feedTitle, entry.author]
   return matchesMuteFields(rule, entry.feedId, fields)
 }
 

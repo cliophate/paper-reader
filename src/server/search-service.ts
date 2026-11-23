@@ -6,10 +6,11 @@ import type { StreamRef } from './types.js'
 import { parseSearch, SearchLimitError } from './search-query.js'
 
 export type BulkSelection =
+  | { kind: 'rule' }
   | { kind: 'preview'; withRevisions: boolean }
   | { kind: 'relative'; anchorId: string; direction: 'above' | 'below'; snapshot?: string; displayedIds?: string[]; withRevisions: boolean }
   | { kind: 'unread'; ids: string[] }
-type SelectionResult = { ids: string[]; revisions?: Record<string, number> }
+type SelectionResult = { ids: string[]; count?: number; revisions?: Record<string, number> }
 
 export class SearchSnapshotError extends Error {}
 export class SearchUnavailableError extends Error {}

@@ -1,10 +1,11 @@
+import { RULES_VERSION } from '../src/server/article-rules.js'
 import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import { ANNOTATIONS_PER_ARTICLE } from '../src/server/annotations'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { DatabaseSync, StatementSync } from 'node:sqlite'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db'
 import { parseFeedPreview } from '../src/server/feed-repair'
 import type { Entry } from '../src/server/types'
@@ -367,4 +368,40 @@ it('caps annotations within each article and pages through notes without duplica
   expect(ids).toHaveLength(ANNOTATIONS_PER_ARTICLE + 1)
   expect(db.annotations.articleIds('')).toEqual(['1', '2'])
   expect(db.annotations.articleIds('1')).toEqual(['2'])
+})
+
+it('yields between arrival batches and matches grouped FTS terms only on new rows', async () => {
+  db.upsertEntries([article(0)])
+  const id = db.rules.save({ query: '(title:compos OR author:ada) -url:/99 is:unread', actions: ['hide'] })
+  const select = vi.spyOn(StatementSync.prototype, 'all')
+  let midBatchCount = 0
+  setImmediate(() => { midBatchCount = db.entryCount() })
+  try {
+    await db.upsertEntriesInChunks(Array.from({ length: 513 }, (_, i) => article(i, { read: i % 2 === 0 })))
+    const queries = select.mock.contexts.map(statement => statement.sourceSQL).filter(sql => sql.includes('rule_words MATCH'))
+    expect(queries).toHaveLength(5)
+    expect(queries.every(sql => sql.match(/ MATCH /g)?.length === 1)).toBe(true)
+  } finally { select.mockRestore() }
+  expect(midBatchCount).toBeGreaterThan(1)
+  expect(midBatchCount).toBeLessThan(513)
+  expect(db.muteFilters(id)[0].matchCount).toBe(255)
+})
+
+it('upgrades literal hide rules without retokenizing their phrases or losing hidden articles', async () => {
+  db.upsertEntries([article(1, { title: 'PreKelvin' }), article(2, { title: 'prekelvin', feedId: 'other' })])
+  const { id } = await db.createMuteFilter('kelvin', 'title', 'feed/1')
+  await db.backfillMuteFilters()
+  const file = path.join(directory, 'test.sqlite')
+  db.greaderDatabase.exec(`DROP TRIGGER rule_defaults; DROP TABLE rule_undo; DROP TABLE rule_remote_state; DROP TABLE article_rules; PRAGMA user_version=${RULES_VERSION - 1}`)
+  db.close()
+  db = new PaperDatabase(file)
+  expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
+  const backup = new DatabaseSync(file + '.before-article-rules-v' + RULES_VERSION, { readOnly: true })
+  try {
+    expect(backup.prepare('PRAGMA user_version').get()?.user_version).toBe(RULES_VERSION - 1)
+    expect(backup.prepare('SELECT filter_id FROM muted_entries').get()?.filter_id).toBe(id)
+  } finally { backup.close() }
+  expect(db.muteFilters()).toMatchObject([{ id, actions: ['hide'], matching: false, matchCount: 1 }])
+  db.upsertEntries([article(3, { title: 'midKELVINword' })])
+  expect(db.rules.hidden(id, '').items.map(item => item.id)).toEqual(['1', '3'])
 })

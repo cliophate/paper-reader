@@ -125,7 +125,7 @@ export class Webhooks {
     if (!article) return result
     const targets = () => this.store.targets().filter(target =>
       (!target.feedId || target.feedId === article.feed_id) && (ruleTargetId === undefined
-        ? target.events.includes('save_entry') : target.id === ruleTargetId && target.kind !== 'webhook'))
+        ? target.events.includes('save_entry') : target.id === ruleTargetId))
     const nav = targets().some(t => t.folderId) ? await this.currentNavigation() : undefined
     const reasons = new Set<string>()
     for (const target of targets()) {

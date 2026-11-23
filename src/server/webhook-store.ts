@@ -47,10 +47,14 @@ function upgradePreviewQueue(db: DatabaseSync) {
   }
 }
 
-export function migrateWebhooks(db: DatabaseSync) {
-  const matchesScope = `(feedId='' OR feedId=new.feed_id) AND (folderId='' OR EXISTS (
+function targetScope(feed: string, target = 'webhook_targets') {
+  return `(feedId='' OR feedId=${feed}) AND (folderId='' OR EXISTS (
     SELECT 1 FROM feed_folders f JOIN feeds ON feeds.id=f.feed_id
-    WHERE f.feed_id=new.feed_id AND f.folder_id=webhook_targets.folderId AND feeds.active=1))`
+    WHERE f.feed_id=${feed} AND f.folder_id=${target}.folderId AND feeds.active=1))`
+}
+
+export function migrateWebhooks(db: DatabaseSync) {
+  const matchesScope = targetScope('new.feed_id')
   transaction(db, () => {
     upgradePreviewQueue(db)
     db.exec(`
@@ -157,6 +161,11 @@ export class WebhookStore {
   article(id: string) {
     return this.db.prepare(`SELECT feed_id,json_array(${article('e')}) AS entries FROM entries e WHERE id=?`).get(id) as
       { feed_id: string; entries: string } | undefined
+  }
+  enqueueRule(entryId: string, targetId: string) {
+    this.db.prepare(`INSERT INTO webhook_intake(target_id,event,entries,folder_id)
+      SELECT t.id,'rule_entry',${article('e')},t.folderId FROM entries e JOIN webhook_targets t
+      WHERE e.id=? AND t.id=? AND ${targetScope('e.feed_id', 't')}`).run(entryId, targetId)
   }
   enqueue(target: WebhookTarget, event: 'save_entry' | 'rule_entry' | 'test', entries: string) {
     return transaction(this.db, () => {

@@ -1,20 +1,24 @@
+import type { WebhookTarget } from '../../shared/webhooks'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
-import type { ActivityRecord, ArticleReport, Feed, MuteFilter } from '../types'
+import type { ActivityRecord, ArticleReport, MuteFilter } from '../types'
 import { Icon } from './Icon'
 
-export function FiltersSettings({ feeds, onChanged, notify, onMatchingChange }: {
-  feeds: Feed[]
+export function FiltersSettings({ onOpenEntry, onChanged, notify, onMatchingChange }: {
+  onOpenEntry: (id: string) => void
   onChanged: () => Promise<unknown>
   notify: (message: string) => void
   onMatchingChange?: (matching: boolean) => void
 }) {
   const [filters, setFilters] = useState<MuteFilter[]>([])
-  const [preview, setPreview] = useState<Awaited<ReturnType<typeof api.previewFilter>> | null>(null)
+  const [preview, setPreview] = useState<Awaited<ReturnType<typeof api.previewRule>> | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [phrase, setPhrase] = useState('')
-  const [scope, setScope] = useState<MuteFilter['scope']>('title')
-  const [feedId, setFeedId] = useState('')
+  const [actions, setActions] = useState<MuteFilter['actions']>(['hide'])
+  const [applyExisting, setApplyExisting] = useState(false)
+  const [targets, setTargets] = useState<WebhookTarget[]>([])
+  const [targetId, setTargetId] = useState('')
+  const [hidden, setHidden] = useState<({ id: string } & Awaited<ReturnType<typeof api.hiddenByRule>>) | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -46,23 +50,23 @@ export function FiltersSettings({ feeds, onChanged, notify, onMatchingChange }: 
     return () => { cancelled = true; clearTimeout(timer) }
   }, [filters, onChanged])
 
-  useEffect(() => { setPreview(null) }, [phrase, scope, feedId])
+  useEffect(() => { setPreview(null) }, [phrase])
   const check = async () => {
     setBusy(true); setPreviewing(true); setError('')
-    try { setPreview(await api.previewFilter(phrase.trim(), scope, feedId)) }
+    try { setPreview(await api.previewRule(phrase.trim())) }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not preview filter') }
     finally { setBusy(false); setPreviewing(false) }
   }
   const add = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (phrase.trim().length < 2 || busy || !preview) return
+    if (!phrase.trim() || busy || !preview || !actions.length || (actions.includes('notify') && !targetId)) return
     setBusy(true); setError('')
     try {
-      const filter = await api.addFilter(phrase.trim(), scope, feedId)
-      setPhrase('')
+      const filter = await api.addRule(phrase.trim(), actions, targetId, applyExisting)
+      setPhrase(''); setApplyExisting(false)
       setFilters(current => [filter, ...current])
       await onChanged()
-      notify('Filter added. Matching existing articles...')
+      notify(filter.matching ? 'Rule saved. Checking existing articles.' : 'Rule saved.')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Paper could not add the filter')
     } finally { setBusy(false) }
@@ -75,28 +79,64 @@ export function FiltersSettings({ feeds, onChanged, notify, onMatchingChange }: 
       await api.removeFilter(filter.id)
       setFilters(current => current.filter(item => item.id !== filter.id))
       await onChanged()
-      notify('Filter removed')
+      notify('Rule removed')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Paper could not remove the filter')
     } finally { setBusy(false) }
   }
 
+  const toggle = async (action: MuteFilter['actions'][number], checked: boolean) => {
+    setActions(current => checked ? [...current, action] : current.filter(item => item !== action))
+    if (action === 'notify' && checked) {
+      try { setTargets((await api.webhooks()).targets) }
+      catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not load notification targets.') }
+    }
+  }
+  const showHidden = async (id: string, after = '') => {
+    setBusy(true); setError('')
+    try {
+      const page = await api.hiddenByRule(id, after)
+      setHidden(previous => ({ ...page, id, items: after && previous?.id === id ? [...previous.items, ...page.items] : page.items }))
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not load hidden articles.') }
+    finally { setBusy(false) }
+  }
+  const undo = async (rule: MuteFilter) => {
+    setBusy(true); setError('')
+    try { await api.undo(rule.undoTokens); notify('Restored article state.') }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not undo the state changes.') }
+    finally { await load(); await onChanged(); setBusy(false) }
+  }
   return <section className="settings-page filters-settings">
-    <header><h3>Filters</h3><p>Hide recurring noise without deleting it or changing its read state. Removing a filter restores any matches that are still unread.</p></header>
-    <form className="filter-form" onSubmit={add}>
-      <label className="filter-phrase"><span>Phrase</span><input disabled={busy} autoFocus placeholder="New podcast episode" value={phrase} onChange={event => setPhrase(event.target.value)} /></label>
-      <label><span>Look in</span><select disabled={busy} value={scope} onChange={event => setScope(event.target.value as MuteFilter['scope'])}><option value="title">Title</option><option value="content">Article text</option><option value="any">Title, article, author, or source</option></select></label>
-      <label><span>Feed</span><select disabled={busy} value={feedId} onChange={event => setFeedId(event.target.value)}><option value="">Every feed</option>{feeds.map(feed => <option key={feed.id} value={feed.id}>{feed.title}</option>)}</select></label>
-      <button type="button" disabled={busy || phrase.trim().length < 2} onClick={() => void check()}>{previewing ? "Checking..." : "Preview matches"}</button><button type="submit" disabled={busy || !preview}>Add filter</button>
+    <header><h3>Article rules</h3><p>Use a search query to act on incoming articles. Hide keeps articles in your archive. Mark read and Star change reading state. Rules never discard articles.</p></header>
+    <form className="filter-form rule-form" onSubmit={add}>
+      <label className="filter-phrase"><span>Search query</span><input disabled={busy} autoFocus placeholder={'title:"new episode" OR feed:podcast'} value={phrase} onChange={event => setPhrase(event.target.value)} /></label>
+      <fieldset disabled={busy}><legend>Actions</legend>{ruleActions.map(([action, label]) =>
+        <label key={action}><input type="checkbox" checked={actions.includes(action)} onChange={event => void toggle(action, event.target.checked)} />{label}</label>)}</fieldset>
+      {actions.includes('notify') && <label><span>Notification target</span><select disabled={busy} value={targetId} onChange={event => setTargetId(event.target.value)}>
+        <option value="">Choose a target</option>{targets.map(target => <option key={target.id} value={target.id}>{target.name}</option>)}
+      </select><small>Add targets in Reading &amp; connections.</small></label>}
+      <label className="rule-existing"><input type="checkbox" disabled={busy} checked={applyExisting} onChange={event => setApplyExisting(event.target.checked)} />Also apply to existing matches</label>
+      <button type="button" disabled={busy || !phrase.trim()} onClick={() => void check()}>{previewing ? 'Checking...' : 'Preview matches'}</button>
+      <button type="submit" disabled={busy || !preview || !actions.length || (actions.includes('notify') && !targetId)}>Save rule</button>
     </form>
-    {preview && <div className="filter-preview"><p>{preview.truncated ? 'At least ' : ''}{preview.count} matching articles.{preview.truncated && ' Preview stopped after a limited scan. Adding the filter checks every article.'} Starred matches stay visible in Starred.</p><ul>{preview.items.map(entry => <li key={entry.id}>{entry.title} <small>{entry.feedTitle}</small></li>)}</ul></div>}
-    {error && <p className="form-error">{error}</p>}
+    {preview && <div className="filter-preview" role="status"><p>{preview.count} matching {preview.count === 1 ? 'article' : 'articles'}.</p><ul>{preview.items.map(entry => <li key={entry.id}>{entry.title} <small>{entry.feedTitle}</small></li>)}</ul></div>}
+    {error && <p className="form-error" role="alert">{error}</p>}
     <div className="settings-list">
-      {filters.map(filter => <article className="settings-list-row" key={filter.id}>
-        <div><strong>"{filter.phrase}"</strong><span>{scopeLabel(filter.scope)}{filter.feedTitle ? ` in ${filter.feedTitle}` : ' in every feed'} · {filter.matching ? 'Matching...' : `${filter.matchCount} hidden`}</span></div>
-        <button onClick={() => void remove(filter)} disabled={busy} aria-label={`Remove filter ${filter.phrase}`}><Icon name="close" /> Remove</button>
+      {filters.map(filter => <article className="settings-list-row rule-row" key={filter.id}>
+        <div><strong>{filter.phrase}</strong><span>{filter.scope === 'query' ? ruleActions.filter(([action]) => filter.actions.includes(action)).map(([action, label]) => action === 'notify' && filter.targetName ? `Notify ${filter.targetName}` : label).join(', ')
+          : `Contains this phrase in ${scopeLabel(filter.scope)}${filter.feedTitle ? ' in ' + filter.feedTitle : ''}`}
+          {filter.actions.includes('notify') && !filter.targetId && ' · Notification target removed'}
+          {filter.matching && ' · Matching...'}</span></div>
+        {filter.actions.includes('hide') && (!filter.matching || filter.matchCount > 0) && <button disabled={busy} onClick={() => void showHidden(filter.id)}>{filter.matchCount} hidden</button>}
+        {!filter.matching && filter.undoTokens.length > 0 && <button disabled={busy} onClick={() => void undo(filter)}>Undo state changes</button>}
+        <button onClick={() => void remove(filter)} disabled={busy} aria-label={`Remove rule ${filter.phrase}`}><Icon name="close" /> Remove</button>
+        {hidden?.id === filter.id && <div className="hidden-articles"><strong>Hidden articles</strong>
+          {hidden.items.map(item => <button key={item.id} onClick={() => onOpenEntry(item.id)}>{item.title}</button>)}
+          {!hidden.items.length && <span>No hidden articles.</span>}
+          {hidden.next && <button disabled={busy} onClick={() => void showHidden(filter.id, hidden.next)}>Show more</button>}
+          <button onClick={() => setHidden(null)}>Close list</button></div>}
       </article>)}
-      {!filters.length && <div className="settings-empty">No filters yet.</div>}
+      {!filters.length && <div className="settings-empty">No article rules yet.</div>}
     </div>
   </section>
 }
@@ -166,10 +206,12 @@ export function ReportsSettings({ onOpenEntry, notify }: {
   </section>
 }
 
+const ruleActions = [['hide', 'Hide'], ['read', 'Mark read'], ['star', 'Star'], ['notify', 'Notify']] as const
+
 function scopeLabel(scope: MuteFilter['scope']): string {
-  if (scope === 'title') return 'Title'
-  if (scope === 'content') return 'Article text'
-  return 'Anywhere'
+  if (scope === 'title') return 'the title'
+  if (scope === 'content') return 'the article text'
+  return 'the title, text, author or source'
 }
 
 function issueLabel(issue: ArticleReport['issue']): string {
@@ -181,6 +223,9 @@ function issueLabel(issue: ArticleReport['issue']): string {
 }
 
 function activityDetail(event: ActivityRecord): string {
+  if (event.origin === 'rule' && Array.isArray(event.details.articles)) {
+    return `${event.details.reason} · Rule ${event.details.ruleId} · ${event.details.articles.map(number => '#' + number).join(', ')}`
+  }
   if (event.kind !== 'sync') return event.origin
   const details = event.details
   const changes = Number(details.readToUnread || 0)

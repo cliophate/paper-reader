@@ -1475,7 +1475,7 @@ function Reader() {
     { label: unreadOnly ? 'Show all articles' : 'Show unread articles', hint: 'u', run: () => changeUnreadOnly(!unreadOnly) },
     { label: 'Mark this stream read', hint: 'Shift A', run: markAllRead },
     { label: 'Manage feeds', hint: '', run: () => { setSettingsSection('feeds'); setOverlays({ ...closedOverlays, settings: true }) } },
-    { label: 'Manage filters', hint: '', run: () => { setSettingsSection('filters'); setOverlays({ ...closedOverlays, settings: true }) } },
+    { label: 'Manage article rules', hint: '', run: () => { setSettingsSection('filters'); setOverlays({ ...closedOverlays, settings: true }) } },
     { label: 'Article reports', hint: '', run: () => { setSettingsSection('reports'); setOverlays({ ...closedOverlays, settings: true }) } },
     { label: 'Activity log', hint: '', run: () => { setSettingsSection('activity'); setOverlays({ ...closedOverlays, settings: true }) } },
     { label: 'Appearance', hint: 'Aa', run: () => setOverlays({ ...closedOverlays, appearance: true }) },
@@ -2473,7 +2473,7 @@ function Settings({ backend, section, setSection, initialFeedId, initialFeedView
   const content = section === 'access' ? <AccessSettings /> : section === 'backend' ? <BackendSettings backend={backend} /> : section === 'feeds'
     ? <FeedSettings initialView={initialFeedView} onChanged={onChanged}><FeedManager backend={backend} initialFeedId={initialFeedId} navigation={navigation} onChanged={onChanged} notify={notify} /></FeedSettings>
     : section === 'filters'
-      ? <FiltersSettings feeds={uniqueFeeds(navigation)} onChanged={onFiltersChanged} notify={notify} onMatchingChange={onFiltersMatching} />
+      ? <FiltersSettings onOpenEntry={onOpenEntry} onChanged={onFiltersChanged} notify={notify} onMatchingChange={onFiltersMatching} />
       : section === 'reports'
         ? <ReportsSettings onOpenEntry={onOpenEntry} notify={notify} />
         : section === 'activity'
@@ -2489,7 +2489,7 @@ function Settings({ backend, section, setSection, initialFeedId, initialFeedView
         <button className={section === 'access' ? 'active' : ''} onClick={() => setSection('access')}>Access</button>
         <button className={section === 'backend' ? 'active' : ''} onClick={() => setSection('backend')}>Backend &amp; data</button>
         <button className={section === 'feeds' ? 'active' : ''} onClick={() => setSection('feeds')}>Feeds</button>
-        <button className={section === 'filters' ? 'active' : ''} onClick={() => setSection('filters')}>Filters</button>
+        <button className={section === 'filters' ? 'active' : ''} onClick={() => setSection('filters')}>Article rules</button>
         <button className={section === 'reports' ? 'active' : ''} onClick={() => setSection('reports')}>Reports</button>
         <button className={section === 'activity' ? 'active' : ''} onClick={() => setSection('activity')}>Activity</button>
         <button className={section === 'connections' ? 'active' : ''} onClick={() => setSection('connections')}>Reading & connections</button>

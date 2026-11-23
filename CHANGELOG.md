@@ -10,6 +10,10 @@
   25 seconds for 200,000 articles and 5 minutes for 1 million, mostly for the
   backup. Custom Compose files should give the reader the same `10m` health
   check start period as the shipped file.
+- Save search queries as article rules to hide, mark read, star or send matching
+  articles to a notification target. Preview matches and choose whether to apply
+  a rule to the archive. Existing mute filters keep their hidden articles.
+
 - Queued webhooks honor feed and folder changes, and briefings apply feed exclusions before filling their article lists.
 - Manage feeds can set a user agent and cookie per feed, select the article
   body, remove elements, fix lazy images and strip tracking parameters. Preview

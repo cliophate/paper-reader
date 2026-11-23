@@ -1,5 +1,4 @@
 import { cookieSafeValidator, cookieValues, extractedCookieRedactor } from './feed-cookie.js'
-import { displayFeedUrl } from './feed-url-display.js'
 import { parseFeed } from './feed-parser.js'
 import { EXTRACTION_TIMEOUT_MS, extractionRules, extractWithOverrides } from './feed-extraction.js'
 import type { FeedCheckResult } from '../shared/feed-checks.js'
@@ -9,7 +8,7 @@ import type { PaperDatabase } from './db.js'
 import { boundedFetch, FeedHttpError, FEED_HTTP_DEFAULTS, validLastModified, type BoundedFetchOptions } from './feed-http.js'
 import type { FeedLease, FetchCompletion } from './feed-fetch-state.js'
 import { subscriptionUrl } from './opml.js'
-import { ingestFeed } from './feed-ingestion.js'
+import { completeFeed } from './feed-completion.js'
 
 const LEASE_MARGIN_MS = 5000
 
@@ -197,17 +196,7 @@ export class StandaloneFeedScheduler {
         redirectsJson, lastStatus: status, lastError: '', lastSuccessAt: now,
         etag: response.etag ?? (status === 304 ? lease.etag : ''),
         lastModified: response.lastModified ?? (status === 304 ? lease.lastModified : ''), validatorUrl: response.url }
-      const result = this.db.feedFetch.complete(lease, now, update, () => {
-        if (!parsed) return 0
-        const ingested = ingestFeed(this.db, { backendId: this.backendId, subscriptionId: lease.subscriptionId,
-          endpointGeneration: lease.endpointGeneration, parsed, requestUrl: lease.url,
-          responseUrl: response.url, fetchedAt: new Date(now).toISOString() })
-        update.publisherSiteUrl = ingested.feed.siteUrl.length <= 4096 ? displayFeedUrl(ingested.feed.siteUrl) : ''
-        const declared = ingested.feed.declaredUrl || ''
-        update.declaredUrl = declared.length <= 4096 ? subscriptionUrl(declared) : ''
-        update.ambiguous = ingested.ambiguous
-        return ingested.ambiguous
-      })
+      const result = await completeFeed(this.db, { lease, now, update, parsed, responseUrl: response.url })
       return { kind: !result.committed ? 'stale' : status === 304 ? 'notModified' : 'fetched', ambiguous: result.committed ? result.value : 0 }
     } catch (error) {
       const now = Date.now()

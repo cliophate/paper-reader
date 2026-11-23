@@ -29,7 +29,7 @@ const fixture = http.createServer(async (_request, response) => {
   if (response.destroyed) return
   response.setHeader('Content-Type', 'application/rss+xml')
   response.end(`<rss version="2.0"><channel><title>Synthetic collector</title><link>https://example.test</link>
-    ${Array.from({ length: updatedCount }, (_, i) => `<item><guid>collected-${i}</guid><title>The synthetic article ${i}</title><link>https://example.test/${i}</link><pubDate>${publishedAt}</pubDate><description><![CDATA[${body}]]></description></item>`).join('')}
+    ${Array.from({ length: updatedCount + 1 }, (_, i) => `<item><guid>collected-${i}</guid><title>The synthetic article ${i}</title><link>https://example.test/${i === updatedCount ? 'rule-arrival' : i}</link><pubDate>${publishedAt}</pubDate><description><![CDATA[${body}]]></description></item>`).join('')}
     </channel></rss>`)
 })
 let child, logs = '', probeRunning = false, healthFailure, maxLatency = 0, probes = 0
@@ -54,6 +54,7 @@ try {
   const feeds = Array.from({ length: feedCount }, (_, i) => db.saveLocalSubscription(backend.id, {
     title: `Synthetic feed ${i}`, url: `${origin}/feed-${i}.xml`,
   }))
+  db.rules.save({ query: 'collectionneedle title:synthetic', actions: ['star'] })
   db.close()
   const sql = new DatabaseSync(file)
   sql.exec('PRAGMA foreign_keys = ON; BEGIN')
@@ -193,12 +194,13 @@ try {
     const resumed = await queued
     assert.equal(resumed.status, 200); assert.equal((await resumed.json()).items.length, 80)
     await probe(); if (healthFailure) throw healthFailure
-    assert.equal(check.prepare('SELECT COUNT(*) n FROM entries').get().n, count)
-    assert.equal(check.prepare("SELECT COUNT(*) n FROM entries WHERE content_text LIKE '%collectionneedle%'").get().n, updatedCount)
-    assert.equal(check.prepare("SELECT COUNT(*) n FROM entries_fts WHERE entries_fts MATCH 'collectionneedle'").get().n, updatedCount)
+    assert.equal(check.prepare('SELECT COUNT(*) n FROM entries').get().n, count + 1)
+    assert.equal(check.prepare("SELECT COUNT(*) n FROM entries WHERE content_text LIKE '%collectionneedle%'").get().n, updatedCount + 1)
+    assert.equal(check.prepare("SELECT COUNT(*) n FROM entries_fts WHERE entries_fts MATCH 'collectionneedle'").get().n, updatedCount + 1)
+    assert.equal(check.prepare("SELECT starred FROM entries WHERE url=?").get('https://example.test/rule-arrival').starred, 1)
     assert.deepEqual({ ...check.prepare('SELECT read, starred, state_revision FROM entries WHERE id=?').get('synthetic-0') }, { read: 1, starred: 1, state_revision: 3 })
     assert.equal(check.prepare('SELECT position FROM reading_progress WHERE entry_id=?').get('synthetic-0').position, 0.42)
-    assert.equal(check.prepare('SELECT COUNT(*) n FROM article_aliases WHERE subscription_id=?').get(feeds[0]).n, updatedCount)
+    assert.equal(check.prepare('SELECT COUNT(*) n FROM article_aliases WHERE subscription_id=?').get(feeds[0]).n, updatedCount + 1)
     assert.equal(check.prepare("SELECT COUNT(*) n FROM backend_checkpoints WHERE key LIKE 'feed-ingestion:%'").get().n, 1)
     assert(check.prepare('SELECT lease_token FROM feed_fetch_state WHERE subscription_id=?').get(feeds[0]).lease_token === '')
     assert(probes >= 2)

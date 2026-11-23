@@ -324,7 +324,7 @@ it('keeps the article foreign-key inventory explicit for future schema changes',
     return sql.prepare(`PRAGMA foreign_key_list("${table.replaceAll('"', '""')}")`).all().some(key => key.table === 'entries') ? [table] : []
   }).sort()
   expect(references).toEqual(['annotations', 'article_arrivals', 'article_enclosures', 'article_urls', 'briefing_considered', 'coverage_cluster_entries', 'entry_search_rows', 'entry_state',
-    'headline_cache', 'muted_entries', 'pulse_memberships', 'pulse_scanned', 'reading_progress', 'retention_auto_read'].sort())
+    'headline_cache', 'muted_entries', 'pulse_memberships', 'pulse_scanned', 'reading_progress', 'retention_auto_read', 'rule_remote_state'].sort())
 })
 
 it('backs up before earlier marking batches when deletion first occurs in a later batch', async () => {
