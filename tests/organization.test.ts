@@ -1,3 +1,4 @@
+import { archivedBackup } from './fixtures/migration-backup.js'
 import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -279,7 +280,7 @@ describe('v8 migration and FreshRSS snapshots', () => {
     expect(fs.readFileSync(identityBackup)).toEqual(identityBytes)
   })
 
-  it('rolls back a failed v8 migration and retries with the original backup', () => {
+  it('rolls back a failed v8 migration and archives the original backup on retry', () => {
     remoteFixture()
     downgrade()
     sql(c => c.exec('CREATE VIEW organization_revisions AS SELECT 1 AS broken'))
@@ -290,16 +291,18 @@ describe('v8 migration and FreshRSS snapshots', () => {
     sql(c => c.exec('DROP VIEW organization_revisions'))
     reopen()
     expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
-    expect(fs.readFileSync(`${file}.before-organization-v8`)).toEqual(backup)
+    expect(archivedBackup(`${file}.before-organization-v8`)).toEqual(backup)
   })
 
-  it('rejects newer schemas and corrupt pre-upgrade backups', () => {
+  it('rejects newer schemas and preserves an unreadable old backup on retry', () => {
     remoteFixture()
     sql(c => c.exec(`PRAGMA user_version = ${DATABASE_VERSION + 1}`))
     expect(() => new PaperDatabase(file)).toThrow(/newer Paper/)
-    sql(c => c.exec('PRAGMA user_version = 7'))
-    fs.writeFileSync(`${file}.before-organization-v8`, 'not a database')
-    expect(() => new PaperDatabase(file)).toThrow()
-    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(7)
+    downgrade()
+    const backup = `${file}.before-organization-v8`
+    fs.writeFileSync(backup, 'not a database')
+    reopen()
+    expect(archivedBackup(backup).toString()).toBe('not a database')
+    expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
   })
 })

@@ -1,3 +1,4 @@
+import { archivedBackup } from './fixtures/migration-backup.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -98,7 +99,7 @@ describe('indexed FTS row migration', () => {
     db.close()
   })
 
-  it('rolls back a failed mapping migration and retains the validated backup on retry', async () => {
+  it('rolls back a failed mapping migration and archives the original backup on retry', async () => {
     sql(db => db.exec('CREATE VIEW entry_search_rows AS SELECT 1 AS incompatible'))
     await expect(openCoordinatedStorage(directory)).rejects.toThrow()
     expect(sql(db => db.prepare('PRAGMA user_version').get()?.user_version)).toBe(10)
@@ -106,7 +107,7 @@ describe('indexed FTS row migration', () => {
     const saved = fs.readFileSync(file + '.before-search-rows-v11')
     sql(db => db.exec('DROP VIEW entry_search_rows'))
     const storage = await openCoordinatedStorage(directory)
-    expect(fs.readFileSync(file + '.before-search-rows-v11')).toEqual(saved)
+    expect(archivedBackup(file + '.before-search-rows-v11')).toEqual(saved)
     expect(storage.database.localEntriesPage(all, { query: 'Historicalcacheneedle' }).items).toHaveLength(1)
     storage.close()
   })

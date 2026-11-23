@@ -899,3 +899,18 @@ describe('manual story choices', () => {
     ])
   })
 })
+
+it('defers busy or locked cleanup until the next Pulse tick and propagates other errors', () => {
+  vi.useFakeTimers()
+  const service = new PulseService(db, vi.fn(), false)
+  const check = vi.spyOn(db, 'storyChoicesToCheck')
+  check.mockImplementationOnce(() => { throw Object.assign(new Error('busy'), { errcode: 261 }) })
+    .mockImplementationOnce(() => { throw Object.assign(new Error('locked'), { errcode: 6 }) })
+  try {
+    service.start()
+    vi.advanceTimersByTime(2 * 5 * 60_000)
+    expect(check).toHaveBeenCalledTimes(3)
+    check.mockImplementationOnce(() => { throw new Error('cleanup failed') })
+    expect(() => vi.advanceTimersByTime(5 * 60_000)).toThrow('cleanup failed')
+  } finally { service.stop(); vi.useRealTimers() }
+})

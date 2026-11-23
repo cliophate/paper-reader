@@ -42,6 +42,8 @@ alongside the fetch lease. It also stores Miniflux parsing errors with cached
 feed metadata. The migration saves `paper.sqlite.before-feed-maintenance-v21`
 before upgrading. The previous Paper binary rejects the v21 database.
 
+On a repeat upgrade, Paper renames the previous backup with a timestamp and writes a fresh backup at the usual path.
+
 To roll back, stop Paper. Copy the current database and any `paper.sqlite-wal`
 and `paper.sqlite-shm` files to a separate directory. Remove those sidecars
 from the data directory, then copy `paper.sqlite.before-feed-maintenance-v21`

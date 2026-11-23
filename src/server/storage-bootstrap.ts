@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
+import { hasAnnotations } from './annotations.js'
+import { isSqliteBusy } from './transaction.js'
 import { PaperDatabase } from './db.js'
 import { DATABASE_VERSION } from './auth-schema.js'
 import { acquireStateLock, StateLockError, type StateLock } from './state-lock.js'
@@ -19,7 +21,8 @@ function needsInitialization(lock: StateLock): boolean {
     db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 0')
     const version = Number(db.prepare('PRAGMA user_version').get()?.user_version || 0)
     if (version > DATABASE_VERSION) throw new Error('This database was created by a newer Paper version')
-    return version < DATABASE_VERSION || db.prepare("SELECT value FROM sync_state WHERE key = 'fulltext_search_v1'").get()?.value !== 'true'
+    return version < DATABASE_VERSION || !hasAnnotations(db)
+      || db.prepare("SELECT value FROM sync_state WHERE key = 'fulltext_search_v1'").get()?.value !== 'true'
   } finally { db.close() }
 }
 
@@ -54,9 +57,7 @@ export async function openCoordinatedStorage(directory: string, options: {
       // Reacquire shared and inspect again before opening application storage.
     } catch (error) {
       lock?.release()
-      const code = (error as { errcode?: number }).errcode ?? 0
-      // Extended codes such as SQLITE_BUSY_RECOVERY carry SQLITE_BUSY in the low byte.
-      const busy = error instanceof StateLockError ? error.busy : (code & 0xff) === 5
+      const busy = error instanceof StateLockError ? error.busy : isSqliteBusy(error)
       if (!busy || Date.now() >= deadline) throw error
       await delay(10)
     }

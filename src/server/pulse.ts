@@ -1,3 +1,4 @@
+import { isSqliteBusy } from './transaction.js'
 import { interruptedAiWork } from './ai-activity.js'
 import crypto from 'node:crypto'
 import type { PaperDatabase, CoverageFeedbackRecord, CoverageFeedbackAction } from './db.js'
@@ -345,7 +346,11 @@ export class PulseService {
   start() {
     if (this.timer) return
     const tick = () => {
-      this.pruneOrphanedChoices()
+      try { this.pruneOrphanedChoices() }
+      catch (error) {
+        if (isSqliteBusy(error)) return
+        throw error
+      }
       void this.refresh()
     }
     this.timer = setInterval(tick, 5 * 60_000)

@@ -33,6 +33,25 @@ it('pages remote briefing streams past muted and ordinary entries to include fol
   expect(remote.entriesPage).not.toHaveBeenCalled()
 })
 
+it('stops paging a remote briefing stream that only returns excluded feeds', async () => {
+  const stream = { kind: 'all' as const, id: 'all', title: 'All' }
+  const items = Array.from({ length: 6000 }, (_, index) => entry(String(index), 'Fixture', 'https://example.test'))
+  const remote = {
+    entries: async () => items.slice(0, 1000),
+    entriesPage: vi.fn(async (_stream: typeof stream, options?: { continuation?: string; limit?: number }) => {
+      const offset = Number(options?.continuation || 0)
+      const end = offset + (options?.limit || 250)
+      return { items: items.slice(offset, end), continuation: end < items.length ? String(end) : '' }
+    }),
+    navigation: async () => ({ folders: [], uncategorized: [], starred: 0, unread: 0 }),
+    entry: async () => null, entryIds: async () => [],
+  }
+  const source = switchingEntrySource(() => false, remote, remote)
+  const picked = await source.briefingEntries!(stream, { before: new Date(), limit: 1000, unreadOnly: true, excludedFeeds: new Set(items.map(item => item.feedId)) })
+  expect(picked).toEqual([])
+  expect(remote.entriesPage).toHaveBeenCalledTimes(20)
+})
+
 function entry(id: string, title: string, url: string): Entry {
   return {
     id,

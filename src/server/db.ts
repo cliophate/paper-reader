@@ -8,7 +8,7 @@ import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
 import { migrateGreader } from './greader-schema.js'
-import { ANNOTATIONS_VERSION, AnnotationStore, migrateAnnotations } from './annotations.js'
+import { ANNOTATIONS_VERSION, AnnotationStore, hasAnnotations, migrateAnnotations } from './annotations.js'
 import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION, FEED_OVERRIDE_VERSION, migrateAuth } from './auth-schema.js'
 import { AuthStore } from './auth-store.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
@@ -267,9 +267,10 @@ export class PaperDatabase {
           if (version > 0) this.backupBeforeMigration(ENCLOSURE_SCHEMA_VERSION, 'podcast-enclosures')
           migrateEnclosures(this.db)
         }
-        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < ANNOTATIONS_VERSION) {
+        const versionBeforeAnnotations = Number(this.db.prepare('PRAGMA user_version').get()?.user_version)
+        if (versionBeforeAnnotations < ANNOTATIONS_VERSION || !hasAnnotations(this.db)) {
           if (version > 0) this.backupBeforeMigration(ANNOTATIONS_VERSION, 'annotations')
-          migrateAnnotations(this.db)
+          migrateAnnotations(this.db, versionBeforeAnnotations)
         }
         if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < READING_PREFERENCES_VERSION) {
           if (version > 0) this.backupBeforeMigration(READING_PREFERENCES_VERSION, 'reading-preferences')
@@ -346,14 +347,7 @@ export class PaperDatabase {
     if (!version || version >= target) return
     const backupPath = `${this.databasePath}.before-${name}-v${target}`
     if (fs.existsSync(backupPath)) {
-      const backup = new DatabaseSync(backupPath, { readOnly: true })
-      try {
-        const savedVersion = Number(backup.prepare('PRAGMA user_version').get()?.user_version || 0)
-        if (savedVersion < 1 || savedVersion >= target || backup.prepare('PRAGMA integrity_check').get()?.integrity_check !== 'ok') {
-          throw new Error(`The pre-${name} backup is invalid. Preserve it for inspection and restore a verified backup before retrying.`)
-        }
-      } finally { backup.close() }
-      return
+      fs.renameSync(backupPath, `${backupPath}.${Date.now()}-${crypto.randomUUID()}`)
     }
     const temporaryPath = `${backupPath}.${crypto.randomUUID()}.tmp`
     fs.closeSync(fs.openSync(temporaryPath, 'wx', 0o600))
@@ -1137,6 +1131,10 @@ export class PaperDatabase {
     if (stream.kind === 'category') {
       clauses.push('EXISTS (SELECT 1 FROM feed_folders WHERE feed_folders.feed_id = entries.feed_id AND feed_folders.folder_id = ?)')
       parameters.push(stream.id)
+    }
+    if (options.excludedFeeds?.size) {
+      clauses.push('entries.feed_id NOT IN (SELECT value FROM json_each(?))')
+      parameters.push(JSON.stringify([...options.excludedFeeds]))
     }
     if (options.muted?.size) {
       clauses.push('entries.id NOT IN (SELECT value FROM json_each(?))')

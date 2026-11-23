@@ -3,10 +3,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db'
+import { briefingCandidates, PaperRepository } from '../src/server/repository'
 import { selectionEntries, validateSelection } from '../src/server/briefing'
 import { checkBriefingSources } from '../src/server/briefing-sources'
 import { renderBriefing } from '../src/server/email'
-import type { BriefingSelection, Entry } from '../src/server/types'
+import type { BriefingSelection, Entry, StreamRef } from '../src/server/types'
 
 const now = Date.parse('2026-09-23T18:00:00Z')
 const DAY = 86_400_000
@@ -32,6 +33,26 @@ describe('digest candidate eligibility', () => {
     const options = { before: new Date(now + 1), limit: 1, muted: new Set(['a']) }
     expect(db.briefingEntries(all, options).map(item => item.id)).toEqual(['b'])
     expect(db.briefingEntries(all, { ...options, followed: new Set(['c']) }).map(item => item.id)).toEqual(['c'])
+  })
+
+  it('fills local and paged remote candidate lists from eligible feeds', async () => {
+    const items = ['a', 'b', 'c'].map(id => ({ ...entry(id), feedId: id === 'c' ? 'allowed' : 'excluded' }))
+    db.upsertEntries(items)
+    const local = new PaperRepository(db)
+    const remote = {
+      entries: async () => items.slice(0, 1),
+      entriesPage: vi.fn(async (_stream: StreamRef, options?: { continuation?: string }) => {
+        const page = Number(options?.continuation || 0)
+        if (page === 5) return { items: [items[2]], continuation: '' }
+        return { items: Array.from({ length: 250 }, (_, i) => ({ ...items[0], id: `skip-${page}-${i}` })), continuation: String(page + 1) }
+      }),
+      entry: local.entry, entryIds: local.entryIds, navigation: local.navigation,
+    }
+    const options = { before: new Date(now + 1), limit: 1, excludedFeeds: new Set(['excluded']) }
+    for (const source of [local, remote]) {
+      expect((await briefingCandidates(source, all, options)).map(item => item.id)).toEqual(['c'])
+    }
+    expect(remote.entriesPage).toHaveBeenCalledTimes(6)
   })
 
   it('rotates past considered candidates and respects mute, read and delivered state', async () => {

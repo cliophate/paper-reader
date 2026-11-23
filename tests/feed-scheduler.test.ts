@@ -1,3 +1,4 @@
+import { archivedBackup } from './fixtures/migration-backup.js'
 import { EXTRACTION_TIMEOUT_MS } from '../src/server/feed-extraction.js'
 import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
@@ -413,7 +414,7 @@ describe('schema v13 recovery', () => {
     connection.close()
     expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
   })
-  it('rolls back a failed migration and reuses the original backup', () => {
+  it('rolls back a failed migration and archives the original backup', () => {
     save('https://example.test/feed'); downgrade()
     sql(c => c.exec("CREATE TRIGGER reject_upgrade BEFORE UPDATE ON feed_fetch_state BEGIN SELECT RAISE(ABORT, 'synthetic migration failure'); END"))
     expect(() => new PaperDatabase(file)).toThrow(/synthetic migration failure/)
@@ -422,7 +423,7 @@ describe('schema v13 recovery', () => {
     const backup = fs.readFileSync(`${file}.before-feed-checks-v13`)
     sql(c => c.exec('DROP TRIGGER reject_upgrade'))
     const migrated = new PaperDatabase(file); extras.push(migrated)
-    expect(fs.readFileSync(`${file}.before-feed-checks-v13`)).toEqual(backup)
+    expect(archivedBackup(`${file}.before-feed-checks-v13`)).toEqual(backup)
   })
 })
 
@@ -447,7 +448,7 @@ describe('schema v9 recovery', () => {
     expect(connection.prepare('PRAGMA user_version').get()?.user_version).toBe(8); connection.close()
     expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
   })
-  it('rolls back migration failures and reuses its pre-upgrade backup', () => {
+  it('rolls back migration failures and archives its pre-upgrade backup', () => {
     downgrade()
     sql(c => c.exec('CREATE VIEW feed_fetch_state AS SELECT 1 AS broken'))
     expect(() => new PaperDatabase(file)).toThrow()
@@ -456,7 +457,7 @@ describe('schema v9 recovery', () => {
     sql(c => c.exec('DROP VIEW feed_fetch_state'))
     const migrated = new PaperDatabase(file); extras.push(migrated)
     expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
-    expect(fs.readFileSync(`${file}.before-feed-fetch-v9`)).toEqual(backup)
+    expect(archivedBackup(`${file}.before-feed-fetch-v9`)).toEqual(backup)
   })
 })
 

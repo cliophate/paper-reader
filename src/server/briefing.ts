@@ -231,7 +231,7 @@ export class BriefingService {
     const { followed, muted } = briefingStoryChoices(this.db, cutoff.getTime())
     const choices = followed.size || muted.size ? { followed, muted, surfaced: this.db.surfacedEntryIds() } : {}
     const candidates = (stream: StreamRef, limit: number) => abortable(() => briefingCandidates(this.entries, stream,
-      { unreadOnly, limit, ...(this.entries.briefingEntries ? {} : { after: windowStart }), before: cutoff, signal, ...choices }), signal)
+      { unreadOnly, limit, ...(this.entries.briefingEntries ? {} : { after: windowStart }), before: cutoff, signal, excludedFeeds: excluded, ...choices }), signal)
     const [writers, all] = await Promise.all([writersFolder.stream ? candidates(writersFolder.stream, 250) : Promise.resolve([]), candidates(allStream, 1000)])
       .catch(sourceFailure('Could not load articles for the briefing.'))
     signal.throwIfAborted()

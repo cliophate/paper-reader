@@ -189,7 +189,9 @@ describe('briefing cancellation before model work', () => {
     vi.mocked(source.navigation).mockResolvedValue({ ...navigation, folders: [{ id: 'private', title: 'Folder', feeds: [sourceFeed], unread: 0 }] })
     const article = (id: string, feedId: string) => ({ id, feedId, kind: 'article', url: 'https://fixture.test/' + id,
       title: id, contentHtml: '<p>' + id + '</p>', timestamp: Date.now(), feedUrl: '', thumbnailUrl: '' }) as Entry
-    vi.mocked(source.entries).mockResolvedValue([article('Synthetic private story', sourceFeed.id), article('Synthetic public story', 'other')])
+    const items = [article('Synthetic private story', sourceFeed.id), article('Synthetic public story', 'other')]
+    vi.mocked(source.entries).mockResolvedValue(items)
+    source.entriesPage = async () => ({ items, continuation: '' })
     db.aiActivity.savePolicy({ ...db.aiActivity.policy(), folders: ['private'] })
     vi.mocked(runCodex).mockImplementation(async (_config, model) => model === 'fixture-shortlist'
       ? { writerIds: [], newsClusterIds: [], newsGroups: [], socialIds: [] } : { intro: '', news: [], worthNoticing: [], social: [] })

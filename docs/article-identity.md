@@ -163,9 +163,8 @@ rules and original pre-v7 backup described below.
 Schema version 7 is additive. Before upgrading a version 1 through 6 database,
 Paper uses SQLite `VACUUM INTO` to create a consistent backup including committed
 WAL data. It writes a temporary file with mode `0600`, then renames the completed
-file to `<database-path>.before-identity-v7`. It validates and retains an existing
-pre-upgrade backup on retry. A crash may leave a uniquely named `.tmp` file, but
-that file is never accepted as the completed backup.
+file to `<database-path>.before-identity-v7`. A crash may leave a uniquely named
+`.tmp` file. Paper ignores that file on restart.
 
 The new schema, initial URL associations, arrival sequence and version marker
 commit together. Source adoption is a separate transaction: register the backend,
