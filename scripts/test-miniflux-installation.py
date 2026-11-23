@@ -92,15 +92,19 @@ with tempfile.TemporaryDirectory(prefix='paper-miniflux-installation-') as direc
         assert request(remote + '/v1/version', headers=auth)[1]['version'] == VERSION
         writers = request(remote + '/v1/categories', {'title': 'Writers'}, auth)[1]['id']
 
-        def start(state):
+        def start(state, setup=False):
             state.mkdir(exist_ok=True)
             state.chmod(0o700)
             name = run('paper-' + uuid.uuid4().hex[:6], '--user', f'{os.getuid()}:{os.getgid()}',
                        '-p', '127.0.0.1::8080', '-v', f'{state}:/data',
-                       '-e', 'PAPER_BACKEND=miniflux', '-e', 'MINIFLUX_BASE_URL=http://miniflux:8080',
-                       '-e', 'MINIFLUX_API_KEY=' + api_key, '-e', 'PUBLIC_URL=http://localhost',
-                       '-e', 'PAPER_TRUSTED_FEED_ORIGINS=http://fixture:8080', IMAGE)
+                       '-e', 'PAPER_BACKEND=miniflux', '-e', 'PUBLIC_URL=http://localhost',
+                       '-e', 'PAPER_TRUSTED_FEED_ORIGINS=http://fixture:8080,http://miniflux:8080', IMAGE)
             base = address(name, 8080)
+            if setup:
+                until(lambda: request(base + '/api/auth/status')[1]['setup'] == 'miniflux')
+                source = {'backend': 'miniflux', 'baseUrl': 'http://miniflux:8080', 'apiKey': api_key}
+                assert request(base + '/api/settings/source/test', source) == (200, {'ok': True})
+                assert request(base + '/api/settings/source', source) == (200, {'ok': True})
             def ready():
                 status = request(base + '/api/status')[1]
                 return status['localReadsActive'] and status['sync']['lastCompletedAt']
@@ -108,7 +112,7 @@ with tempfile.TemporaryDirectory(prefix='paper-miniflux-installation-') as direc
             return name, base
 
         state = temporary / 'data'
-        paper, base = start(state)
+        paper, base = start(state, setup=True)
         status = request(base + '/api/status')[1]
         assert status['backend'] == 'miniflux' and status['localReadsActive']
         assert not any(status[key] for key in ('readwiseConfigured', 'kirbyConfigured', 'briefingConfigured', 'discussionConfigured'))
@@ -173,6 +177,7 @@ with tempfile.TemporaryDirectory(prefix='paper-miniflux-installation-') as direc
         restored = temporary / 'restored'
         shutil.copytree(state, restored)
         paper, base = start(restored)
+        assert request(base + '/api/settings/source/test', {}) == (200, {'ok': True})
         restored_rows = request(base + '/api/entries?kind=all&id=all&unread=0')[1]['items']
         assert next(row for row in restored_rows if row['id'] == entry_id)['readingPosition'] == .42
         assert (restored / 'secrets.json').stat().st_mode & 0o777 == 0o600

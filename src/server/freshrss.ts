@@ -1,3 +1,4 @@
+import { sourceFetch, type SourceRequest } from './source-fetch.js'
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { mediaEnclosures } from './enclosures.js'
 import { feedUrl } from './feed-parser.js'
@@ -66,7 +67,7 @@ export class FreshRssClient implements ReaderBackend {
   private readonly rootUrl: string
   private readonly socialAvatars: SocialAvatarService
 
-  constructor(private readonly config: Config['freshRss'], trustedOrigins: string[] = []) {
+  constructor(private readonly config: Config['freshRss'], trustedOrigins: string[] = [], private readonly sourceOrigins?: string[]) {
     this.identity = freshRssIdentity(config.baseUrl, config.username)
     this.socialAvatars = new SocialAvatarService(trustedOrigins)
     this.rootUrl = config.baseUrl
@@ -81,7 +82,7 @@ export class FreshRssClient implements ReaderBackend {
     }
   }
 
-  private async request(path: string, init: RequestInit = {}, retry = true): Promise<Response> {
+  private async request(path: string, init: SourceRequest = {}, retry = true): Promise<Response> {
     init.signal?.throwIfAborted()
     if (!this.authToken) await this.login(init.signal)
     const headers = new Headers(init.headers)
@@ -97,17 +98,17 @@ export class FreshRssClient implements ReaderBackend {
     return response
   }
 
-  private async login(signal?: AbortSignal | null) {
+  async login(signal?: AbortSignal | null, send = async (url: string, body: URLSearchParams) => {
+    const response = await this.fetchBuffered(url, { method: 'POST', body, signal, redirect: 'error' })
+    return { status: response.status, text: await abortable(() => response.text(), signal) }
+  }) {
     const body = new URLSearchParams({ Email: this.config.username, Passwd: this.config.apiPassword })
-    const response = await this.fetchBuffered(`${this.baseUrl}/accounts/ClientLogin`, {
-      method: 'POST',
-      body,
-      signal,
-    })
-    if (!response.ok) throw new Error(`FreshRSS login failed with ${response.status}`)
-    const match = (await abortable(() => response.text(), signal)).match(/^Auth=(.+)$/m)
-    if (!match) throw new Error('FreshRSS login returned no authentication token')
-    this.authToken = match[1].trim()
+    const response = await send(`${this.baseUrl}/accounts/ClientLogin`, body)
+    if (response.status !== 200) throw new Error(`FreshRSS login failed with ${response.status}`)
+    const token = /^Auth=([^\s]+)\s*$/m.exec(response.text)?.[1]
+    if (!token) throw new Error('FreshRSS login returned no authentication token')
+    this.authToken = token
+    return token
   }
 
   private async getEditToken(): Promise<string> {
@@ -149,13 +150,13 @@ export class FreshRssClient implements ReaderBackend {
     if (!response.ok) throw new Error(payload?.error || 'FreshRSS could not repair this feed')
   }
 
-  private async fetchBuffered(url: string, init: RequestInit, retries = 2): Promise<Response> {
+  private async fetchBuffered(url: string, init: SourceRequest, retries = 2): Promise<Response> {
     let lastError: unknown
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       init.signal?.throwIfAborted()
       try {
         const signal = init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000)
-        const response = await abortable(() => fetch(url, { ...init, signal }), signal)
+        const response = await abortable(() => sourceFetch(url, { ...init, signal }, this.sourceOrigins), signal)
         const body = await abortable(() => response.arrayBuffer(), signal)
         const buffered = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers })
         if (response.status < 500 || attempt === retries) return buffered

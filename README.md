@@ -115,6 +115,25 @@ See [access and recovery](docs/access.md) before exposing Paper.
 Standalone installs can enable [Reader apps](docs/greader-api.md) for Google
 Reader-compatible sync. Access starts disabled and requires app passwords.
 
+### Connect a feed server on first start
+
+In a source build after 0.2.0-alpha.3, set `PAPER_BACKEND=freshrss` or
+`PAPER_BACKEND=miniflux` and open Paper. If the connection is incomplete,
+Paper asks for a feed source. Enter the server root, including any installation
+subpath, and a FreshRSS username and API password or a Miniflux API key.
+**Test connection** checks the credentials. **Continue** checks again, saves
+the connection and opens the reader. Choose **Standalone** to fetch feeds in Paper.
+
+For a private feed server, add its exact origin to `PAPER_TRUSTED_FEED_ORIGINS`
+before starting Paper, for example `http://freshrss`. Public servers require
+HTTPS during setup. Owner login and your proxy protect setup the same way they
+protect the reader. Explicit standalone installs open directly.
+
+Paper saves this choice and its credentials in `reader-source.json` in the
+data directory. Include it in private backups. A complete environment
+configuration takes precedence. To check the active server later, open
+**Settings > Backend & data > Test connection**.
+
 ### FreshRSS mode
 
 Set `PAPER_BACKEND=freshrss` and provide `FRESHRSS_BASE_URL`, `FRESHRSS_USERNAME`

@@ -1,6 +1,6 @@
 import { clearOffline, setOfflineLocked } from './offline'
 
-export interface AuthStatus { enabled: boolean; authenticated: boolean; passwordEnabled: boolean; passkeys: boolean }
+export interface AuthStatus { setup?: 'freshrss' | 'miniflux'; enabled: boolean; authenticated: boolean; passwordEnabled: boolean; passkeys: boolean }
 let installed = false
 export function requireLogin() {
   setOfflineLocked(true)

@@ -19,6 +19,7 @@ import classifications from './fixtures/auth-route-classification.json'
 // This inventory is intentionally separate from the gate. A new route or mount
 // changes the snapshot and must be reviewed and classified explicitly.
 const files = [
+  ['src/server/web-access.ts', 'app', ''], ['src/server/source-routes.ts', 'app', ''], ['src/server/source-routes.ts', 'router', '/api/settings/source'],
   ['src/server/index.ts', 'app', ''], ['src/server/auth-routes.ts', 'router', '/api/auth'],
   ['src/server/webhook-routes.ts', 'router', '/api/settings/connections/webhooks'],
   ['src/server/retention-routes.ts', 'router', '/api/retention'],

@@ -347,3 +347,88 @@ it('masks SMTP credentials, sends a loopback test, and preserves the external br
     await Promise.all([server.exited, smtp.close(), model.close()])
   }
 }, 20000)
+
+it('requires the owner session for first setup and keeps the selected source after restart', async () => {
+  const { PaperDatabase } = await import('../src/server/db.js')
+  const db = new PaperDatabase(path.join(directory, 'paper.sqlite'))
+  await db.auth.setup(db.auth.setupCode(), 'owner', 'synthetic owner password')
+  db.close()
+  const number = await port(), base = `http://127.0.0.1:${number}`
+  const env = { PAPER_BACKEND: 'miniflux' }
+  const server = start('index', number, env)
+  await ready(number)
+  const post = (route: string, body: string, cookie = '') => fetch(base + route, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body,
+  })
+  const route = '/api/settings/source', source = JSON.stringify({ backend: 'standalone' })
+  expect((await post(route, source)).status).toBe(401)
+  expect((await post(route + '/test', source)).status).toBe(401)
+  const login = await post('/api/auth/login', JSON.stringify({ username: 'owner', password: 'synthetic owner password' }))
+  const cookie = login.headers.get('set-cookie')!.split(';')[0]
+  expect(await (await fetch(base + '/api/auth/status', { headers: { Cookie: cookie } })).json()).toMatchObject({ setup: 'miniflux' })
+  const malformed = await post(route, '{"apiKey":"synthetic-private-key"', cookie)
+  expect(malformed.status).toBe(400)
+  expect(await malformed.text()).not.toContain('synthetic-private-key')
+  const concurrent = await Promise.all([post(route, source, cookie), post(route, source, cookie)])
+  expect(concurrent.map(response => response.status).sort()).toEqual([200, 409])
+  expect(await (await fetch(base + '/api/status', { headers: { Cookie: cookie } })).json()).toMatchObject({ backend: 'standalone' })
+  server.child.kill('SIGTERM'); await server.exited
+  start('index', number, env); await ready(number)
+  expect(await (await fetch(base + '/api/auth/status', { headers: { Cookie: cookie } })).json()).not.toHaveProperty('setup')
+  expect(await (await fetch(base + '/api/status', { headers: { Cookie: cookie } })).json()).toMatchObject({ backend: 'standalone' })
+}, 20000)
+
+it.each(['Continue', 'reload'])('opens the source saved by another Paper process on %s', async action => {
+  const first = await port()
+  const env = { PAPER_BACKEND: 'freshrss' }
+  start('index', first, env)
+  await ready(first)
+  const second = await port()
+  start('index', second, env)
+  await ready(second)
+  const post = (port: number, body: unknown) => fetch(`http://127.0.0.1:${port}/api/settings/source`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  const status = () => fetch(`http://127.0.0.1:${second}/api/auth/status`).then(res => res.json())
+  expect(await status()).toHaveProperty('setup', 'freshrss')
+  expect((await post(first, { backend: 'standalone' })).ok).toBe(true)
+  if (action === 'Continue') expect((await post(second, { backend: 'miniflux' })).ok).toBe(true)
+  expect(await status()).not.toHaveProperty('setup')
+  expect(await (await fetch(`http://127.0.0.1:${second}/api/status`)).json()).toMatchObject({ backend: 'standalone' })
+}, 20000)
+
+it('applies the current private-origin policy to a saved FreshRSS source after restart', async () => {
+  let requests = 0
+  const fixture = http.createServer((req, res) => {
+    requests++
+    if (req.url?.endsWith('/accounts/ClientLogin')) return res.end('Auth=synthetic-token')
+    if (req.url?.includes('/user-info') && req.headers.authorization === 'GoogleLogin auth=synthetic-token') {
+      return res.end(JSON.stringify({ userId: 'fixture' }))
+    }
+    res.writeHead(404).end()
+  }).listen(0, '127.0.0.1')
+  await once(fixture, 'listening')
+  try {
+    const origin = `http://127.0.0.1:${(fixture.address() as { port: number }).port}`
+    const number = await port()
+    const env = { PAPER_BACKEND: 'freshrss' }
+    const server = start('index', number, { ...env, PAPER_TRUSTED_FEED_ORIGINS: origin })
+    await ready(number)
+    const base = `http://127.0.0.1:${number}`
+    const post = (route: string, body: unknown) => fetch(base + route, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })
+    const route = '/api/settings/source'
+    expect((await post(route, { backend: 'freshrss', baseUrl: origin + '/reader', username: 'fixture', apiPassword: 'synthetic' })).ok).toBe(true)
+    server.child.kill('SIGTERM'); await server.exited
+    const before = requests
+    start('index', number, { ...env, PAPER_SYNC_ENABLED: 'true' })
+    await ready(number)
+    const check = await post(route + '/test', {})
+    expect(check.status).toBe(422)
+    expect((await check.json()).error).toContain(`add ${origin} to PAPER_TRUSTED_FEED_ORIGINS`)
+    const sync = await post('/api/sync', {})
+    expect(sync.ok).toBe(false)
+    expect(requests).toBe(before)
+  } finally { await new Promise<void>(resolve => fixture.close(() => resolve())) }
+}, 20000)

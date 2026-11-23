@@ -8,7 +8,11 @@ and [2.3.2 release notes](https://github.com/miniflux/v2/releases/tag/2.3.2).
 ## Setup
 
 Build a Paper revision that includes Miniflux support. Start with a fresh Paper
-data directory, then set these in private configuration:
+data directory. Set `PAPER_BACKEND=miniflux`, open Paper and enter the server
+address and API key. For a private server, first add its exact origin to
+`PAPER_TRUSTED_FEED_ORIGINS`. Choose **Test connection** to check the version
+and account, then **Continue** to save. You can also configure all three values
+in the environment:
 
 ```dotenv
 PAPER_BACKEND=miniflux
