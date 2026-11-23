@@ -207,7 +207,7 @@ it('keeps one relative date boundary across ranking and hydration', () => {
 })
 
 it.each([
-  ['is:starred', /SEARCH entries USING (?:COVERING )?INDEX entries_starred_published_idx/],
+  ['is:starred', /SCAN entry_state USING (?:COVERING )?INDEX state_starred_/],
   ['after:2025-01-01', /SEARCH entries USING (?:COVERING )?INDEX entries_published_idx/],
   ['url:room', /SCAN entries USING COVERING INDEX entries_url_idx/],
 ])('uses a metadata index for %s', (query, expected) => {

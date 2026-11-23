@@ -324,13 +324,28 @@ it('returns every article after feed organization changes without updating artic
   expect(page(sql, { ...q, ot: 1002 }, false).values).toHaveLength(0)
 })
 
+it('uses the state table for Reader categories, counts and inclusive sync clocks', async () => {
+  await seedArticles(1)
+  const sql = db.greaderDatabase
+  const since = Math.ceil(Date.now() / 1000) + 60
+  sql.prepare('UPDATE entry_state SET read = 1, starred = 1, greader_modified_ms = ?').run(since * 1000)
+  const q = { backend, stream: { kind: 'state' as const, id: 'starred' }, it: [], xt: [],
+    ot: since, nt: since, order: 'DESC' as const, n: 1 }
+  expect(page(sql, q, false).values).toEqual([{ id: '1' }])
+  const categories = expect.arrayContaining([`${STATE}read`, `${STATE}starred`])
+  expect(page(sql, q, true).values).toMatchObject([{ categories }])
+  expect(explicit(sql, backend, ['1'], 'DESC')).toMatchObject([{ categories }])
+  expect(metadata(sql, 'unread-count', backend)).toMatchObject({ max: 0 })
+  expect(page(sql, { ...q, ot: 0, nt: since - 1 }, false).values).toEqual([])
+})
+
 it('uses indexed arrival, article and feed modification paths for sparse incremental sync', async () => {
   await seedArticles(5)
   const q = { backend, stream: { kind: 'state' as const, id: 'reading-list' }, it: [], xt: [], ot: Math.ceil(Date.now() / 1000) + 60, nt: 0, order: 'DESC' as const, n: 250 }
   const filter = where(q), scan = scanPageFrom(db.greaderDatabase, q)
-  const plan = db.greaderDatabase.prepare(`EXPLAIN QUERY PLAN SELECT a.sequence ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY a.sequence DESC LIMIT 251`).all(...filter.args).map(row => row.detail).join('; ')
-  for (const index of ['entries_first_seen_idx', 'greader_modified', 'greader_feed_modified', 'entries_feed_published_idx']) expect(plan).toContain(index)
-  expect(plan).not.toMatch(/SCAN (e|a)\b/)
+  const plan = db.greaderDatabase.prepare(`EXPLAIN QUERY PLAN SELECT s.arrival_sequence ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY s.arrival_sequence DESC LIMIT 251`).all(...filter.args).map(row => row.detail).join('; ')
+  for (const index of ['state_first_seen', 'state_modified', 'greader_feed_modified', 'state_feed']) expect(plan).toContain(index)
+  expect(plan).not.toMatch(/SCAN s\b/)
 })
 
 
@@ -342,9 +357,9 @@ it.each(['unread', 'starred'])('uses the partial index for sparse %s pages', asy
   sql.exec(`UPDATE entries SET ${state === 'unread' ? 'read = 0' : 'starred = 1'} WHERE rowid IN (2, 4)`)
   const q = { backend, stream: { kind: 'state' as const, id: state }, it: [], xt: [], ot: 0, nt: 0, order: 'DESC' as const, n: 250 }
   const filter = where(q), scan = scanPageFrom(sql, q)
-  const plan = sql.prepare(`EXPLAIN QUERY PLAN SELECT a.sequence ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY a.sequence DESC LIMIT 251`).all(...filter.args).map(row => row.detail).join('; ')
-  expect(plan).toContain(`USING ${state === 'unread' ? 'COVERING ' : ''}INDEX greader_${state}`)
-  expect(plan).not.toMatch(/SCAN a\b/)
+  const plan = sql.prepare(`EXPLAIN QUERY PLAN SELECT s.arrival_sequence ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY s.arrival_sequence DESC LIMIT 251`).all(...filter.args).map(row => row.detail).join('; ')
+  expect(plan).toContain(`INDEX state_${state}_arrival`)
+  expect(plan).not.toMatch(/USE TEMP B-TREE FOR ORDER BY/)
   expect(page(sql, q, false).values.map(row => row.id)).toEqual(['4', '2'])
 })
 

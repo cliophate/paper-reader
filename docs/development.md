@@ -147,7 +147,11 @@ before the backfill. Articles already have a permanent integer key in
 `article_arrivals.sequence`. The new table uses it as its primary key and joins
 to `entries` by the unique text article ID. Both survive `VACUUM`.
 
-Readers still query `entries`. A trigger on arrival insertion creates the state
+Web pages, offline lists, Reader sync, retention and article rules read state
+from `entry_state`. Rules look up each article in the current batch by ID.
+Reader pages use the arrival sequence for ordering and
+continuation. Web pages order by publication time, crawl time and article ID.
+Writes still update `entries`. A trigger on arrival insertion creates the state
 row. Triggers on `entries` copy changes in the same transaction, including clock
 updates made by Reader and mute triggers. This covers writes from every backend
 and from other SQLite connections. External tools that write to the database

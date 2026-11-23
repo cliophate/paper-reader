@@ -42,31 +42,30 @@ export function resolveStream(db: DatabaseSync, value: string, retained = false)
   throw new ReaderError('Unknown stream.', 404)
 }
 export function predicate(stream: Stream, args: SQLInputValue[]): string {
-  if (stream.kind === 'state') return stream.id === 'read' ? 'e.read = 1' : stream.id === 'unread' ? 'e.read = 0' : stream.id === 'starred' ? 'e.starred = 1' : '1'
-  if (stream.kind === 'feed') { args.push(stream.id); return 'e.feed_id = ?' }
-  if (stream.kind === 'label') { args.push(stream.id); return 'EXISTS(SELECT 1 FROM entry_labels WHERE label_id = ? AND sequence = a.sequence)' }
-  if (!stream.id) return 'NOT EXISTS(SELECT 1 FROM feed_folders WHERE feed_id = e.feed_id)'
+  if (stream.kind === 'state') return stream.id === 'read' ? 's.read = 1' : stream.id === 'unread' ? 's.read = 0' : stream.id === 'starred' ? 's.starred = 1' : '1'
+  if (stream.kind === 'feed') { args.push(stream.id); return 's.feed_id = ?' }
+  if (stream.kind === 'label') { args.push(stream.id); return 'EXISTS(SELECT 1 FROM entry_labels WHERE label_id = ? AND sequence = s.arrival_sequence)' }
+  if (!stream.id) return 'NOT EXISTS(SELECT 1 FROM feed_folders WHERE feed_id = s.feed_id)'
   args.push(stream.id)
-  return 'EXISTS(SELECT 1 FROM feed_folders WHERE feed_id = e.feed_id AND folder_id = ?)'
+  return 'EXISTS(SELECT 1 FROM feed_folders WHERE feed_id = s.feed_id AND folder_id = ?)'
 }
 export interface Query { backend: string; stream: Stream; it: Stream[]; xt: Stream[]; ot: number; nt: number; order: 'ASC' | 'DESC'; high?: string; last?: string; n: number }
-const modifiedSince = '(e.first_seen_at >= ? OR e.greader_modified_ms >= ? OR e.feed_id IN (SELECT id FROM feeds WHERE greader_modified_ms >= ?))'
+const modifiedSince = '(s.first_seen_at >= ? OR s.greader_modified_ms >= ? OR f.greader_modified_ms >= ?)'
 export function where(q: Query) {
   const args: SQLInputValue[] = [q.backend]
   const clauses = ['ai.backend_id = ?', 'f.active = 1']
   if (q.stream.kind === 'label') { clauses.push('m.label_id = ?'); args.push(q.stream.id) }
   else clauses.push(predicate(q.stream, args))
-  const sequence = q.stream.kind === 'label' ? 'm.sequence' : 'a.sequence'
-  if (!(q.stream.kind === 'state' && q.stream.id === 'starred')) clauses.push('NOT EXISTS(SELECT 1 FROM muted_entries WHERE entry_id = e.id)')
+  const sequence = q.stream.kind === 'label' ? 'm.sequence' : 's.arrival_sequence'
+  if (!(q.stream.kind === 'state' && q.stream.id === 'starred')) clauses.push('NOT EXISTS(SELECT 1 FROM muted_entries WHERE entry_id = s.entry_id)')
   for (const stream of q.it) clauses.push(predicate(stream, args))
   for (const stream of q.xt) clauses.push(`NOT (${predicate(stream, args)})`)
   if (q.ot) { clauses.push(modifiedSince); args.push(q.ot * 1000, q.ot * 1000, q.ot * 1000) }
-  if (q.nt) { clauses.push('(e.first_seen_at <= ? AND e.greader_modified_ms <= ? AND f.greader_modified_ms <= ?)'); args.push(q.nt * 1000, q.nt * 1000, q.nt * 1000) }
+  if (q.nt) { clauses.push('(s.first_seen_at <= ? AND s.greader_modified_ms <= ? AND f.greader_modified_ms <= ?)'); args.push(q.nt * 1000, q.nt * 1000, q.nt * 1000) }
   if (q.high) { clauses.push(`${sequence} <= ?`); args.push(BigInt(q.high)) }
   if (q.last) { clauses.push(`${sequence} ${q.order === 'ASC' ? '>' : '<'} ?`); args.push(BigInt(q.last)) }
   return { sql: clauses.join(' AND '), args }
 }
-export const FROM = 'FROM entries e JOIN article_arrivals a ON a.entry_id = e.id JOIN article_identities ai ON ai.id = e.id JOIN feeds f ON f.id = e.feed_id'
 type Row = Record<string, string | number | bigint | null | Uint8Array>
 export function rows(db: DatabaseSync, sql: string, args: SQLInputValue[] = [], budget = Infinity): Row[] {
   const stmt = db.prepare(sql); stmt.setReadBigInts(true)
@@ -108,40 +107,34 @@ export function item(db: DatabaseSync, row: Row, articleLabels = false) {
     origin: { streamId: `feed/${row.feed_number}`, title: displayFeedTitle(String(row.origin_title)), htmlUrl: safeUrl(displayFeedUrl(String(row.site_url))) },
     categories: [READING, ...categories(db, String(row.feed_id)), ...labels.map(label => LABEL + label.title), ...(Number(row.read) ? [`${STATE}read`] : []), ...(Number(row.starred) ? [`${STATE}starred`] : [])] }
 }
-const CONTENT = 'e.id, e.feed_id, e.title, e.author, e.url, e.canonical_url, e.published_at, e.first_seen_at, e.read, e.starred, CAST(substr(CAST(e.content_html AS BLOB),1,65537) AS TEXT) AS content_html, substr(e.content_text,1,7000) AS content_text, a.sequence, f.title AS origin_title, f.site_url, (SELECT number FROM link_numbers WHERE kind = \'feed\' AND target_id = e.feed_id) AS feed_number'
-export function scanFrom(q: Query, contents = false, arrivalFirst = false) {
+const CONTENT = 'e.id, e.feed_id, e.title, e.author, e.url, e.canonical_url, e.published_at, s.first_seen_at, s.read, s.starred, CAST(substr(CAST(e.content_html AS BLOB),1,65537) AS TEXT) AS content_html, substr(e.content_text,1,7000) AS content_text, s.arrival_sequence AS sequence, f.title AS origin_title, f.site_url, (SELECT number FROM link_numbers WHERE kind = \'feed\' AND target_id = e.feed_id) AS feed_number'
+const readerJoins = ' CROSS JOIN article_identities ai ON ai.id = s.entry_id CROSS JOIN feeds f ON f.id = s.feed_id'
+const contentJoin = ' CROSS JOIN entries e ON e.id = s.entry_id'
+
+export function scanPageFrom(db: DatabaseSync, q: Query, contents = false) {
+  const joins = readerJoins + (contents ? contentJoin : '')
+  if (q.stream.kind === 'label') return {
+    from: `FROM entry_labels m CROSS JOIN entry_state s ON s.arrival_sequence = m.sequence${joins}`,
+    extra: '',
+  }
+  if (q.ot) {
+    // Sort small change sets by arrival. For a dense sync, page in index order.
+    const since = Math.trunc(q.ot * 1000)
+    const paths = [
+      `SELECT arrival_sequence FROM entry_state INDEXED BY state_first_seen WHERE first_seen_at >= ${since}`,
+      `SELECT arrival_sequence FROM entry_state INDEXED BY state_modified WHERE greader_modified_ms >= ${since}`,
+      `SELECT arrival_sequence FROM entry_state INDEXED BY state_feed WHERE feed_id IN (SELECT id FROM feeds INDEXED BY greader_feed_modified WHERE greader_modified_ms >= ${since})`,
+    ]
+    const large = db.prepare(`SELECT 1 FROM (${paths.join(' UNION ALL ')}) LIMIT 1 OFFSET 1000`).get()
+    if (!large) return { from: `FROM (${paths.join(' UNION ')}) changed CROSS JOIN entry_state s USING(arrival_sequence)${joins}`, extra: '' }
+  }
   const streams = [q.stream, ...q.it]
   const unread = streams.some(s => s.kind === 'state' && s.id === 'unread') || q.xt.some(s => s.kind === 'state' && s.id === 'read')
   const starred = streams.some(s => s.kind === 'state' && s.id === 'starred')
-  const tail = ' CROSS JOIN article_identities ai ON ai.id = e.id CROSS JOIN feeds f ON f.id = e.feed_id'
-  if ((unread || starred) && !arrivalFirst) return { from: `FROM entries e INDEXED BY greader_${unread ? 'unread' : 'starred'} CROSS JOIN article_arrivals a ON a.entry_id = e.id${tail}`, extra: unread ? ' AND e.read = 0' : ' AND e.starred = 1' }
-  return { from: `FROM article_arrivals a CROSS JOIN entries e ${contents || q.ot || q.nt ? '' : 'INDEXED BY entries_search_scope_idx'} ON e.id = a.entry_id${tail}`, extra: '' }
-}
-export function scanPageFrom(db: DatabaseSync, q: Query, contents = false) {
-  if (q.stream.kind === 'label') return {
-    from: 'FROM entry_labels m CROSS JOIN article_arrivals a USING(sequence) CROSS JOIN entries e ON e.id = a.entry_id CROSS JOIN article_identities ai ON ai.id = e.id CROSS JOIN feeds f ON f.id = e.feed_id',
-    extra: '',
-  }
-  // Sparse incremental sync starts at the three modification/arrival indexes.
-  // Dense results page from arrivals to avoid sorting the full set on each page.
-  if (q.ot) {
-    const since = Math.trunc(q.ot * 1000)
-    const paths = [
-      `SELECT id FROM entries INDEXED BY entries_first_seen_idx WHERE first_seen_at >= ${since}`,
-      `SELECT id FROM entries INDEXED BY greader_modified WHERE greader_modified_ms >= ${since}`,
-      `SELECT id FROM entries INDEXED BY entries_feed_published_idx WHERE feed_id IN (SELECT id FROM feeds INDEXED BY greader_feed_modified WHERE greader_modified_ms >= ${since})`,
-    ]
-    // UNION ALL lets this bounded density probe stop without sorting candidates.
-    const large = db.prepare(`SELECT 1 FROM (${paths.join(' UNION ALL ')}) LIMIT 1 OFFSET 1000`).get()
-    if (!large) return { from: `FROM (${paths.join(' UNION ')}) changed CROSS JOIN entries e ON e.id = changed.id CROSS JOIN article_arrivals a ON a.entry_id = e.id CROSS JOIN article_identities ai ON ai.id = e.id CROSS JOIN feeds f ON f.id = e.feed_id`, extra: '' }
-  }
-  const scan = scanFrom(q, contents)
-  if (!scan.extra) return scan
-  const unread = scan.extra === ' AND e.read = 0'
-  // Small state sets need their partial index. Large sets page from arrivals so
-  // every continuation does not rescan and sort the entire unread/starred set.
-  const large = db.prepare(`SELECT 1 FROM entries INDEXED BY greader_${unread ? 'unread' : 'starred'} WHERE ${unread ? 'read = 0' : 'starred = 1'} LIMIT 1 OFFSET 1000`).get()
-  return large ? scanFrom(q, contents, true) : scan
+  // Both partial indexes already order matches by the continuation key.
+  if (unread) return { from: `FROM entry_state s INDEXED BY state_unread_arrival${joins}`, extra: ' AND s.read = 0' }
+  if (starred) return { from: `FROM entry_state s INDEXED BY state_starred_arrival${joins}`, extra: ' AND s.starred = 1' }
+  return { from: `FROM entry_state s${joins}`, extra: '' }
 }
 export function page(db: DatabaseSync, q: Query, contents: boolean, articleLabels = false) {
   for (const stream of [q.stream, ...q.it, ...q.xt]) {
@@ -151,24 +144,23 @@ export function page(db: DatabaseSync, q: Query, contents: boolean, articleLabel
   const high = q.high || String(rows(db, 'SELECT coalesce(max(sequence),0) AS n FROM article_arrivals')[0].n)
   const filter = where({ ...q, high })
   const scan = scanPageFrom(db, q, contents)
-  const sql = `SELECT ${contents ? CONTENT : 'a.sequence'} ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY ${q.stream.kind === 'label' ? 'm.sequence' : 'a.sequence'} ${q.order} LIMIT ?`
+  const sql = `SELECT ${contents ? CONTENT : 's.arrival_sequence AS sequence'} ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY ${q.stream.kind === 'label' ? 'm.sequence' : 's.arrival_sequence'} ${q.order} LIMIT ?`
   const args = [...filter.args, q.n + 1]
   if (contents) return { high, ...contentRows(db, sql, args, q.n, articleLabels) }
   const result = rows(db, sql, args), more = result.length > q.n; result.splice(q.n)
   return { high, last: more ? String(result.at(-1)!.sequence) : undefined, values: result.map(row => ({ id: String(row.sequence) })) }
 }
 export function explicit(db: DatabaseSync, backend: string, ids: string[], order: string, articleLabels = false) {
-  return contentRows(db, `SELECT ${CONTENT} FROM article_arrivals a CROSS JOIN entries e ON e.id = a.entry_id CROSS JOIN article_identities ai ON ai.id = e.id CROSS JOIN feeds f ON f.id = e.feed_id WHERE ai.backend_id = ? AND a.sequence IN (${ids.map(() => '?').join(',')}) ORDER BY a.sequence ${order === 'ASC' ? 'ASC' : 'DESC'}`, [backend, ...ids.map(BigInt)], 250, articleLabels).values
+  return contentRows(db, `SELECT ${CONTENT} FROM entry_state s${readerJoins}${contentJoin} WHERE ai.backend_id = ? AND s.arrival_sequence IN (${ids.map(() => '?').join(',')}) ORDER BY s.arrival_sequence ${order === 'ASC' ? 'ASC' : 'DESC'}`, [backend, ...ids.map(BigInt)], 250, articleLabels).values
 }
 export function metadata(db: DatabaseSync, kind: string, backend: string, articleLabels = false) {
   const folders = rows(db, 'SELECT id, title FROM folders ORDER BY position, id', [], 4 * 1024 * 1024)
-  const labelCounts = !articleLabels || kind === 'subscription/list' ? [] : rows(db, `SELECT l.title, count(u.id) AS n, coalesce(max(u.first_seen_at), 0) AS newest
+  const labelCounts = !articleLabels || kind === 'subscription/list' ? [] : rows(db, `SELECT l.title, count(u.entry_id) AS n, coalesce(max(u.first_seen_at), 0) AS newest
     FROM article_labels l LEFT JOIN entry_labels m ON m.label_id = l.id
-    LEFT JOIN article_arrivals a ON a.sequence = m.sequence
-    LEFT JOIN entries u ON u.id = a.entry_id AND u.read = 0
+    LEFT JOIN entry_state u ON u.arrival_sequence = m.sequence AND u.read = 0
       AND EXISTS(SELECT 1 FROM feeds WHERE id = u.feed_id AND active = 1)
-      AND EXISTS(SELECT 1 FROM article_identities WHERE id = u.id AND backend_id = ?)
-      AND NOT EXISTS(SELECT 1 FROM muted_entries WHERE entry_id = u.id)
+      AND EXISTS(SELECT 1 FROM article_identities WHERE id = u.entry_id AND backend_id = ?)
+      AND NOT EXISTS(SELECT 1 FROM muted_entries WHERE entry_id = u.entry_id)
     GROUP BY l.id ORDER BY l.title`, [backend], 4 * 1024 * 1024)
   if (kind === 'tag/list') return { tags: [{ id: `${STATE}starred` }, { id: READING }, ...[...folders.map(f => String(f.title)), 'Uncategorized'].map(title => ({ id: `${LABEL}${title}`, type: 'folder' })),
     ...labelCounts.map(row => ({ id: LABEL + row.title, type: 'tag', unread_count: Number(row.n) }))] }
@@ -184,9 +176,9 @@ export function metadata(db: DatabaseSync, kind: string, backend: string, articl
     })
     return { subscriptions }
   }
-  const counts = rows(db, `SELECT e.feed_id, count(*) AS n, max(e.first_seen_at) AS newest
-    FROM entries e INDEXED BY greader_unread JOIN article_identities ai ON ai.id = e.id JOIN feeds f ON f.id = e.feed_id
-    WHERE e.read = 0 AND ai.backend_id = ? AND f.active = 1 AND NOT EXISTS(SELECT 1 FROM muted_entries WHERE entry_id = e.id) GROUP BY e.feed_id`, [backend])
+  const counts = rows(db, `SELECT s.feed_id, count(*) AS n, max(s.first_seen_at) AS newest
+    FROM entry_state s INDEXED BY state_unread_feed JOIN article_identities ai ON ai.id = s.entry_id JOIN feeds f ON f.id = s.feed_id
+    WHERE s.read = 0 AND ai.backend_id = ? AND f.active = 1 AND NOT EXISTS(SELECT 1 FROM muted_entries WHERE entry_id = s.entry_id) GROUP BY s.feed_id`, [backend])
   const byFeed = new Map(counts.map(row => [String(row.feed_id), { count: Number(row.n), newest: BigInt(row.newest as bigint) }]))
   const memberships = rows(db, 'SELECT feed_id, folder_id FROM feed_folders', [], 4 * 1024 * 1024)
   const members = new Map<string, Set<string>>()

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The web reader, Reader apps and article cleanup now read status and stars from the indexed article state table.
 - Connect FreshRSS or Miniflux on first start, or choose standalone. Test the
   connection during setup or later in Settings > Backend & data.
 - Standalone Reader apps can label articles and import subscriptions from OPML.

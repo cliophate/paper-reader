@@ -71,6 +71,16 @@ it('uses first-stored age, keeps latest-feed items and protects feeds without a 
   expect(await service.preview(policy({ unreadDays: 1 }))).toMatchObject({ deleted: 0 })
 })
 
+it('uses stored read status and stars to decide which articles to delete', async () => {
+  const [starred, read, unread] = seed(3)
+  sql.prepare('UPDATE entry_state SET read = 1, starred = 1 WHERE entry_id = ?').run(starred)
+  sql.prepare('UPDATE entry_state SET read = 1 WHERE entry_id = ?').run(read)
+  expect(await save(policy({ readDays: 1 }))).toMatchObject({ deleted: 1 })
+  expect(db.localEntry(read)).toBeNull()
+  expect(db.localEntry(starred)).toMatchObject({ starred: true })
+  expect(db.localEntry(unread)).toMatchObject({ read: false })
+})
+
 it('protects every saved category but removes derived metadata with the article', async () => {
   const ids = seed(10)
   sql.prepare('UPDATE entries SET starred = 1 WHERE id = ?').run(ids[0])

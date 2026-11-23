@@ -45,6 +45,13 @@ import type { Discussion } from '../shared/discussion.js'
 
 const ORPHANED_STORY_CHOICE_TTL_MS = 30 * 86_400_000
 
+const stateJoin = 'JOIN entry_state ON entry_state.entry_id = entries.id'
+const entryColumns = `entries.id, entries.feed_id, entries.feed_title, entries.feed_url, entries.title,
+  entries.author, entries.url, entries.content_html, entries.content_text, entries.full_content_text,
+  entries.excerpt, entries.published_at, entries.timestamp, entries.crawled_at, entries.enclosures_checked,
+  entries.reading_minutes, entries.thumbnail_url, entries.kind, entry_state.read, entry_state.starred,
+  entry_state.state_revision`
+
 export interface BriefingRecord {
   id: string
   kind: 'morning' | 'evening'
@@ -491,7 +498,7 @@ export class PaperDatabase {
   }
 
   entryState(id: string): { read: boolean; starred: boolean; revision: number } | null {
-    const row = this.db.prepare('SELECT read, starred, state_revision FROM entries WHERE id = ?').get(id)
+    const row = this.db.prepare('SELECT read, starred, state_revision FROM entry_state WHERE entry_id = ?').get(id)
     return row ? { read: Boolean(row.read), starred: Boolean(row.starred), revision: Number(row.state_revision) } : null
   }
 
@@ -1091,8 +1098,8 @@ export class PaperDatabase {
       this.db.prepare('DELETE FROM incoming_starred').run()
       for (const id of unreadIds) addUnread.run(id)
       for (const id of starredIds) addStarred.run(id)
-      const readToUnreadRows = this.db.prepare(`SELECT id FROM entries WHERE read = 1 AND EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entries.id)`).all() as Array<{ id: string }>
-      const unreadToReadRows = this.db.prepare(`SELECT id FROM entries WHERE read = 0 AND NOT EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entries.id)`).all() as Array<{ id: string }>
+      const readToUnreadRows = this.db.prepare(`SELECT entry_id AS id FROM entry_state WHERE read = 1 AND EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entry_state.entry_id)`).all() as Array<{ id: string }>
+      const unreadToReadRows = this.db.prepare(`SELECT entry_id AS id FROM entry_state WHERE read = 0 AND NOT EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entry_state.entry_id)`).all() as Array<{ id: string }>
       this.db.prepare('UPDATE entries SET read = 1 WHERE read = 0 AND NOT EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entries.id)').run()
       this.db.prepare('UPDATE entries SET read = 0 WHERE read = 1 AND EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entries.id)').run()
       this.db.prepare('UPDATE entries SET starred = 0 WHERE starred = 1 AND NOT EXISTS (SELECT 1 FROM incoming_starred WHERE incoming_starred.id = entries.id)').run()
@@ -1130,13 +1137,13 @@ export class PaperDatabase {
 
   pulseCandidates(after: number, before: number, scanned: boolean, limit: number): Entry[] {
     const rows = this.db.prepare(`
-      SELECT entries.* FROM entries
-      WHERE kind = 'article' AND (timestamp >= ? OR first_seen_at >= ?) AND timestamp <= ?
-        AND feed_id NOT IN (SELECT value FROM json_each(?))
+      SELECT ${entryColumns} FROM entries ${stateJoin}
+      WHERE kind = 'article' AND (entries.timestamp >= ? OR entries.first_seen_at >= ?) AND entries.timestamp <= ?
+        AND entries.feed_id NOT IN (SELECT value FROM json_each(?))
         AND ${scanned ? '' : 'NOT'} EXISTS (SELECT 1 FROM pulse_scanned WHERE entry_id = entries.id)
         AND NOT EXISTS (SELECT 1 FROM pulse_memberships WHERE entry_id = entries.id)
         AND NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = entries.id)
-      ORDER BY timestamp DESC, id LIMIT ?
+      ORDER BY entries.timestamp DESC, id LIMIT ?
     `).all(after, after, before, JSON.stringify([...this.aiActivity.excludedFeeds()]), limit) as Array<Record<string, string | number>>
     return rows.map(row => this.numberEntry(entryFromRow(row)))
   }
@@ -1146,7 +1153,7 @@ export class PaperDatabase {
     const words = [...new Set(entries.flatMap(entry => entry.title.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) || []))].filter(word => !stop.has(word)).slice(0, 180)
     if (!words.length) return []
     const query = words.map(word => `"${word}"`).join(' OR ')
-    const rows = this.db.prepare(`SELECT entries.* FROM entries_fts JOIN entries ON entries.id = entries_fts.entry_id
+    const rows = this.db.prepare(`SELECT ${entryColumns} FROM entries_fts JOIN entries ON entries.id = entries_fts.entry_id ${stateJoin}
       WHERE entries_fts MATCH ? AND entries.kind = 'article' AND entries.timestamp >= ? AND entries.timestamp <= ?
       AND entries.feed_id NOT IN (SELECT value FROM json_each(?))
       AND EXISTS (SELECT 1 FROM pulse_scanned WHERE entry_id = entries.id)
@@ -1159,11 +1166,11 @@ export class PaperDatabase {
   briefingEntries(stream: StreamRef, options: BriefingEntryOptions): Entry[] {
     const cutoff = options.before.getTime()
     const clauses = ["entries.timestamp < ?", "entries.first_seen_at <= ?",
-      "MAX(entries.timestamp, entries.first_seen_at) >= ?", visibleEntryClause('entries'),
+      "MAX(entries.timestamp, entries.first_seen_at) >= ?", visibleEntryClause('entries.id'),
       `NOT EXISTS (SELECT 1 FROM briefing_entries JOIN briefings ON briefings.id = briefing_entries.briefing_id
         WHERE briefing_entries.entry_id = entries.id AND briefings.status IN ('delivered', 'acknowledged'))`]
     const parameters: Array<string | number> = [cutoff, cutoff, cutoff - 7 * 86_400_000]
-    if (options.unreadOnly) clauses.push('entries.read = 0')
+    if (options.unreadOnly) clauses.push('entry_state.read = 0')
     if (stream.kind === 'category') {
       clauses.push('EXISTS (SELECT 1 FROM feed_folders WHERE feed_folders.feed_id = entries.feed_id AND feed_folders.folder_id = ?)')
       parameters.push(stream.id)
@@ -1178,7 +1185,7 @@ export class PaperDatabase {
     }
     const priority = options.followed?.size ? '(entries.id IN (SELECT value FROM json_each(?))) DESC,' : ''
     if (options.followed?.size) parameters.push(JSON.stringify([...options.followed]))
-    const rows = this.db.prepare(`SELECT entries.* FROM entries LEFT JOIN briefing_considered ON briefing_considered.entry_id = entries.id
+    const rows = this.db.prepare(`SELECT ${entryColumns} FROM entries ${stateJoin} LEFT JOIN briefing_considered ON briefing_considered.entry_id = entries.id
       WHERE ${clauses.join(' AND ')} ORDER BY ${priority} COALESCE(briefing_considered.considered_at, 0), MAX(entries.timestamp, entries.first_seen_at) DESC, entries.id
       LIMIT ?`).all(...parameters, options.limit || 1000) as Array<Record<string, string | number>>
     return rows.map(row => this.numberEntry(entryFromRow(row)))
@@ -1237,11 +1244,11 @@ export class PaperDatabase {
 
   pulseCollections() {
     const rows = this.db.prepare(`SELECT pulse_memberships.collection_id, pulse_memberships.sequence,
-      pulse_memberships.added_at, pulse_memberships.development, article_arrivals.sequence AS link_number, entries.id, entries.feed_id,
-      entries.read, entries.state_revision, entries.feed_title, entries.title, entries.url, entries.feed_url, entries.author,
+      pulse_memberships.added_at, pulse_memberships.development, entry_state.arrival_sequence AS link_number, entries.id, entries.feed_id,
+      entry_state.read, entry_state.state_revision, entries.feed_title, entries.title, entries.url, entries.feed_url, entries.author,
       entries.published_at, entries.timestamp, entries.thumbnail_url
       FROM pulse_memberships JOIN entries ON entries.id = pulse_memberships.entry_id
-      LEFT JOIN article_arrivals ON article_arrivals.entry_id = entries.id
+      ${stateJoin}
       WHERE NOT EXISTS (SELECT 1 FROM muted_entries WHERE entry_id = entries.id)
       ORDER BY pulse_memberships.sequence DESC`).iterate()
     const sources = new Map<string, PulseSource[]>()
@@ -1398,9 +1405,9 @@ export class PaperDatabase {
   coverageTopics(options: { after: Date; before: Date; eligibleIds?: Set<string> }): Topic[] {
     const clusterRows = this.db.prepare('SELECT * FROM coverage_clusters ORDER BY last_published_at DESC, id').all() as Array<Record<string, string>>
     const memberRows = this.db.prepare(`
-      SELECT coverage_cluster_entries.cluster_id, coverage_cluster_entries.position, entries.*
+      SELECT coverage_cluster_entries.cluster_id, coverage_cluster_entries.position, ${entryColumns}
       FROM coverage_cluster_entries
-      JOIN entries ON entries.id = coverage_cluster_entries.entry_id
+      JOIN entries ON entries.id = coverage_cluster_entries.entry_id ${stateJoin}
       WHERE NOT EXISTS (SELECT 1 FROM muted_entries WHERE muted_entries.entry_id = entries.id)
       ORDER BY coverage_cluster_entries.cluster_id, coverage_cluster_entries.position
     `).all() as Array<Record<string, string | number>>
@@ -1452,18 +1459,17 @@ export class PaperDatabase {
   }
 
   localNavigation(includeMuted = false): NavigationPayload {
-    const visibleEntries = includeMuted ? '' : 'WHERE NOT EXISTS (SELECT 1 FROM muted_entries WHERE muted_entries.entry_id = entries.id)'
+    const visibleEntries = includeMuted ? '' : 'WHERE ' + visibleEntryClause('entries.id')
+    const visibleState = includeMuted ? '' : 'AND ' + visibleEntryClause('entry_state.entry_id')
     const feedRows = this.db.prepare(`
       SELECT feeds.*,
-        COALESCE(entry_counts.unread, 0) AS unread,
-        COALESCE(entry_counts.last_published_at, feeds.last_published_at) AS effective_last_published_at
+        (SELECT COUNT(*) FROM entry_state WHERE read = 0 AND feed_id = feeds.id ${visibleState}) AS unread,
+        COALESCE(latest.last_published_at, feeds.last_published_at) AS effective_last_published_at
       FROM feeds
       LEFT JOIN (
-        SELECT feed_id,
-          SUM(CASE WHEN read = 0 THEN 1 ELSE 0 END) AS unread,
-          MAX(published_at) AS last_published_at
+        SELECT feed_id, MAX(published_at) AS last_published_at
         FROM entries ${visibleEntries} GROUP BY feed_id
-      ) entry_counts ON entry_counts.feed_id = feeds.id
+      ) latest ON latest.feed_id = feeds.id
       WHERE feeds.active = 1
       ORDER BY feeds.position, feeds.id
     `).all() as Array<Record<string, string | number | null>>
@@ -1491,66 +1497,67 @@ export class PaperDatabase {
       .filter(feed => !(folderIdsByFeed.get(feed.id) || []).length)
     const counts = this.db.prepare(`
       SELECT
-        SUM(CASE WHEN read = 0 ${includeMuted ? '' : 'AND NOT EXISTS (SELECT 1 FROM muted_entries WHERE muted_entries.entry_id = entries.id)'} THEN 1 ELSE 0 END) AS unread,
-        SUM(CASE WHEN starred = 1 THEN 1 ELSE 0 END) AS starred
-      FROM entries
+        (SELECT COUNT(*) FROM entry_state WHERE read = 0 ${visibleState}) AS unread,
+        (SELECT COUNT(*) FROM entry_state WHERE starred = 1) AS starred
     `).get() as { unread: number | null; starred: number | null }
     return this.numberNavigation({ unread: Number(counts.unread || 0), starred: Number(counts.starred || 0), folders, uncategorized })
   }
 
-  private pageScope(stream: StreamRef, options: PageOptions, ranked = false, now = Date.now()) {
+  private pageScope(stream: StreamRef, options: PageOptions, ranked = false, now = Date.now(), withState = false) {
     this.urlComparisons = 0
     const clauses: string[] = []
     const parameters: Array<string | number> = []
-    if (stream.kind === 'starred') clauses.push('entries.starred = 1')
-    if (stream.kind === 'feed') { clauses.push('entries.feed_id = ?'); parameters.push(stream.id) }
+    const filterState = Boolean(options.unreadOnly) || stream.kind === 'starred'
+    const scopeTable = filterState ? 'entry_state' : 'entries'
+    if (stream.kind === 'starred') clauses.push('entry_state.starred = 1')
+    if (stream.kind === 'feed') { clauses.push(`${scopeTable}.feed_id = ?`); parameters.push(stream.id) }
     if (stream.kind === 'category') {
-      clauses.push('entries.feed_id IN (SELECT feed_id FROM feed_folders WHERE folder_id = ?)')
+      clauses.push(`${scopeTable}.feed_id IN (SELECT feed_id FROM feed_folders WHERE folder_id = ?)`)
       parameters.push(stream.id)
     }
-    if (options.unreadOnly) clauses.push('entries.read = 0')
+    if (options.unreadOnly) clauses.push('entry_state.read = 0')
     for (const [value, comparison] of [[options.after, '>='], [options.before, '<']] as const) {
       if (value) {
         const timestamp = Date.parse(value)
         if (!Number.isFinite(timestamp)) throw new Error('Choose a valid date')
-        clauses.push(`entries.timestamp ${comparison} ?`); parameters.push(timestamp)
+        clauses.push(`${scopeTable}.timestamp ${comparison} ?`); parameters.push(timestamp)
       }
     }
     const excludeMuted = !options.includeMuted && stream.kind !== 'starred'
     let search: ReturnType<typeof compileSearch> | undefined
     if (options.query?.trim()) {
       const index = stream.kind === 'feed' || stream.kind === 'category' ? 'entries_feed_published_idx'
-        : stream.kind === 'starred' ? 'entries_starred_published_idx'
-        : options.unreadOnly ? 'entries_read_published_idx'
         : options.after || options.before ? 'entries_published_idx' : 'entries_url_idx'
+      const urlSource = filterState ? `entries ${stateJoin}` : `entries INDEXED BY ${index}`
       const urlClauses = [...clauses]
       if (excludeMuted) {
         // The URL index covers rowid and URL. Look up only the muted article IDs.
-        urlClauses.push(index === 'entries_url_idx'
+        urlClauses.push(!filterState && index === 'entries_url_idx'
           ? 'entries.rowid NOT IN (SELECT e.rowid FROM muted_entries JOIN entries e ON e.id = muted_entries.entry_id)'
-          : visibleEntryClause('entries'))
+          : visibleEntryClause('entries.id'))
       }
       const where = urlClauses.length ? ' WHERE ' + urlClauses.join(' AND ') : ''
       // Keep SQLite from flattening the subquery and testing URLs before scope filters.
-      const sql = `SELECT rowid, url FROM entries INDEXED BY ${index}${where} LIMIT -1 OFFSET 0`
+      const sql = `SELECT entries.rowid, entries.url FROM ${urlSource}${where} LIMIT -1 OFFSET 0`
       search = compileSearch(parseSearch(options.query).root, ranked, now, { sql, parameters })
     }
-    if (excludeMuted) clauses.push(visibleEntryClause('entries'))
+    if (excludeMuted) clauses.push(visibleEntryClause('entries.id'))
     if (search) {
       clauses.push(...search.clauses)
       parameters.unshift(...search.joinParameters)
       parameters.push(...search.parameters)
     }
-    return { clauses, parameters, search, join: search?.join || '' }
+    const join = [search?.join, (filterState || withState) && stateJoin].filter(Boolean).join(' ')
+    return { clauses, parameters, search, join, scopeTable }
   }
 
   private matchingRows(stream: StreamRef, options: PageOptions, now: number, withRevisions: boolean, candidates?: string[]) {
-    const { clauses, parameters, join } = this.pageScope(stream, options, false, now)
+    const { clauses, parameters, join } = this.pageScope(stream, options, false, now, withRevisions)
     if (candidates) {
       clauses.push('entries.id IN (SELECT value FROM json_each(?))')
       parameters.push(JSON.stringify(candidates))
     }
-    const revision = withRevisions ? ', entries.state_revision' : ''
+    const revision = withRevisions ? ', entry_state.state_revision' : ''
     const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''
     return this.db.prepare(`SELECT entries.id${revision} FROM entries ${join} ${where}`).all(...parameters)
   }
@@ -1572,7 +1579,7 @@ export class PaperDatabase {
     const { clauses, parameters } = this.pageScope(stream, { unreadOnly, includeMuted: true })
     // Adapters supply source_order; local articles use their durable arrival sequence.
     // Neither order depends on the Paper article ID or publication date.
-    return this.db.prepare(`SELECT entries.id FROM entries JOIN article_arrivals ON article_arrivals.entry_id = entries.id ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY entries.source_order DESC, article_arrivals.sequence DESC LIMIT ?`)
+    return this.db.prepare(`SELECT entries.id FROM entries ${stateJoin} ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY entries.source_order DESC, entry_state.arrival_sequence DESC LIMIT ?`)
       .all(...parameters, Math.min(Math.max(limit, 1), 250)).map(row => String(row.id))
   }
 
@@ -1628,7 +1635,7 @@ export class PaperDatabase {
       const eligible = new Set(this.matchingEntryIds(stream, options, now))
       let offset = Math.max(0, cursor.offset || 0)
       const items: Entry[] = []
-      const article = this.db.prepare('SELECT * FROM entries WHERE id = ?')
+      const article = this.db.prepare(`SELECT ${entryColumns} FROM entries ${stateJoin} WHERE entries.id = ?`)
       const match = search?.match || ''
       const snippet = match && this.db.prepare(`SELECT snippet(entries_fts, 4, '', '', '…', 32) AS excerpt
         FROM entries_fts WHERE rowid = (SELECT id FROM entry_search_rows WHERE entry_id = ?) AND entries_fts MATCH ?`)
@@ -1655,15 +1662,22 @@ export class PaperDatabase {
       while (!step.done) { this.saveSearchSnapshot(step.value); step = page.next() }
       return step.value
     }
-    const { clauses, parameters } = this.pageScope(stream, options)
+    const { clauses, parameters, scopeTable, join } = this.pageScope(stream, options)
     const { ascending, direction, cursor, encode } = this.pageCursor(stream, options)
-    const where = () => clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
     if (cursor.boundary) {
       if (!Array.isArray(cursor.boundary) || cursor.boundary.length !== 3 || !Number.isFinite(cursor.boundary[0]) || !Number.isFinite(cursor.boundary[1]) || typeof cursor.boundary[2] !== 'string') throw new Error('Invalid article cursor')
-      clauses.push(`(entries.timestamp, entries.crawled_at, entries.id) ${ascending ? '>' : '<'} (?, ?, ?)`)
+      clauses.push(`(${scopeTable}.timestamp, entries.crawled_at, entries.id) ${ascending ? '>' : '<'} (?, ?, ?)`)
       parameters.push(...cursor.boundary)
     }
-    const rows = this.db.prepare(`SELECT entries.* FROM entries ${where()} ORDER BY entries.timestamp ${direction}, entries.crawled_at ${direction}, entries.id ${direction} LIMIT ?`)
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+    // A publication time can tie across a whole feed. Sort the keys before loading bodies.
+    const source = scopeTable === 'entry_state' ? 'entries INDEXED BY entries_search_scope_idx' : 'entries'
+    const rows = this.db.prepare(`WITH page AS MATERIALIZED (
+        SELECT entries.id, ${scopeTable}.timestamp, entries.crawled_at FROM ${source} ${join} ${where}
+        ORDER BY ${scopeTable}.timestamp ${direction}, entries.crawled_at ${direction}, entries.id ${direction} LIMIT ?
+      )
+      SELECT ${entryColumns} FROM page JOIN entries ON entries.id = page.id ${stateJoin}
+      ORDER BY page.timestamp ${direction}, page.crawled_at ${direction}, page.id ${direction}`)
       .all(...parameters, limit + 1) as Array<Record<string, string | number>>
     const last = rows[Math.min(limit, rows.length) - 1]
     return { items: rows.slice(0, limit).map(row => this.decorateEntry(entryFromRow(row))), continuation: rows.length > limit ? encode({ boundary: [Number(last.timestamp), Number(last.crawled_at), String(last.id)] }) : '' }
@@ -1703,7 +1717,7 @@ export class PaperDatabase {
   }
 
   recentReading(): Entry[] {
-    return this.db.prepare('SELECT entries.* FROM entries JOIN reading_progress ON entry_id = entries.id ORDER BY reading_progress.updated_at DESC LIMIT 100')
+    return this.db.prepare(`SELECT ${entryColumns} FROM entries ${stateJoin} JOIN reading_progress ON reading_progress.entry_id = entries.id ORDER BY reading_progress.updated_at DESC LIMIT 100`)
       .all().map(row => this.decorateEntry(entryFromRow(row as Record<string, string | number>)))
   }
 
@@ -1835,39 +1849,31 @@ export class PaperDatabase {
   }
 
   localEntries(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; after?: Date; before?: Date } = {}): Entry[] {
-    const clauses: string[] = []
-    const parameters: Array<string | number> = []
-    if (stream.kind === 'starred') clauses.push('starred = 1')
-    if (stream.kind === 'feed') { clauses.push('feed_id = ?'); parameters.push(stream.id) }
-    if (stream.kind === 'category') {
-      clauses.push('EXISTS (SELECT 1 FROM feed_folders WHERE feed_folders.feed_id = entries.feed_id AND feed_folders.folder_id = ?)')
-      parameters.push(stream.id)
-    }
-    if (options.unreadOnly) clauses.push('read = 0')
-    if (stream.kind !== 'starred') clauses.push(visibleEntryClause('entries'))
-    if (options.after) { clauses.push('timestamp >= ?'); parameters.push(options.after.getTime()) }
-    if (options.before) { clauses.push('timestamp < ?'); parameters.push(options.before.getTime()) }
+    const { clauses, parameters, scopeTable } = this.pageScope(stream, { unreadOnly: options.unreadOnly,
+      after: options.after?.toISOString(), before: options.before?.toISOString() })
     const limit = Math.min(Math.max(options.limit || 200, 1), 5000)
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
-    const rows = this.db.prepare(`SELECT * FROM entries ${where} ORDER BY timestamp DESC, id DESC LIMIT ?`)
+    const id = scopeTable === 'entry_state' ? 'entry_state.entry_id' : 'entries.id'
+    const rows = this.db.prepare(`SELECT ${entryColumns} FROM entries ${stateJoin} ${where}
+      ORDER BY ${scopeTable}.timestamp DESC, ${id} DESC LIMIT ?`)
       .all(...parameters, limit) as Array<Record<string, string | number>>
     return rows.map(row => this.numberEntry(entryFromRow(row)))
   }
 
   localEntry(id: string): Entry | null {
-    const row = this.db.prepare('SELECT * FROM entries WHERE id = ?').get(id) as Record<string, string | number> | undefined
+    const row = this.db.prepare(`SELECT ${entryColumns} FROM entries ${stateJoin} WHERE entries.id = ?`).get(id) as Record<string, string | number> | undefined
     return row ? this.decorateEntry(entryFromRow(row)) : null
   }
 
   *headlineCandidates(): IterableIterator<Entry> {
-    const rows = this.db.prepare(`SELECT id FROM entries
+    const rows = this.db.prepare(`SELECT entries.id FROM entries ${stateJoin}
       WHERE source_domain IN ('androidpolice.com', 'www.androidpolice.com', 'androidauthority.com', 'www.androidauthority.com')
-      AND (timestamp > ? OR read = 0 OR starred = 1)
-      AND feed_id NOT IN (SELECT value FROM json_each(?))
-      ORDER BY read ASC, timestamp DESC LIMIT 1000
+      AND (entries.timestamp > ? OR entry_state.read = 0 OR entry_state.starred = 1)
+      AND entries.feed_id NOT IN (SELECT value FROM json_each(?))
+      ORDER BY entry_state.read ASC, entries.timestamp DESC LIMIT 1000
     `).all(Date.now() - 7 * 86400_000, JSON.stringify([...this.aiActivity.excludedFeeds()]))
     // Finish the ID query before yielding so background work can checkpoint WAL.
-    const lookup = this.db.prepare('SELECT * FROM entries WHERE id = ?')
+    const lookup = this.db.prepare(`SELECT ${entryColumns} FROM entries ${stateJoin} WHERE entries.id = ?`)
     for (const candidate of rows) {
       const row = lookup.get(candidate.id) as Record<string, string | number> | undefined
       if (row) yield entryFromRow(row)
@@ -1901,13 +1907,13 @@ export class PaperDatabase {
     if (stream.kind === 'starred') clauses.push('starred = 1')
     if (stream.kind === 'feed') { clauses.push('feed_id = ?'); parameters.push(stream.id) }
     if (stream.kind === 'category') {
-      clauses.push('EXISTS (SELECT 1 FROM feed_folders WHERE feed_folders.feed_id = entries.feed_id AND feed_folders.folder_id = ?)')
+      clauses.push('EXISTS (SELECT 1 FROM feed_folders WHERE feed_folders.feed_id = entry_state.feed_id AND feed_folders.folder_id = ?)')
       parameters.push(stream.id)
     }
     if (unreadOnly) clauses.push('read = 0')
-    if (!includeMuted && stream.kind !== 'starred') clauses.push(visibleEntryClause('entries'))
+    if (!includeMuted && stream.kind !== 'starred') clauses.push(visibleEntryClause('entry_state.entry_id'))
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
-    const rows = this.db.prepare(`SELECT id FROM entries ${where} ORDER BY timestamp DESC`).all(...parameters) as Array<{ id: string }>
+    const rows = this.db.prepare(`SELECT entry_id AS id FROM entry_state ${where} ORDER BY timestamp DESC`).all(...parameters) as Array<{ id: string }>
     return rows.map(row => row.id)
   }
 
@@ -1940,10 +1946,10 @@ export class PaperDatabase {
       }
       return this.previewUnread(stream, options, withRevisions, candidates, now)
     }
-    const { clauses, parameters, search, join } = this.pageScope(stream, { ...options, unreadOnly: false }, true)
+    const { clauses, parameters, search, join } = this.pageScope(stream, { ...options, unreadOnly: false }, true, Date.now(), true)
     // A reader may already have opened the anchor in an unread-only list.
     if (options.unreadOnly) {
-      clauses.push('(entries.read = 0 OR entries.id = ?)')
+      clauses.push('(entry_state.read = 0 OR entries.id = ?)')
       parameters.push(anchorId)
     }
     const directionOrder = this.streamOrder(stream) === 'oldest' ? 'ASC' : 'DESC'
@@ -1951,7 +1957,7 @@ export class PaperDatabase {
 
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
     const rows = this.db.prepare(`
-      SELECT entries.id, entries.read${withRevisions ? ', entries.state_revision' : ''} FROM entries ${join} ${where}
+      SELECT entries.id, entry_state.read${withRevisions ? ', entry_state.state_revision' : ''} FROM entries ${join} ${where}
       ORDER BY ${order}
     `).all(...parameters) as Array<{ id: string; read: number; state_revision?: number }>
     const anchorIndex = rows.findIndex(row => row.id === anchorId)
@@ -2008,7 +2014,7 @@ export class PaperDatabase {
   }
 
   unreadCount(): number {
-    const row = this.db.prepare('SELECT COUNT(*) AS count FROM entries WHERE read = 0').get() as { count: number }
+    const row = this.db.prepare('SELECT COUNT(*) AS count FROM entry_state WHERE read = 0').get() as { count: number }
     return Number(row.count || 0)
   }
 
@@ -2465,9 +2471,9 @@ export class PaperDatabase {
 
   briefingReadCounts(id: string): { entryCount: number; unreadCount: number; missingCount: number } {
     const row = this.db.prepare(`SELECT COUNT(DISTINCT briefing_entries.entry_id) AS total,
-      COUNT(DISTINCT CASE WHEN entries.read = 0 THEN briefing_entries.entry_id END) AS unread,
-      COUNT(DISTINCT CASE WHEN entries.id IS NULL THEN briefing_entries.entry_id END) AS missing
-      FROM briefing_entries LEFT JOIN entries ON entries.id = briefing_entries.entry_id
+      COUNT(DISTINCT CASE WHEN entry_state.read = 0 THEN briefing_entries.entry_id END) AS unread,
+      COUNT(DISTINCT CASE WHEN entry_state.entry_id IS NULL THEN briefing_entries.entry_id END) AS missing
+      FROM briefing_entries LEFT JOIN entry_state ON entry_state.entry_id = briefing_entries.entry_id
       WHERE briefing_id = ?`).get(id)!
     return { entryCount: Number(row.total), unreadCount: Number(row.unread), missingCount: Number(row.missing) }
   }
@@ -2580,8 +2586,8 @@ function normalizeUrl(value: string): string {
   }
 }
 
-function visibleEntryClause(alias: string): string {
-  return `NOT EXISTS (SELECT 1 FROM muted_entries WHERE muted_entries.entry_id = ${alias}.id)`
+function visibleEntryClause(idColumn: string): string {
+  return `NOT EXISTS (SELECT 1 FROM muted_entries WHERE muted_entries.entry_id = ${idColumn})`
 }
 
 type MuteRule = { phrase: string; scope: MuteFilterScope; feed_id: string }
