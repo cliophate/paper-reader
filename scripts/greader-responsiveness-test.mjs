@@ -118,8 +118,9 @@ try {
       } while (!done)
     })().catch(error => { failure = new Error(`${api} ${operation} health probe failed`, { cause: error }) })
     const start = performance.now()
-    try { await action() } finally { done = true; await probing }
-    const result = { api, operation, ms: Math.round(performance.now() - start), healthMaxMs: Math.round(health), probes }
+    let ms
+    try { await action(); ms = Math.round(performance.now() - start) } finally { done = true; await probing }
+    const result = { api, operation, ms, healthMaxMs: Math.round(health), probes }
     assert(health < 2000); if (failure) throw failure
     orgTimings.push(result); console.log(JSON.stringify(result))
   }
@@ -155,8 +156,17 @@ try {
   await measure('web legacy', 'move', () => webRequest('/api/feeds', 'PATCH', { id: feeds[0], title: 'Legacy renamed', currentFolder: '', folder: 'Legacy folder' }))
   await measure('web legacy', 'unsubscribe', () => webRequest('/api/feeds', 'DELETE', { id: feeds[0] }))
   await readerWrite('subscription/edit', { s: stream, ac: 'subscribe' })
-  const deferred = await fetch(root + '/reader/api/0/mark-all-as-read', { method: 'POST', headers, body: new URLSearchParams({ s: 'user/-/state/com.google/reading-list', T: token }) })
-  assert.equal(deferred.status, 404); assert.deepEqual(await deferred.json(), { errors: ['Not found.'] })
+  await measure('greader', 'mark-all-as-read', async () => {
+    const result = await readerWrite('mark-all-as-read', { s: stream, ts: '1000000000' })
+    assert.equal(result.text, 'OK')
+    assert(result.ms < 15000, `mark-all-as-read took ${result.ms}ms`)
+  })
+  const marked = new PaperDatabase(file, { readOnly: true })
+  assert.equal(marked.greaderDatabase.prepare('SELECT count(*) n FROM entry_state WHERE feed_id = ? AND read = 1 AND state_revision > 0').get(feeds[0]).n, largeFeedCount)
+  assert.equal(marked.greaderDatabase.prepare('SELECT count(*) n FROM entry_state WHERE read = 0').get().n, count - largeFeedCount)
+  assert.equal(marked.entryState('synthetic-1').starred, true)
+  marked.close()
+  assert.equal(JSON.parse((await call('unread-count')).text).max, count - largeFeedCount)
   // Prepare sparse state in a separate fixture process. This is not an API endpoint.
   const prepare = spawn(process.execPath, ['--input-type=module', '-e', `import { DatabaseSync } from 'node:sqlite'; const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA busy_timeout=5000; UPDATE entry_state SET read=1; UPDATE entry_state SET read=0 WHERE arrival_sequence IN (2,3)'); db.close()`, file], { env: {}, stdio: 'ignore' })
   assert.equal((await once(prepare, 'exit'))[0], 0)

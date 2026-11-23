@@ -11,6 +11,8 @@ import { PaperDatabase } from '../src/server/db'
 import { ingestFeed } from '../src/server/feed-ingestion'
 import { GreaderAuth } from '../src/server/greader-auth'
 import { greaderRoutes } from '../src/server/greader-routes'
+import { renameLabel } from '../src/server/greader-labels'
+import { markReaderStreamRead } from '../src/server/greader-mark-read'
 import { GreaderPool } from '../src/server/greader-pool'
 import { AuthConnections } from '../src/server/auth-connections'
 import { LocalStateService } from '../src/server/local-state'
@@ -250,14 +252,191 @@ it('rejects organization batches above 100 before discovery or metadata work', a
   expect(snapshot).not.toHaveBeenCalled()
   snapshot.mockRestore()
 })
-it('defers mark-all-as-read with a terminal JSON 404 and leaves state unchanged', async () => {
-  const before = db.greaderDatabase.prepare('SELECT sum(read) n, sum(state_revision) revision FROM entry_state').get()
-  for (const method of ['GET', 'POST']) {
-    const response = await call('mark-all-as-read', [['s', READING], ['T', token]], method)
-    expect(response.status).toBe(404)
-    expect(await response.json()).toEqual({ errors: ['Not found.'] })
+function markReadFixture(name: string) {
+  const url = `https://example.test/bulk-${name}`
+  const feedId = db.saveLocalSubscription(backend, { url, title: name })
+  ingestFeed(db, { backendId: backend, subscriptionId: feedId, endpointGeneration: 'fixture', requestUrl: url, responseUrl: url,
+    fetchedAt: new Date().toISOString(), xml: `<rss version="2.0"><channel><title>${name}</title>${[1, 2, 3].map(i =>
+      `<item><guid>${i}</guid><title>Article ${i}</title><description>Synthetic bulk article.</description><pubDate>2000-01-01T00:00:00Z</pubDate></item>`).join('')}</channel></rss>` })
+  const ids = db.greaderDatabase.prepare('SELECT id FROM entries WHERE feed_id = ? ORDER BY title').all(feedId).map(row => String(row.id))
+  return { feedId, ids, stream: `feed/${db.linkNumber('feed', feedId)}` }
+}
+async function markRead(stream: string, ts?: string) {
+  const response = await call('mark-all-as-read', [['s', stream], ['T', token], ...(ts === undefined ? [] : [['ts', ts] as [string, string]])], 'POST')
+  expect(response.status).toBe(200)
+  expect(await response.text()).toBe('OK')
+}
+function addFolder(title: string, feeds: string[]) {
+  const result = db.organization.apply(backend, db.organization.metadata(backend).revision, [{ type: 'create-folder', title }]).results[0]
+  if (result.status !== 'applied' || !result.id) throw new Error('Fixture folder failed')
+  db.organization.apply(backend, db.organization.metadata(backend).revision, feeds.map(feedId => ({ type: 'add-membership', feedId, folderId: result.id! })))
+}
+it('marks a feed read once, preserves stars and invalidates stale web undo after commit', async () => {
+  const fixture = markReadFixture('feed'), outside = markReadFixture('outside')
+  db.webhooks.add({ id: 'bulk-stars', name: 'Bulk stars', kind: 'webhook', events: ['starred_entry'], feedId: fixture.feedId, folderId: '' })
+  state.editEntries([fixture.ids[0]], 'star', { undo: { token: 'bulk-undo', expiresAt: new Date(Date.now() + 60000).toISOString() } })
+  const deliveries = db.webhooks.history()
+  expect(deliveries).toHaveLength(1)
+  const priorClock = Date.now() + 60000
+  db.greaderDatabase.prepare('UPDATE entry_state SET greader_modified_ms = ? WHERE feed_id = ?').run(priorClock, fixture.feedId)
+  const events = vi.fn(() => fixture.ids.every(id => db.entryState(id)!.read))
+  const remove = state.onStateChanged(events)
+  const before = db.greaderDatabase.prepare('SELECT count(*) n FROM activity_events').get()!.n as number
+  try {
+    await markRead(fixture.stream)
+    expect(fixture.ids.map(id => db.entryState(id))).toEqual([
+      { read: true, starred: true, revision: 2 }, { read: true, starred: false, revision: 1 }, { read: true, starred: false, revision: 1 },
+    ])
+    expect(outside.ids.every(id => !db.entryState(id)!.read)).toBe(true)
+    expect(() => state.undo('bulk-undo')).toThrow()
+    expect(events).toHaveBeenCalledExactlyOnceWith(null)
+    expect(events).toHaveReturnedWith(true)
+    expect(db.webhooks.history()).toEqual(deliveries)
+    const clocks = db.greaderDatabase.prepare('SELECT entry_id, state_revision, greader_modified_ms FROM entry_state WHERE feed_id = ?').all(fixture.feedId)
+    expect(clocks.map(row => row.greader_modified_ms)).toEqual(Array(3).fill(priorClock + 1))
+    await markRead(fixture.stream)
+    expect(db.greaderDatabase.prepare('SELECT entry_id, state_revision, greader_modified_ms FROM entry_state WHERE feed_id = ?').all(fixture.feedId)).toEqual(clocks)
+    expect(db.greaderDatabase.prepare('SELECT count(*) n FROM activity_events').get()!.n).toBe(before + 1)
+    expect(events).toHaveBeenCalledTimes(1)
+  } finally { remove() }
+})
+it('marks a label across overlapping folder memberships without double revisions', async () => {
+  const first = markReadFixture('folder-first'), shared = markReadFixture('folder-shared'), other = markReadFixture('folder-other')
+  addFolder('Bulk first', [first.feedId, shared.feedId])
+  addFolder('Bulk second', [shared.feedId, other.feedId])
+  await markRead(`${LABEL}Bulk first`)
+  for (const id of [...first.ids, ...shared.ids]) expect(db.entryState(id)).toMatchObject({ read: true, revision: 1 })
+  for (const id of other.ids) expect(db.entryState(id)).toMatchObject({ read: false, revision: 0 })
+})
+it('resolves virtual Uncategorized as feeds with no folder memberships', async () => {
+  const uncategorized = markReadFixture('uncategorized'), categorized = markReadFixture('categorized')
+  addFolder('Bulk categorized', [categorized.feedId])
+  await markRead(`${LABEL}Uncategorized`)
+  for (const id of uncategorized.ids) expect(db.entryState(id)).toMatchObject({ read: true, revision: 1 })
+  for (const id of categorized.ids) expect(db.entryState(id)).toMatchObject({ read: false, revision: 0 })
+})
+it('uses inclusive microsecond arrival cutoffs and exposes changes through contents, ot, nt and counts', async () => {
+  const fixture = markReadFixture('cutoff'), sql = db.greaderDatabase
+  fixture.ids.forEach((id, i) => sql.prepare('UPDATE entries SET first_seen_at = ? WHERE id = ?').run((i + 1) * 1000, id))
+  sql.prepare('UPDATE entry_state SET greader_modified_ms = 1000 WHERE feed_id = ?').run(fixture.feedId)
+  sql.prepare('UPDATE feeds SET greader_modified_ms = 1000 WHERE id = ?').run(fixture.feedId)
+  const count = async () => (await (await call('unread-count')).json()).unreadcounts.find(row => row.id === fixture.stream).count
+  const refs = async (filters: [string, string][]) => (await (await call('stream/items/ids', [['s', fixture.stream], ...filters])).json()).itemRefs
+  expect(await count()).toBe(3)
+  await markRead(fixture.stream, '1999999')
+  expect(fixture.ids.map(id => db.entryState(id)!.read)).toEqual([true, false, false])
+  await markRead(fixture.stream, '2000000')
+  expect(fixture.ids.map(id => db.entryState(id)!.read)).toEqual([true, true, false])
+  expect(await count()).toBe(1)
+  expect(await refs([['ot', '4']])).toHaveLength(2)
+  expect(await refs([['nt', '3']])).toHaveLength(1)
+  expect(await refs([['xt', `${STATE}read`]])).toHaveLength(1)
+  const contents = await (await call('stream/contents', [['s', fixture.stream], ['r', 'o']])).json()
+  expect(contents.items.map(item => item.categories.includes(`${STATE}read`))).toEqual([true, true, false])
+  // Above Number.MAX_SAFE_INTEGER: retain the exact microsecond boundary.
+  sql.prepare('UPDATE entries SET first_seen_at = ? WHERE id = ?').run(9007199254741, fixture.ids[2])
+  await markRead(fixture.stream, '9007199254740999')
+  expect(db.entryState(fixture.ids[2])!.read).toBe(false)
+  await markRead(fixture.stream, '9007199254741000')
+  expect(db.entryState(fixture.ids[2])!.read).toBe(true)
+}, 15000)
+it.each(['0', '000', undefined])('uses the current time for an arrival cutoff of %s', async ts => {
+  const fixture = markReadFixture('now-' + ts)
+  db.greaderDatabase.prepare('UPDATE entries SET first_seen_at = ? WHERE id = ?').run(Date.now() + 86400000, fixture.ids[2])
+  await markRead(fixture.stream, ts)
+  expect(fixture.ids.map(id => db.entryState(id)!.read)).toEqual([true, true, false])
+})
+
+it('accepts the Reeder T=x token only for authenticated same-origin mark-all-as-read', async () => {
+  const fixture = markReadFixture('reeder')
+  const fields: [string, string][] = [['s', fixture.stream], ['T', 'x']]
+  expect((await call('mark-all-as-read', fields, 'POST', { Authorization: '' })).status).toBe(401)
+  expect((await call('mark-all-as-read', fields, 'POST', { Origin: 'https://other.test' })).status).toBe(403)
+  expect((await call('edit-tag', [['i', '1'], ['a', STATE + 'read'], ['T', 'x']], 'POST')).status).toBe(403)
+  expect(fixture.ids.every(id => !db.entryState(id)!.read)).toBe(true)
+  const response = await call('mark-all-as-read', fields, 'POST')
+  expect(response.status).toBe(200)
+  expect(await response.text()).toBe('OK')
+  expect(fixture.ids.every(id => db.entryState(id)!.read)).toBe(true)
+})
+
+it('rejects unknown streams, malformed cutoffs, GET, missing Auth, bad T and cross-site writes without changes', async () => {
+  const sql = db.greaderDatabase
+  const before = sql.prepare('SELECT sum(read) n, sum(state_revision) revision FROM entry_state').get()
+  for (const stream of ['feed/99999999', `${LABEL}Missing bulk folder`, '']) {
+    const response = await call('mark-all-as-read', [['s', stream], ['T', token]], 'POST')
+    expect(response.status).toBe(404); expect(await response.json()).toEqual({ errors: ['Unknown stream.'] })
   }
-  expect(db.greaderDatabase.prepare('SELECT sum(read) n, sum(state_revision) revision FROM entry_state').get()).toEqual(before)
+  expect((await call('mark-all-as-read', [['s', STATE + 'starred'], ['T', token]], 'POST')).status).toBe(400)
+  for (const ts of ['', '-1', '1.5', 'NaN', '9223372036854775808']) {
+    expect((await call('mark-all-as-read', [['s', READING], ['ts', ts], ['T', token]], 'POST')).status).toBe(400)
+  }
+  expect((await call('mark-all-as-read', [['s', READING], ['T', token]], 'GET')).status).toBe(404)
+  expect((await call('mark-all-as-read', [['s', READING], ['T', token]], 'POST', { Authorization: '' })).status).toBe(401)
+  for (const fields of [[], [['T', 'bad']]] as [string, string][][]) {
+    const response = await call('mark-all-as-read', [['s', READING], ...fields], 'POST')
+    expect(response.status).toBe(403); expect(response.headers.get('x-reader-google-bad-token')).toBe('true')
+  }
+  expect((await call('mark-all-as-read', [['s', READING], ['T', token]], 'POST', { Origin: 'https://other.test' })).status).toBe(403)
+  expect(sql.prepare('SELECT sum(read) n, sum(state_revision) revision FROM entry_state').get()).toEqual(before)
+}, 15000)
+it('rolls back articles, clocks and activity when bookkeeping fails after the bulk update', async () => {
+  const fixture = markReadFixture('rollback'), sql = db.greaderDatabase
+  const snapshot = () => ({ articles: sql.prepare('SELECT entry_id, read, starred, state_revision, greader_modified_ms FROM entry_state').all(), activity: db.activity() })
+  const before = snapshot(), events = vi.fn(), remove = state.onStateChanged(events)
+  sql.exec(`CREATE TRIGGER fail_bulk_activity BEFORE INSERT ON activity_events WHEN new.origin = 'greader'
+    BEGIN SELECT RAISE(ABORT, 'Synthetic activity failure'); END`)
+  try {
+    const response = await call('mark-all-as-read', [['s', fixture.stream], ['T', token]], 'POST')
+    expect(response.status).toBe(503)
+    expect(snapshot()).toEqual(before)
+    expect(events).not.toHaveBeenCalled()
+  } finally { sql.exec('DROP TRIGGER fail_bulk_activity'); remove() }
+  await markRead(fixture.stream)
+  expect(fixture.ids.every(id => db.entryState(id)!.read)).toBe(true)
+})
+it('marks the reading list while preserving tombstones, hidden articles, stars and derived library state', async () => {
+  const fixture = markReadFixture('reading-list'), inactive = markReadFixture('inactive'), sql = db.greaderDatabase
+  sql.prepare('UPDATE feeds SET active = 0 WHERE id = ?').run(inactive.feedId)
+  sql.prepare('UPDATE entry_state SET starred = 1 WHERE entry_id = ?').run(fixture.ids[0])
+  sql.exec("INSERT INTO mute_filters(id, phrase, scope, created_at) VALUES ('bulk-mute', 'Hidden bulk fixture', 'all', '')")
+  sql.prepare("INSERT INTO muted_entries VALUES ('bulk-mute', ?)").run(fixture.ids[1])
+  db.transaction(() => {
+    sql.prepare('INSERT INTO retention_tombstones VALUES (?, ?, 1, 1)').run(fixture.ids[2], fixture.feedId)
+    sql.prepare('DELETE FROM entries WHERE id = ?').run(fixture.ids[2])
+  })
+  sql.exec(`INSERT INTO briefings(id, kind, window_start, cutoff, subject, html, text, status, token_hash, selection_json, created_at)
+    VALUES ('bulk-briefing', 'morning', '', '', 'Synthetic', '', '', 'ready', '', '{}', '');
+    INSERT INTO pulse_collections(id, headline, scope, created_at) VALUES ('bulk-pulse', 'Synthetic', 'all', '')`)
+  sql.prepare("INSERT INTO briefing_entries VALUES ('bulk-briefing', ?, 'news')").run(fixture.ids[0])
+  sql.prepare("INSERT INTO pulse_memberships(collection_id, entry_id, added_at) VALUES ('bulk-pulse', ?, '')").run(fixture.ids[0])
+  expect(db.briefingReadCounts('bulk-briefing').unreadCount).toBe(1)
+  expect(db.pulseCollections().find(c => c.id === 'bulk-pulse')!.sources[0].read).toBe(false)
+  const tombstones = sql.prepare('SELECT * FROM retention_tombstones').all()
+  await markRead(READING)
+  expect(db.entryState(fixture.ids[0])).toMatchObject({ read: true, starred: true, revision: 1 })
+  expect(db.entryState(fixture.ids[1])!.read).toBe(false)
+  expect(db.entryState(fixture.ids[2])).toBeNull()
+  expect(sql.prepare('SELECT * FROM retention_tombstones').all()).toEqual(tombstones)
+  expect(inactive.ids.every(id => !db.entryState(id)!.read)).toBe(true)
+  expect(db.briefingReadCounts('bulk-briefing').unreadCount).toBe(0)
+  expect(db.getBriefing('bulk-briefing')!.status).toBe('ready')
+  expect(db.pulseCollections().find(c => c.id === 'bulk-pulse')!.sources[0]).toMatchObject({ read: true, stateRevision: 1 })
+})
+it('rechecks app and global generations and API enablement inside the bulk transaction', () => {
+  const fixture = markReadFixture('revocation'), credential = db.auth.apps()[0]
+  const before = fixture.ids.map(id => db.entryState(id))
+  for (const change of [
+    'UPDATE auth_apps SET generation = generation + 1',
+    'UPDATE auth_meta SET generation = generation + 1',
+    'UPDATE greader_settings SET enabled = 0',
+  ]) {
+    expect(() => db.transaction(() => {
+      db.greaderDatabase.exec(change)
+      markReaderStreamRead(db, backend, { kind: 'feed', id: fixture.feedId }, undefined, credential)
+    })).toThrow(expect.objectContaining({ status: 401 }))
+  }
+  expect(fixture.ids.map(id => db.entryState(id))).toEqual(before)
 })
 it('invalidates web navigation after organization commits despite a failed listener', async () => {
   const transactionStates: boolean[] = []
@@ -355,6 +534,49 @@ it('hides article labels and rejects label changes for default app passwords', a
   expect(items.items.map(item => item.id)).toEqual([longId(4n), longId(3n)])
   expect(items.items.find(item => item.id === longId(3n)).categories).not.toContain(STATE + 'read')
 }, 30000)
+
+it('marks only members of an article label read with a label-enabled app password', async () => {
+  const { write } = await labelClient()
+  const fixture = markReadFixture('labeled'), label = LABEL + 'Bulk article label'
+  const number = db.greaderDatabase.prepare('SELECT arrival_sequence FROM entry_state WHERE entry_id = ?').get(fixture.ids[0])!.arrival_sequence
+  expect((await write('edit-tag', [['i', String(number)], ['a', label]])).status).toBe(200)
+  const denied = await call('mark-all-as-read', [['s', label], ['T', token]], 'POST')
+  expect(denied.status).toBe(404)
+  expect(await denied.json()).toEqual({ errors: ['Unknown stream.'] })
+  expect((await write('mark-all-as-read', [['s', label]])).status).toBe(200)
+  expect(fixture.ids.map(id => db.entryState(id))).toEqual([
+    { read: true, starred: false, revision: 1 },
+    { read: false, starred: false, revision: 0 },
+    { read: false, starred: false, revision: 0 },
+  ])
+})
+
+it.each(['rename', 'delete', 'disable labels'])('keeps the queued mark-read label identity across %s', async change => {
+  const { write } = await labelClient()
+  const fixture = markReadFixture('queued-' + change.replace(' ', '-')), sql = db.greaderDatabase
+  const name = 'Queued label ' + change, stream = LABEL + name
+  const number = sql.prepare('SELECT arrival_sequence FROM entry_state WHERE entry_id = ?').get(fixture.ids[0])!.arrival_sequence
+  expect((await write('edit-tag', [['i', String(number)], ['a', stream]])).status).toBe(200)
+  const id = String(sql.prepare('SELECT id FROM article_labels WHERE title = ?').get(name)!.id)
+  const run = GreaderPool.prototype.run
+  const queued = vi.spyOn(GreaderPool.prototype, 'run').mockImplementationOnce(function (this: GreaderPool, job, signal) {
+    if (change === 'delete') sql.prepare('DELETE FROM article_labels WHERE id = ?').run(id)
+    else renameLabel(sql, id, name + ' renamed')
+    addFolder(name, [fixture.feedId])
+    if (change === 'disable labels') sql.prepare('UPDATE auth_apps SET article_labels = 0 WHERE id = ?').run((job as { app: { id: string } }).app.id)
+    return run.call(this, job, signal)
+  })
+  try {
+    const response = await write('mark-all-as-read', [['s', stream]])
+    if (change === 'rename') {
+      expect(response.status).toBe(200)
+    } else {
+      expect(response.status).toBe(404)
+      expect(await response.json()).toEqual({ errors: ['Unknown stream.'] })
+    }
+    expect(fixture.ids.map(id => db.entryState(id)!.read)).toEqual([change === 'rename', false, false])
+  } finally { queued.mockRestore() }
+})
 
 it('rejects stale label renames and deletes after a folder takes the name', async () => {
   const { write } = await labelClient()
