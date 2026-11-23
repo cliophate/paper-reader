@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { Worker } from 'node:worker_threads'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION, FEED_OVERRIDE_VERSION } from '../src/server/auth-schema'
 import { PaperDatabase } from '../src/server/db'
@@ -123,10 +124,19 @@ const defaultPage = '<article><p>' + 'Default article paragraph. '.repeat(25) + 
 
 it('terminates the worker at its deadline and retries default article extraction', async () => {
   const warning = vi.fn()
-  const result = await extractWithOverrides({ kind: 'article', body: defaultPage, url: story },
-    { ...defaults, contentSelector: '.absent' }, warning, undefined, 1)
-  expect(warning).toHaveBeenCalledWith(expect.stringContaining('timed out'))
-  expect(result.contentHtml).toContain('Default article paragraph')
+  // Withhold the first task so even a warm worker must wait out the deadline.
+  const post = vi.spyOn(Worker.prototype, 'postMessage').mockImplementationOnce(() => {})
+  const terminate = vi.spyOn(Worker.prototype, 'terminate')
+  try {
+    const result = await extractWithOverrides({ kind: 'article', body: defaultPage, url: story },
+      { ...defaults, contentSelector: '.absent' }, warning, undefined, 1)
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('timed out'))
+    expect(terminate.mock.contexts).toContain(post.mock.contexts[0])
+    expect(result.contentHtml).toContain('Default article paragraph')
+  } finally {
+    post.mockRestore()
+    terminate.mockRestore()
+  }
 })
 
 it('returns default content and a preview warning for pages over the selector node limit', async () => {
