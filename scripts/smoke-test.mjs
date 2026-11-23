@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
+import { savedViewWriteFixture } from '../tests/fixtures/saved-view-writes.mjs'
 import assert from 'node:assert/strict'
 import { startOpenaiFixture } from '../tests/fixtures/openai-provider.mjs'
 import { spawn, spawnSync } from 'node:child_process'
@@ -24,6 +25,7 @@ const rows = [1, 2].map(n => ({
 }))
 const itemLookups = []
 let unresponsiveItem
+const viewWrites = savedViewWriteFixture()
 const fixture = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://fixture')
   const body = new URLSearchParams(await Array.fromAsync(req).then(chunks => Buffer.concat(chunks).toString()))
@@ -48,6 +50,7 @@ const fixture = http.createServer(async (req, res) => {
   }
   if (url.pathname.endsWith('/token')) return send('synthetic-edit-token')
   if (url.pathname.endsWith('/edit-tag')) {
+    if (body.get('r') === starTag) await viewWrites.unstar()
     for (const row of rows.filter(row => body.getAll('i').includes(row.id))) {
       if (body.get('a') && !row.categories.includes(body.get('a'))) row.categories.push(body.get('a'))
       if (body.get('r')) row.categories = row.categories.filter(tag => tag !== body.get('r'))
@@ -126,6 +129,16 @@ try {
   const page = (await request('/api/entries?kind=all&id=all&unread=0&q=compositor')).data
   assert.equal(page.items.length, 2)
   const id = page.items[0].id
+  await viewWrites.check(request, id, page.items[1].id)
+  const viewQuery = 'url:"' + page.items[0].url + '"'
+  const savedView = await request('/api/views', { title: 'One synthetic article', query: viewQuery })
+  assert.equal(savedView.status, 201)
+  const stream = { kind: 'view', id: savedView.data.id }
+  const viewPage = await request('/api/entries?kind=view&unread=0&id=' + stream.id)
+  assert.deepEqual(viewPage.data.items.map(item => item.id), [id])
+  const scoped = await request('/api/streams/preview-read', { stream })
+  assert.equal(scoped.data.count, Number(!page.items[0].read))
+
   const articleNumber = page.items[0].linkNumber
   assert(Number.isSafeInteger(articleNumber) && articleNumber > 0)
   // Simulate two cached articles imported before the enclosure migration.
@@ -262,10 +275,11 @@ try {
   assert.equal((await request(`/api/entries/number/${articleNumber}`)).data.entry.id, id)
   const remoteNavigation = (await request('/api/navigation')).data
   assert.deepEqual(remoteNavigation.folders.map(folder => folder.linkNumber), numberedNavigation.folders.map(folder => folder.linkNumber))
+  assert.deepEqual((await request('/api/entries?unread=0&q=mpositor')).data.items, [])
   const remoteSearch = (await request('/api/entries?kind=all&id=all&unread=0&q=compositor')).data
   assert.equal(remoteSearch.items.length, 2)
   const substring = await request('/api/entries?kind=all&id=all&unread=0&q=mposi%20thetic')
-  assert.deepEqual(substring.data.items.map(item => item.id), remoteSearch.items.map(item => item.id))
+  assert.deepEqual(substring.data.items, [])
   const operators = encodeURIComponent('is:starred folder:fixture (title:"synthetic compositor" OR author:absent) NOT absent')
   assert.deepEqual((await request('/api/entries?kind=all&id=all&unread=0&q=' + operators)).data.items.map(item => item.id), [id])
   assert.equal((await request('/api/entries/item', { id })).data.entry.id, id)

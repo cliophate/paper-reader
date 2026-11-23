@@ -13,7 +13,7 @@ function contains(value: string, needle: string) {
 export function usesFolder(node: SearchNode): boolean {
   if (node.kind === 'not') return usesFolder(node.child)
   if (node.kind === 'and' || node.kind === 'or') return node.children.some(usesFolder)
-  return node.kind === 'folder'
+  return node.kind === 'folder' || node.kind === 'folderid'
 }
 
 function articleTextIndex() {
@@ -29,7 +29,7 @@ function articleTextIndex() {
 export class ArticleSearchEvaluator {
   private index?: ReturnType<typeof articleTextIndex>
 
-  matches(root: SearchNode, entry: Entry, context: { folders?: string[]; fullContentText?: string; now?: number } = {}): boolean {
+  matches(root: SearchNode, entry: Entry, context: { folders?: string[]; folderIds?: string[]; fullContentText?: string; now?: number } = {}): boolean {
     let indexed = false
     const now = context.now ?? Date.now()
     const evaluate = (node: SearchNode): boolean => {
@@ -38,9 +38,13 @@ export class ArticleSearchEvaluator {
         case 'or': return node.children.some(evaluate)
         case 'not': return !evaluate(node.child)
         case 'state': return node.value === 'starred' ? entry.starred : entry.read === (node.value === 'read')
+        case 'minminutes': return entry.readingMinutes >= node.value
+        case 'maxminutes': return entry.readingMinutes <= node.value
         case 'before': return entry.timestamp < searchDate(node.value, now)
         case 'after': return entry.timestamp >= searchDate(node.value, now)
         case 'url': return contains(entry.url, node.value)
+        case 'feedid': return entry.feedId === node.value
+        case 'folderid': return Boolean(context.folderIds?.includes(node.value))
         case 'folder': return Boolean(context.folders?.some(title => contains(title, node.value)))
         case 'text':
           this.index ??= articleTextIndex()
@@ -57,14 +61,7 @@ export class ArticleSearchEvaluator {
   }
 
   remoteMatcher(query: ReturnType<typeof parseSearch>, now: number) {
-    if (query.bareTerms) {
-      const terms = query.bareTerms.map(term => term.toLocaleLowerCase())
-      return (entry: Entry) => {
-        const text = [entry.title, entry.feedTitle, entry.author, plainText(entry.contentHtml)].join('\n').toLocaleLowerCase()
-        return terms.every(term => text.includes(term))
-      }
-    }
-    return (entry: Entry, folders?: string[]) => this.matches(query.root, entry, { now, folders })
+    return (entry: Entry, folders?: string[], folderIds?: string[]) => this.matches(query.root, entry, { now, folders, folderIds })
   }
 
   close() { this.index?.db.close(); this.index = undefined }

@@ -3,6 +3,8 @@ import { MAX_DISPLAYED_SEARCH_IDS, searchHint as getSearchHint } from '../server
 import { ArticleNotes, Highlights, useAnnotations, usePassageRanges } from './components/Annotations'
 import { anchorPassage, passageText } from './passage'
 import { AccessSettings } from './components/AccessSettings'
+import { SavedViews } from './components/SavedViews'
+import { currentSearchQuery, savedViewQuery } from './savedViews'
 import { OrganizationSidebar } from './components/OrganizationSidebar'
 import { FeedMark } from './components/FeedMark'
 import type { SaveDestination } from '../shared/connections'
@@ -117,12 +119,14 @@ function Reader() {
   const [unreadOnly, setUnreadOnly] = useState(initialLocation.unreadOnly)
   const [query, setQuery] = useState(initialLocation.query)
   const searchHint = useMemo(() => getSearchHint(query), [query])
-  const [searchStream, setSearchStream] = useState<StreamRef>(initialLocation.searchStream || allStream)
+  const [selectedSearchStream, setSearchStream] = useState<StreamRef>(initialLocation.searchStream || allStream)
+  const viewQuery = stream.kind === 'view' ? savedViewQuery(navigation?.savedViews || [], stream.id) : undefined
   const [searchUnread, setSearchUnread] = useState(initialLocation.searchUnread || false)
   const [after, setAfter] = useState(initialLocation.after || '')
   const [before, setBefore] = useState(initialLocation.before || '')
   const dates = useMemo(() => ({ after, before: before && Number.isFinite(Date.parse(before)) ? new Date(Date.parse(before) + 86400000).toISOString() : '' }), [after, before])
   const [libraryMode, setLibraryMode] = useState<'stream' | 'recent' | 'offline'>(initialLocation.library || 'stream')
+  const searchStream = stream.kind === 'view' && libraryMode === 'stream' ? stream : selectedSearchStream
   const [linkedCollection, setLinkedCollection] = useState(initialLocation.view === 'pulse' && !initialLocation.collectionFilter ? initialLocation.collection : undefined)
   const [collectionFilter, setCollectionFilter] = useState<ReaderLocation['collectionFilter']>()
   const [pulseContext, setPulseContext] = useState<PulseContext | null>(() => savedPulseContext(initialLocation.collection))
@@ -224,7 +228,7 @@ function Reader() {
   const fullMode = selected ? preferences.value(`fullText:${selected.feedId}`) as FullTextMode : 'auto'
   const learnedFullText = !!selected && preferences.value(`learned:${selected.feedId}`) === 'on'
   const readerGeneration = useRef(0)
-  useLayoutEffect(() => { readerGeneration.current += 1 }, [view, stream.kind, stream.id, unreadOnly, query, libraryMode, searchStream.kind, searchStream.id, searchUnread, after, before, pulseContext?.id])
+  useLayoutEffect(() => { readerGeneration.current += 1 }, [view, stream.kind, stream.id, viewQuery, unreadOnly, query, libraryMode, searchStream.kind, searchStream.id, searchUnread, after, before, pulseContext?.id])
   const currentReader = useRef({ stream, selected, previousContinuation, entries, libraryMode })
   currentReader.current = { stream, selected, previousContinuation, entries, libraryMode }
   const selectedIndex = selected ? entries.findIndex(entry => entry.id === selected.id) : -1
@@ -302,6 +306,10 @@ function Reader() {
     setNavigation(snapshot.navigation)
     // Keep the selected article and history entry when labels or memberships change.
     setStream(current => {
+      if (current.kind === 'view') {
+        const view = snapshot.navigation.savedViews?.find(view => view.id === current.id)
+        return view && (view.title !== current.title || view.query !== current.viewQuery) ? { ...current, title: view.title, viewQuery: view.query } : current
+      }
       const title = current.kind === 'category' ? snapshot.navigation.folders.find(folder => folder.id === current.id)?.title
         : current.kind === 'feed' ? uniqueFeeds(snapshot.navigation).find(feed => feed.id === current.id)?.title : undefined
       return title && title !== current.title ? { ...current, title } : current
@@ -327,7 +335,7 @@ function Reader() {
   const loadEntries = useCallback(async (target = currentReader.current.stream, select: 'keep' | 'first' | 'last' = 'keep', background: boolean | 'replace-in-place' = false) => {
     const serial = ++requestSerial.current
     const source = query ? searchStream : target
-    const scope = JSON.stringify([libraryMode, source.kind, source.id, query ? searchUnread : unreadOnly && target.kind !== 'starred', query, query ? dates : {}])
+    const scope = JSON.stringify([libraryMode, source.kind, source.kind === 'view' ? [source.id, viewQuery] : source.id, query ? searchUnread : unreadOnly && target.kind !== 'starred', query, query ? dates : {}])
     setLoadingMore(false)
     if (!background) setLoading(true)
     try {
@@ -404,7 +412,7 @@ function Reader() {
     } finally {
       if (serial === requestSerial.current) setLoading(false)
     }
-  }, [stream.kind, stream.id, unreadOnly, query, notify, searchStream, searchUnread, dates, libraryMode])
+  }, [stream.kind, stream.id, viewQuery, unreadOnly, query, notify, searchStream, searchUnread, dates, libraryMode])
 
   const changeEntryOrder = async (order: 'newest' | 'oldest') => {
     if (savingOrder || order === entryOrder) return
@@ -612,7 +620,7 @@ function Reader() {
     const synced = () => {
       void loadNavigation().catch(() => {})
       void loadStatus().catch(() => {})
-      if (view === 'reader') void loadEntries(stream, 'keep', true)
+      if (view === 'reader') void loadEntries(stream, 'keep', stream.kind === 'view' ? 'replace-in-place' : true)
       setTopicsRefreshKey(current => current + 1)
     }
     const stateChanged = (event: MessageEvent) => {
@@ -622,17 +630,20 @@ function Reader() {
       const patch = change.operation === 'read' ? { read: true } : change.operation === 'unread' ? { read: false } : change.operation === 'star' ? { starred: true } : { starred: false }
       setEntries(current => current.map(entry => ids.has(entry.id) ? { ...entry, ...patch, stateRevision: change.revisions?.[entry.id] ?? entry.stateRevision } : entry))
       void loadNavigation().catch(() => {})
+      if (view === 'reader' && stream.kind === 'view') void loadEntries(stream, 'keep', 'replace-in-place')
       setTopicsRefreshKey(value => value + 1)
     }
     const navigationUpdated = () => { void loadNavigation().catch(() => {}) }
     const pulseUpdated = () => setTopicsRefreshKey(current => current + 1)
     events.addEventListener('pulse', pulseUpdated)
+    events.addEventListener('open', navigationUpdated)
     events.addEventListener('navigation', navigationUpdated)
     events.addEventListener('sync', synced)
     events.addEventListener('connections', synced)
     events.addEventListener('state', stateChanged as EventListener)
     return () => {
       events.removeEventListener('pulse', pulseUpdated)
+      events.removeEventListener('open', navigationUpdated)
       events.removeEventListener('navigation', navigationUpdated)
       events.removeEventListener('sync', synced)
       events.removeEventListener('connections', synced)
@@ -698,7 +709,7 @@ function Reader() {
 
   useEffect(() => {
     if (!pendingLocation) return
-    const needsNavigation = [pendingLocation.stream, pendingLocation.searchStream].some(source => source?.kind === 'feed' || source?.kind === 'category')
+    const needsNavigation = [pendingLocation.stream, pendingLocation.searchStream].some(source => source?.kind === 'feed' || source?.kind === 'category' || source?.kind === 'view')
     if (needsNavigation && !navigation) return
     const generation = readerGeneration.current
     let cancelled = false
@@ -736,7 +747,7 @@ function Reader() {
       setSelectedId(location.selectedId)
       setUnreadOnly(location.unreadOnly)
       setQuery(location.query)
-      setSearchStream(location.searchStream || allStream); setSearchUnread(location.searchUnread || false); setAfter(location.after || ''); setBefore(location.before || '')
+      setSearchStream(location.searchStream?.kind === 'view' ? allStream : location.searchStream || allStream); setSearchUnread(location.searchUnread || false); setAfter(location.after || ''); setBefore(location.before || '')
       setMobilePane(location.mobilePane)
       setPendingLocation(null)
       resolvingLocation.current = false
@@ -811,7 +822,12 @@ function Reader() {
 
   const openStream = useCallback((target: StreamRef) => {
     setLibraryMode('stream'); setPulseContext(null)
-    pushLocation({ view: 'reader', stream: target, selectedId: '', query: '', mobilePane: 'stories', library: 'stream', collection: undefined })
+    if (target.kind === 'view') {
+      setUnreadOnly(false)
+      setSearchUnread(false)
+      setAfter(''); setBefore('')
+    }
+    pushLocation({ ...(target.kind === 'view' && { unreadOnly: false, after: '', before: '' }), view: 'reader', stream: target, selectedId: '', query: '', mobilePane: 'stories', library: 'stream', collection: undefined })
     setView('reader')
     setStream(target)
     setSelectedId('')
@@ -819,6 +835,13 @@ function Reader() {
     setMobilePane('stories')
     requestAnimationFrame(() => listRef.current?.focus())
   }, [pushLocation])
+
+  useEffect(() => {
+    if (!pendingLocation && navigation?.savedViews && stream.kind === 'view' && viewQuery === undefined) {
+      notify('This saved view was deleted.')
+      openStream(allStream)
+    }
+  }, [navigation, pendingLocation, stream.kind, viewQuery, notify, openStream])
 
   const openLibrary = useCallback((mode: 'recent' | 'offline') => {
     setLibraryMode(mode)
@@ -1282,10 +1305,14 @@ function Reader() {
 
   const markAllRead = useCallback(async () => {
     if (libraryMode !== 'stream' || !online) { notify('Open a feed or search while connected to mark articles read.'); return }
-    if (query) {
+    if (query || stream.kind === 'view') {
       const generation = readerGeneration.current
-      try { const preview = await api.previewRead(searchStream, query, dates.after, dates.before); if (generation !== readerGeneration.current) return; setBulkPreview({ ...preview, label: `Search results in ${searchStream.title}` }) }
-      catch (error) { notify(error instanceof Error ? error.message : 'Could not preview this action') }
+      const source = query ? searchStream : stream
+      try {
+        const preview = await api.previewRead(source, query, query ? dates.after : '', query ? dates.before : '')
+        if (generation !== readerGeneration.current) return
+        setBulkPreview({ ...preview, label: source.kind === 'view' ? source.title : `Search results in ${source.title}` })
+      } catch (error) { notify(error instanceof Error ? error.message : 'Could not preview this action') }
       return
     }
     const generation = readerGeneration.current
@@ -1611,6 +1638,7 @@ function Reader() {
             <p>All caught up</p>
             <button onClick={() => changeUnreadOnly(false)}>Show all feeds</button>
           </div>}
+          <SavedViews navigation={navigation} active={view === 'reader' && libraryMode === 'stream' && stream.kind === 'view' ? stream.id : ''} online={online} onOpen={openStream} onChanged={loadNavigation} initialQuery={currentSearchQuery(query, searchStream, searchUnread, dates.after, dates.before)} />
           <OrganizationSidebar snapshot={organization} navigation={navigation} active={!query ? stream : null} unreadOnly={unreadOnly} online={online} onSnapshot={applyOrganizationSnapshot} onOpen={openStream} onMarkFeed={feed => void markFeedRead(feed)} onMarkFolder={folder => void markFolderRead(folder)} onManage={manageFeed} onAddFeed={() => { setSettingsFeedId(''); setSettingsFeedView('discover'); setSettingsSection('feeds'); setOverlays({ ...closedOverlays, settings: true }) }} />
           </div>
         </nav>
@@ -1630,12 +1658,12 @@ function Reader() {
         <div className="reader-status" role="status">{!online ? 'Offline. Saved articles are available below.' : (navigationError || statusError || syncError) ? `Sync needs attention: ${navigationError || statusError || syncError}` : lastSync ? `Last synced ${relativeDate(lastSync)}` : status.backend === 'standalone' ? 'Ready to fetch feeds' : 'Waiting for synchronization'}{(navigationError || statusError || syncError) && online && <button onClick={() => void refresh()}>Retry</button>}</div>
         {query && <div className="search-controls">
           {searchHint && <span id="search-hint" role="status">{searchHint}</span>}
-          <label>Search in<select aria-label="Search scope" value={searchStream.id} onChange={event => {
+          {stream.kind === 'view' ? <span>Search in {stream.title}</span> : <label>Search in<select aria-label="Search scope" value={searchStream.id} onChange={event => {
             const id = event.target.value
             const folder = navigation?.folders.find(item => item.id === id)
             const feed = uniqueFeeds(navigation).find(item => item.id === id)
             setSearchStream(id === 'starred' ? starredStream : folder ? { kind: 'category', id, title: folder.title } : feed ? { kind: 'feed', id, title: feed.title } : allStream)
-          }}><option value="all">All feeds</option><option value="starred">Starred</option>{navigation?.folders.map(folder => <option key={folder.id} value={folder.id}>{folder.title}</option>)}{uniqueFeeds(navigation).map(feed => <option key={feed.id} value={feed.id}>{feed.title}</option>)}</select></label>
+          }}><option value="all">All feeds</option><option value="starred">Starred</option>{navigation?.folders.map(folder => <option key={folder.id} value={folder.id}>{folder.title}</option>)}{uniqueFeeds(navigation).map(feed => <option key={feed.id} value={feed.id}>{feed.title}</option>)}</select></label>}
           <label>State<select value={searchUnread ? 'unread' : 'all'} onChange={event => setSearchUnread(event.target.value === 'unread')}><option value="all">Entire archive</option><option value="unread">Unread only</option></select></label>
           <label>From<input type="date" value={after} onChange={event => setAfter(event.target.value)} /></label><label>Through<input type="date" value={before} onChange={event => setBefore(event.target.value)} /></label>
           <button onClick={() => { setQuery(''); setAfter(''); setBefore('') }}>Clear search</button>
@@ -1779,7 +1807,7 @@ function Reader() {
       {overlays.help === 'search' && <Modal title="Search syntax" onClose={() => setOverlays(closedOverlays)}>
         <p>Words match prefixes. Use quotes for a phrase, like <code>"night sky"</code>.</p>
         <p>Use <code>OR</code> for alternatives and <code>-</code> or <code>NOT</code> to exclude. Try <code>(moon OR mars) -landing</code>.</p>
-        <p>Limit a search with <code>title:</code>, <code>author:</code>, <code>feed:</code>, <code>folder:</code> or <code>url:</code>. For example, <code>url:"example.org/wiki/Paper_(reader)"</code> matches that URL fragment. Filter by <code>is:read</code>, <code>is:unread</code> or <code>is:starred</code>.</p>
+        <p>Limit a search with <code>title:</code>, <code>author:</code>, <code>feed:</code>, <code>folder:</code> or <code>url:</code>. For example, <code>url:"example.org/wiki/Paper_(reader)"</code> matches that URL fragment. Filter by <code>is:read</code>, <code>is:unread</code> or <code>is:starred</code>. Use <code>minminutes:</code> and <code>maxminutes:</code> for reading time.</p>
         <p>Use <code>after:</code> or <code>before:</code> with a date like <code>2026-01-31</code> or a period like <code>7d</code>, <code>2w</code>, <code>3m</code> or <code>1y</code>.</p>
       </Modal>}
       {overlays.help === 'shortcuts' && <ShortcutHelp onSearchHelp={() => setOverlays({ ...closedOverlays, help: 'search' })} onClose={() => setOverlays(closedOverlays)} />}

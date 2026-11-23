@@ -73,6 +73,10 @@ export function readReaderLocation(input = window.location.pathname + window.loc
       location.stream = { kind: place === 'feed' ? 'feed' : 'category', id: '', title: '', linkNumber: number(parts[1]) }
       if ((parts.length === 4 || parts.length === 5) && parts.at(-2) === 'a') location.articleNumber = number(parts.at(-1))
     }
+  } else if (place === 'view' && number(parts[1]) && (parts.length === 2 || parts.length === 4 && parts[2] === 'a')) {
+    location.stream = { kind: 'view', id: parts[1], title: '' }
+    location.unreadOnly = params.get('unread') === '1'
+    if (parts.length === 4) location.articleNumber = number(parts[3])
   } else if (place === 'highlights' && parts.length === 1) location.view = 'highlights'
   else if (place === 'a' && parts.length === 2) location.articleNumber = number(parts[1])
   else if (place === 'collection' && [2, 4].includes(parts.length)) {
@@ -95,7 +99,7 @@ export function readReaderLocation(input = window.location.pathname + window.loc
   if (location.query) {
     // Old search links left `unread` out for all articles, so only an explicit `unread=1` limits a search.
     location.searchUnread = params.get('unread') === '1'
-    if (!location.searchStream && location.stream.kind === 'starred') location.searchStream = location.stream
+    if (!location.searchStream && ['starred', 'view'].includes(location.stream.kind)) location.searchStream = location.stream
   }
   for (const key of ['after', 'before'] as const) if (params.has(key)) location[key] = params.get(key)!
   return location
@@ -103,6 +107,10 @@ export function readReaderLocation(input = window.location.pathname + window.loc
 
 export function linkedStream(stream: StreamRef, links: ReaderLinks): StreamRef | undefined {
   if (stream.kind === 'all' || stream.kind === 'starred') return { kind: stream.kind, id: stream.kind, title: defaultTitle(stream.kind) }
+  if (stream.kind === 'view') {
+    const item = links.navigation?.savedViews?.find(view => view.id === stream.id)
+    return item && { kind: 'view', id: item.id, title: item.title, viewQuery: item.query }
+  }
   const items = stream.kind === 'category' ? links.navigation?.folders : [...(links.navigation?.uncategorized || []), ...(links.navigation?.folders.flatMap(folder => folder.feeds) || [])]
   const item = items?.find(item => stream.id ? item.id === stream.id : item.linkNumber === stream.linkNumber)
   return item ? { kind: stream.kind, id: item.id, title: item.title, linkNumber: item.linkNumber } : undefined
@@ -112,7 +120,7 @@ export async function resolveReaderLocation(input: ReaderLocation, links: Reader
   const location = { ...input }
   let notice = ''
   location.stream = linkedStream(input.stream, links) || { kind: 'all', id: 'all', title: 'All articles' }
-  if (!linkedStream(input.stream, links)) notice = `${input.stream.kind === 'feed' ? 'Feed' : 'Folder'} not found`
+  if (!linkedStream(input.stream, links)) notice = `${input.stream.kind === 'view' ? 'Saved view' : input.stream.kind === 'feed' ? 'Feed' : 'Folder'} not found`
   if (input.searchStream) {
     location.searchStream = linkedStream(input.searchStream, links)
     if (!location.searchStream) notice = 'Search source not found'
@@ -158,6 +166,7 @@ export function readerLocationUrl(location: ReaderLocation, links: ReaderLinks =
   else if (collectionNumber) path = `/collection/${collectionNumber}`
   else if (location.view === 'pulse') path = '/pulse'
   else if (location.library === 'recent' || location.library === 'offline') path = `/${location.library}`
+  else if (stream.kind === 'view') path = `/view/${stream.id}`
   else if (stream.kind === 'starred') path = '/starred'
   else if ((stream.kind === 'feed' || stream.kind === 'category') && stream.linkNumber) {
     const slug = readerSlug(stream.title)
@@ -168,7 +177,7 @@ export function readerLocationUrl(location: ReaderLocation, links: ReaderLinks =
     if (!collectionNumber && location.collection) params.set('collection', location.collection)
     if (location.collectionFilter) params.set('filter', location.collectionFilter)
   }
-  if (location.query && location.searchUnread) params.set('unread', '1')
+  if (location.query ? location.searchUnread : stream.kind === 'view' && location.unreadOnly) params.set('unread', '1')
   else if (!location.unreadOnly) params.set('unread', '0')
   if (location.query) {
     params.set('q', location.query)

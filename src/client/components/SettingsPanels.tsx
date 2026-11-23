@@ -107,7 +107,7 @@ export function FiltersSettings({ onOpenEntry, onChanged, notify, onMatchingChan
     finally { await load(); await onChanged(); setBusy(false) }
   }
   return <section className="settings-page filters-settings">
-    <header><h3>Article rules</h3><p>Use a search query to act on incoming articles. Hide keeps articles in your archive. Mark read and Star change reading state. Rules never discard articles.</p></header>
+    <header><h3>Article rules</h3><p>Use a search query to act on incoming articles. Hide keeps articles in your archive. Mark read and Star change reading state. Rules never discard articles. To browse matches without applying actions, create a saved view in the sidebar.</p></header>
     <form className="filter-form rule-form" onSubmit={add}>
       <label className="filter-phrase"><span>Search query</span><input disabled={busy} autoFocus placeholder={'title:"new episode" OR feed:podcast'} value={phrase} onChange={event => setPhrase(event.target.value)} /></label>
       <fieldset disabled={busy}><legend>Actions</legend>{ruleActions.map(([action, label]) =>

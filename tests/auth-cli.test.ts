@@ -1,5 +1,6 @@
 import { ARTICLE_LABELS_VERSION } from '../src/server/greader-schema'
 import { ENTRY_STATE_VERSION } from '../src/server/entry-state-schema.js'
+import { SAVED_VIEWS_VERSION } from '../src/server/saved-views.js'
 import { RULES_VERSION } from '../src/server/article-rules.js'
 import { ANNOTATIONS_VERSION } from '../src/server/annotations.js'
 import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION, FEED_OVERRIDE_VERSION } from '../src/server/auth-schema.js'
@@ -46,7 +47,7 @@ it('issues codes and recovers a running database without backend credentials or 
 it.each([13, 14])('upgrades schema %i through retention v14 to login v15 and preserves credentials on restart', async version => {
   database.close()
   const file = path.join(directory, 'paper.sqlite'), raw = new DatabaseSync(file)
-  raw.exec('DROP TABLE auth_meta; DROP TABLE auth_owner; DROP TABLE auth_setup; DROP TABLE auth_sessions; DROP TABLE auth_passkeys; DROP TABLE auth_challenges; DROP TABLE auth_apps; DROP TABLE auth_limits; DROP TABLE pulse_catch_ups')
+  raw.exec('DROP TABLE auth_meta; DROP TABLE auth_owner; DROP TABLE auth_setup; DROP TABLE auth_sessions; DROP TABLE auth_passkeys; DROP TABLE auth_challenges; DROP TABLE auth_apps; DROP TABLE auth_limits; DROP TABLE pulse_catch_ups; DROP TABLE saved_views')
   if (version === 13) {
     for (const table of ['retention_auto_read', 'retention_removals', 'retention_settings', 'retention_runs', 'retention_feeds', 'retention_present', 'retention_tombstones', 'retention_briefing_entries']) raw.exec(`DROP TABLE ${table}`)
     for (const index of ['article_aliases_entry_idx', 'article_fingerprints_entry_idx', 'article_cache_age_idx', 'article_reports_entry_idx', 'reading_progress_recent_idx']) raw.exec(`DROP INDEX ${index}`)
@@ -64,6 +65,10 @@ it.each([13, 14])('upgrades schema %i through retention v14 to login v15 and pre
   expect(upgraded.prepare('PRAGMA user_version').get()!.user_version).toBe(DATABASE_VERSION)
   expect(upgraded.prepare('PRAGMA integrity_check').get()!.integrity_check).toBe('ok')
   upgraded.close()
+  const viewsBackup = new DatabaseSync(file + '.before-saved-views-v' + SAVED_VIEWS_VERSION, { readOnly: true })
+  expect(viewsBackup.prepare('PRAGMA user_version').get()?.user_version).toBe(SAVED_VIEWS_VERSION - 1)
+  expect(viewsBackup.prepare("SELECT name FROM sqlite_master WHERE name='saved_views'").get()).toBeUndefined()
+  viewsBackup.close()
   const loginBackup = file + '.before-owner-login-v15'
   const backup = new DatabaseSync(loginBackup, { readOnly: true })
   expect(backup.prepare('PRAGMA user_version').get()!.user_version).toBe(14)
@@ -78,6 +83,7 @@ it.each([13, 14])('upgrades schema %i through retention v14 to login v15 and pre
     `paper.sqlite.before-article-rules-v${RULES_VERSION}`,
     'paper.sqlite.before-briefing-delivery-v20', `paper.sqlite.before-entry-state-v${ENTRY_STATE_VERSION}`, 'paper.sqlite.before-feed-icons-v18', `paper.sqlite.before-feed-maintenance-v${FEED_MAINTENANCE_VERSION}`, `paper.sqlite.before-feed-overrides-v${FEED_OVERRIDE_VERSION}`, 'paper.sqlite.before-greader-v16', 'paper.sqlite.before-miniflux-v17', 'paper.sqlite.before-owner-login-v15',
     `paper.sqlite.before-podcast-enclosures-v${ENCLOSURE_SCHEMA_VERSION}`, 'paper.sqlite.before-pulse-catch-ups-v19', `paper.sqlite.before-reading-preferences-v${READING_PREFERENCES_VERSION}`, ...(version === 13 ? ['paper.sqlite.before-retention-v14'] : []),
+    `paper.sqlite.before-saved-views-v${SAVED_VIEWS_VERSION}`,
     `paper.sqlite.before-story-choices-v${STORY_CHOICES_VERSION}`,
     `paper.sqlite.before-webhooks-v${WEBHOOK_SCHEMA_VERSION}`,
   ])

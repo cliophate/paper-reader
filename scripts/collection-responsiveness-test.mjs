@@ -136,6 +136,19 @@ try {
       await probe(); if (healthFailure) throw healthFailure
       console.log(`Search ${query} ${(performance.now() - started).toFixed(0)}ms; max health ${maxLatency.toFixed(0)}ms.`)
     }
+    const createView = await fetch(base + '/api/views', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Recent synthetic articles', query: 'title:synthetic after:7d' }),
+    })
+    assert.equal(createView.status, 201)
+    const { id: viewId } = await createView.json()
+    const viewCountStart = performance.now()
+    await Promise.all(Array.from({ length: 10 }, async () => {
+      const batch = await fetch(base + '/api/views/counts')
+      assert.equal(batch.status, 200)
+      assert.deepEqual((await batch.json())[viewId], { count: 1000, capped: true })
+    }))
+    await probe(); if (healthFailure) throw healthFailure
+    console.log(`Saved view unread count ${(performance.now() - viewCountStart).toFixed(0)}ms; max health ${maxLatency.toFixed(0)}ms.`)
     // Two absent fragments require 400,000 URL comparisons on this archive.
     const broadUrl = 'url:missing-one OR url:missing-two'
     const urlScan = await fetch(base + '/api/entries?q=' + encodeURIComponent(broadUrl))

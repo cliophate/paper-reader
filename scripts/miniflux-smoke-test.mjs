@@ -1,3 +1,4 @@
+import { savedViewWriteFixture } from '../tests/fixtures/saved-view-writes.mjs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
@@ -12,6 +13,7 @@ import { minifluxApi } from '../tests/fixtures/miniflux-api.mjs'
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'paper-miniflux-smoke-'))
 const api = minifluxApi()
 const webhookPosts = []
+const viewWrites = savedViewWriteFixture()
 const fixture = http.createServer(async (request, response) => {
   try {
     const body = Buffer.concat(await Array.fromAsync(request)).toString()
@@ -19,6 +21,7 @@ const fixture = http.createServer(async (request, response) => {
       webhookPosts.push({ path: request.url, article: JSON.parse(body).entry.id })
       response.writeHead(204); response.end(); return
     }
+    if (request.method === 'PUT' && request.url.endsWith('/entries') && JSON.parse(body).starred === false) await viewWrites.unstar()
     const result = await api.fetch(`http://fixture${request.url}`, { method: request.method, headers: request.headers, body: body || undefined })
     response.writeHead(result.status, Object.fromEntries(result.headers))
     response.end(Buffer.from(await result.arrayBuffer()))
@@ -92,6 +95,16 @@ try {
   const page = (await request('/api/entries?kind=all&id=all&unread=0')).data
   assert.equal(page.items.length, 3)
   const id = page.items[0].id
+  await viewWrites.check(request, id, page.items[1].id)
+  const viewQuery = 'url:"' + page.items[0].url + '"'
+  const savedView = await request('/api/views', { title: 'One synthetic article', query: viewQuery })
+  assert.equal(savedView.status, 201)
+  const stream = { kind: 'view', id: savedView.data.id }
+  const viewPage = await request('/api/entries?kind=view&unread=0&id=' + stream.id)
+  assert.deepEqual(viewPage.data.items.map(item => item.id), [id])
+  const scoped = await request('/api/streams/preview-read', { stream })
+  assert.equal(scoped.data.count, Number(!page.items[0].read))
+
   const rawId = Number(id.split(':').at(-1))
   assert.equal((await request('/api/entries/state', { ids: [id], operation: 'read' }, { Origin: 'https://untrusted.example.test' })).status, 403)
   for (const operation of ['read', 'star', 'star']) assert.equal((await request('/api/entries/state', { ids: [id], operation })).status, 200)

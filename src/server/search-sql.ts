@@ -32,6 +32,8 @@ function compile(node: SearchNode, now: number, positive: string[], urlRows?: Sq
       if (!urlRows) return { sql: `entry_state.${state}`, parameters: [] }
       return { sql: `entries.id IN (SELECT entry_id FROM entry_state WHERE ${state})`, parameters: [] }
     }
+    case 'minminutes': case 'maxminutes':
+      return { sql: 'entries.reading_minutes ' + (node.kind === 'minminutes' ? '>= ?' : '<= ?'), parameters: [node.value] }
     case 'before': case 'after':
       return { sql: 'entries.timestamp ' + (node.kind === 'before' ? '< ?' : '>= ?'), parameters: [searchDate(node.value, now)] }
     case 'url':
@@ -40,6 +42,10 @@ function compile(node: SearchNode, now: number, positive: string[], urlRows?: Sq
         sql: `entries.rowid IN (SELECT rowid FROM (${urlRows.sql}) WHERE checked_url_match(instr(lower(url), lower(?)) > 0))`,
         parameters: [...urlRows.parameters, node.value],
       }
+    case 'feedid':
+      return { sql: 'entries.feed_id = ?', parameters: [node.value] }
+    case 'folderid':
+      return { sql: 'entries.feed_id IN (SELECT feed_id FROM feed_folders WHERE folder_id=?)', parameters: [node.value] }
     case 'folder':
       return { sql: 'entries.feed_id IN (SELECT feed_id FROM feed_folders JOIN folders ON folders.id = folder_id WHERE instr(lower(folders.title), lower(?)) > 0)', parameters: [node.value] }
     case 'not': {

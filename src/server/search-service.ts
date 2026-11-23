@@ -1,3 +1,4 @@
+import type { ViewCount } from '../shared/saved-views.js'
 import { Worker } from 'node:worker_threads'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
@@ -6,11 +7,10 @@ import type { StreamRef } from './types.js'
 import { parseSearch, SearchLimitError } from './search-query.js'
 
 export type BulkSelection =
-  | { kind: 'rule' }
-  | { kind: 'preview'; withRevisions: boolean }
+  | { kind: 'rule' | 'view-count' }
+  | { kind: 'preview'; withRevisions: boolean; ids?: string[] }
   | { kind: 'relative'; anchorId: string; direction: 'above' | 'below'; snapshot?: string; displayedIds?: string[]; withRevisions: boolean }
-  | { kind: 'unread'; ids: string[] }
-type SelectionResult = { ids: string[]; count?: number; revisions?: Record<string, number> }
+type SelectionResult = { ids: string[]; count?: number; capped?: boolean; revisions?: Record<string, number> }
 
 export class SearchSnapshotError extends Error {}
 export class SearchUnavailableError extends Error {}
@@ -29,12 +29,15 @@ type WorkerMessage =
   | { id: number; type: 'result'; value: LocalEntryPage | SelectionResult }
   | { id: number; type: 'error'; error: string; failure?: 'snapshot' | 'limit' }
 
-// One worker and at most eight waiting requests, including while a cancelled
-// native SQLite call finishes. Never replace a worker before its exit event.
+// Search and bulk requests have eight waiting slots. Counts use a separate queue.
+// Never replace a worker before its exit event.
 export class SearchService {
   private worker?: Worker
   private active?: Job
   private queue: Job[] = []
+  private countQueue: Job[] = []
+  private countClock = ''
+  private counts = new Map<string, { key: string; value: Promise<ViewCount> }>()
   private nextId = 0
   private closed = false
   private retiring = false
@@ -50,13 +53,44 @@ export class SearchService {
     return this.enqueue(stream, options, selection, signal)
   }
 
+  async savedViewCounts(signal?: AbortSignal) {
+    const views = this.database.savedViews.list()
+    const clock = this.database.dataChangeClock()
+    if (clock !== this.countClock) {
+      this.countClock = clock
+      this.counts = new Map()
+    }
+    const counts = this.counts
+    const result: Record<string, ViewCount> = {}
+    for (const view of views) {
+      if (signal?.aborted) break
+      // Relative dates can change membership even while the database is idle.
+      const minute = /(?:before|after):"?\d+[dwmy]/i.test(view.query) ? Math.floor(Date.now() / 60000) : 0
+      const key = [view.revision, minute].join('/')
+      let cached = counts.get(view.id)
+      if (cached?.key !== key) {
+        const stream = { kind: 'view' as const, id: view.id, title: view.title, viewQuery: view.query }
+        const value = this.select(stream, { unreadOnly: true }, { kind: 'view-count' }).then(
+          ({ count, capped }) => ({ count: count!, capped: capped! }))
+        cached = { key, value }
+        counts.set(view.id, cached)
+      }
+      try { result[view.id] = await cached.value }
+      catch {
+        if (counts.get(view.id) === cached) counts.delete(view.id)
+      }
+    }
+    return result
+  }
+
   private enqueue(stream: StreamRef, options: PageOptions, selection: undefined, signal?: AbortSignal): Promise<LocalEntryPage>
   private enqueue(stream: StreamRef, options: PageOptions, selection: BulkSelection, signal?: AbortSignal): Promise<SelectionResult>
   private async enqueue(stream: StreamRef, options: PageOptions, selection?: BulkSelection, signal?: AbortSignal): Promise<LocalEntryPage | SelectionResult> {
     if (options.query) parseSearch(options.query)
     if (this.closed) return Promise.reject(new SearchUnavailableError('Search is shutting down.'))
     if (signal?.aborted) return Promise.reject(new SearchUnavailableError('Search cancelled.'))
-    if ((this.active || this.retiring) && this.queue.length >= 8) return Promise.reject(new SearchUnavailableError('Search is busy. Try again shortly.'))
+    const queue = selection?.kind === 'view-count' ? this.countQueue : this.queue
+    if ((this.active || this.retiring) && queue.length >= 8 && !(stream.kind === 'view' && selection?.kind === 'view-count')) return Promise.reject(new SearchUnavailableError('Search is busy. Try again shortly.'))
     return new Promise((resolve, reject) => {
       const job: Job = { id: ++this.nextId, stream, options, selection, resolve, reject, cancelled: false, cleanup: () => signal?.removeEventListener('abort', abort) }
       const abort = () => {
@@ -64,17 +98,22 @@ export class SearchService {
         job.cleanup()
         reject(new SearchUnavailableError('Search cancelled.'))
         if (this.active === job) this.retire()
-        else this.queue = this.queue.filter(candidate => candidate !== job)
+        else {
+          const index = queue.indexOf(job)
+          if (index >= 0) queue.splice(index, 1)
+        }
       }
       signal?.addEventListener('abort', abort, { once: true })
-      this.queue.push(job)
+      queue.push(job)
       this.pump()
     })
   }
 
   private pump() {
-    if (this.closed || this.retiring || this.active || !this.queue.length) return
-    const job = this.active = this.queue.shift()!
+    if (this.closed || this.retiring || this.active) return
+    const job = this.queue.shift() ?? this.countQueue.shift()
+    if (!job) return
+    this.active = job
     try {
       if (!this.worker) this.startWorker()
       this.worker!.postMessage({ type: 'search', id: job.id, stream: job.stream, options: job.options, selection: job.selection })
@@ -136,7 +175,7 @@ export class SearchService {
 
   async close() {
     this.closed = true
-    for (const job of this.queue.splice(0)) { job.cleanup(); job.reject(new SearchUnavailableError('Search is shutting down.')) }
+    for (const job of [...this.queue.splice(0), ...this.countQueue.splice(0)]) { job.cleanup(); job.reject(new SearchUnavailableError('Search is shutting down.')) }
     if (this.active) { this.active.cancelled = true; this.active.cleanup(); this.active.reject(new SearchUnavailableError('Search is shutting down.')) }
     this.retire()
     await this.exited

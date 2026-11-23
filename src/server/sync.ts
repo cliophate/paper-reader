@@ -80,10 +80,18 @@ export class BackendSynchronizer {
 
   async editEntries(ids: string[], operation: EntryStateOperation, origin = 'reader') {
     if (!ids.length) return
-    await this.exclusive(async () => {
+    await this.editSelectedEntries(() => ids, operation, origin)
+  }
+
+  editSelectedEntries(select: () => string[] | Promise<string[]>, operation: EntryStateOperation, origin: string) {
+    return this.exclusive(async () => {
       await this.ruleWrites
-      await this.backend.editEntries(ids, operation)
-      this.recordState(ids, operation, origin)
+      const ids = await select()
+      if (ids.length) {
+        await this.backend.editEntries(ids, operation)
+        this.recordState(ids, operation, origin)
+      }
+      return ids
     })
   }
 
