@@ -1,3 +1,4 @@
+import { expectMatchingEntryState } from './fixtures/entry-state.js'
 import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -361,4 +362,49 @@ it('rechecks feed and folder scope on each delivery attempt', async () => {
   await hooks.tick()
   expect(requests).toHaveLength(1)
   expect(db.webhooks.history()[0]).toMatchObject({ attempts: 2, state: 'skipped', error: expect.stringContaining('outside') })
+})
+
+it('runs query actions once on arrival and undoes the fields changed by an archive run', async () => {
+  const old = ingest('Science archive').results[0]
+  if (old.status !== 'resolved') throw new Error('Fixture identity failed')
+  const { target } = create({ events: ['save_entry'] })
+  const input = { query: 'title:science is:unread', actions: ['hide', 'read', 'star', 'notify'], targetId: target.id }
+  const id = db.rules.save(input)
+  const arrived = ingest('Science archive', 'Science arrival', 'Unrelated article').results[1]
+  if (arrived.status !== 'resolved') throw new Error('Fixture identity failed')
+  expect(db.entryState(old.id)).toMatchObject({ read: false, starred: false })
+  expect(db.entryState(arrived.id)).toMatchObject({ read: true, starred: true })
+  expectMatchingEntryState(db.greaderDatabase)
+  expect(db.rules.hidden(id, '').items.map(e => e.id)).toEqual([arrived.id])
+  db.commitLocalEntryState(backend, [arrived.id], 'unread')
+  ingest('Science archive', 'Science arrival')
+  expect(db.entryState(arrived.id)?.read).toBe(false)
+  await hooks.tick()
+  expect(requests).toHaveLength(1)
+  expect(JSON.parse(requests[0].body)).toMatchObject({ event_type: 'rule_entry', entry: { id: arrived.id } })
+
+  const archive = db.rules.save({ ...input, applyExisting: true })
+  await db.backfillMuteFilters()
+  await db.backfillMuteFilters()
+  await hooks.tick()
+  expect(requests).toHaveLength(3)
+  expect(db.rules.hidden(archive, '').items).toHaveLength(2)
+  const rule = db.muteFilters().find(rule => rule.id === archive)!
+  for (const token of rule.undoTokens) db.commitLocalUndo(backend, token)
+  expect(db.entryState(arrived.id)).toMatchObject({ read: false, starred: true })
+  expect(db.entryState(old.id)).toMatchObject({ read: false, starred: false })
+  db.deleteMuteFilter(archive)
+  expect(db.rules.hidden(id, '').items).toHaveLength(1)
+})
+
+it('applies a rule only to its target within the configured folder', async () => {
+  db.organization.apply(backend, db.organization.snapshot(backend).revision, [{ type: 'create-folder', title: 'Science' }])
+  const folderId = db.organization.snapshot(backend).navigation.folders[0].id
+  const { target } = create({ kind: 'ntfy', folderId, events: ['save_entry'] })
+  db.rules.save({ query: 'title:science', actions: ['notify'], targetId: target.id })
+  ingest('Science outside')
+  db.organization.apply(backend, db.organization.snapshot(backend).revision, [{ type: 'add-membership', feedId: feed, folderId }])
+  ingest('Science outside', 'Science inside')
+  await hooks.tick()
+  expect(requests.map(r => r.body.split('\n')[0])).toEqual(['Science inside'])
 })

@@ -301,7 +301,7 @@ export class FreshRssClient implements ReaderBackend {
     return result
   }
 
-  async editEntries(ids: string[], operation: EntryStateOperation) {
+  async editEntries(ids: string[], operation: EntryStateOperation, { retry } = { retry: true }) {
     if (!ids.length) return
     const token = await this.getEditToken()
     for (let offset = 0; offset < ids.length; offset += 500) {
@@ -312,7 +312,7 @@ export class FreshRssClient implements ReaderBackend {
       if (operation === 'star') body.append('a', STARRED)
       if (operation === 'unstar') body.append('r', STARRED)
       body.append('T', token)
-      const response = await this.request('/reader/api/0/edit-tag', { method: 'POST', body })
+      const response = await this.request('/reader/api/0/edit-tag', { method: 'POST', body }, retry)
       const text = (await response.text()).trim()
       if (text !== 'OK') throw new Error(`FreshRSS rejected edit operation ${operation}`)
     }

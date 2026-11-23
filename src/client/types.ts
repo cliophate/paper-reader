@@ -125,16 +125,7 @@ export interface ActivityRecord {
   details: Record<string, unknown>
 }
 
-export interface MuteFilter {
-  id: string
-  phrase: string
-  scope: 'title' | 'content' | 'any'
-  feedId: string
-  feedTitle: string
-  matchCount: number
-  matching: boolean
-  createdAt: string
-}
+export type { ArticleRule as MuteFilter } from '../shared/article-rules'
 
 export interface ArticleReport {
   id: string

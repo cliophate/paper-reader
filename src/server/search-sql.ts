@@ -8,19 +8,23 @@ export function textMatch(node: Extract<SearchNode, { kind: 'text' }>): string {
 type SqlPredicate = { sql: string; parameters: Array<string | number> }
 type Expression = { match: string } | SqlPredicate
 
-function predicate(expression: Expression) {
+function predicate(expression: Expression, batch = false) {
   if ('sql' in expression) return expression
+  if (batch) return {
+    sql: 'entries.rowid IN (SELECT rowid FROM rule_words WHERE rule_words MATCH ?)',
+    parameters: [expression.match],
+  }
   return {
     sql: 'entries.id IN (SELECT search.entry_id FROM entries_fts JOIN entry_search_rows search ON search.id = entries_fts.rowid WHERE entries_fts MATCH ?)',
     parameters: [expression.match],
   }
 }
 
-function compile(node: SearchNode, now: number, positive: string[], urlRows: SqlPredicate, negated = false): Expression {
+function compile(node: SearchNode, now: number, positive: string[], urlRows?: SqlPredicate, negated = false): Expression {
   switch (node.kind) {
     case 'text': {
       const match = textMatch(node)
-      if (!negated) positive.push(match)
+      if (!negated || !urlRows) positive.push(match)
       return { match }
     }
     case 'state':
@@ -28,6 +32,7 @@ function compile(node: SearchNode, now: number, positive: string[], urlRows: Sql
     case 'before': case 'after':
       return { sql: 'entries.timestamp ' + (node.kind === 'before' ? '< ?' : '>= ?'), parameters: [searchDate(node.value, now)] }
     case 'url':
+      if (!urlRows) return { sql: 'instr(lower(entries.url), lower(?)) > 0', parameters: [node.value] }
       return {
         sql: `entries.rowid IN (SELECT rowid FROM (${urlRows.sql}) WHERE checked_url_match(instr(lower(url), lower(?)) > 0))`,
         parameters: [...urlRows.parameters, node.value],
@@ -35,19 +40,29 @@ function compile(node: SearchNode, now: number, positive: string[], urlRows: Sql
     case 'folder':
       return { sql: 'entries.feed_id IN (SELECT feed_id FROM feed_folders JOIN folders ON folders.id = folder_id WHERE instr(lower(folders.title), lower(?)) > 0)', parameters: [node.value] }
     case 'not': {
-      const child = predicate(compile(node.child, now, positive, urlRows, !negated))
+      const child = predicate(compile(node.child, now, positive, urlRows, !negated), !urlRows)
       return { sql: 'NOT (' + child.sql + ')', parameters: child.parameters }
     }
     case 'and': case 'or': {
       const children = node.children.map(child => compile(child, now, positive, urlRows, negated))
       const operator = node.kind === 'and' ? ' AND ' : ' OR '
-      if (children.every(child => 'match' in child) && children.length) {
-        return { match: '(' + children.map(child => child.match).join(operator) + ')' }
-      }
-      const parts = children.map(predicate)
+      const text = children.filter(child => 'match' in child)
+      const combined = { match: '(' + text.map(child => child.match).join(operator) + ')' }
+      if (text.length && text.length === children.length) return combined
+      // Within a rule batch, siblings on either side of a metadata term can
+      // still share one FTS lookup when they have the same boolean operator.
+      const parts = !urlRows && text.length
+        ? [predicate(combined, true), ...children.filter(child => 'sql' in child)]
+        : children.map(child => predicate(child, !urlRows))
       return { sql: parts.length ? '(' + parts.map(part => part.sql).join(operator) + ')' : '1', parameters: parts.flatMap(part => part.parameters) }
     }
   }
+}
+
+export function compileRuleSearch(root: SearchNode, now = Date.now()) {
+  const words: string[] = []
+  const query = predicate(compile(root, now, words), true)
+  return { ...query, usesText: words.length > 0 }
 }
 
 export function compileSearch(root: SearchNode, ranked: boolean, now = Date.now(),

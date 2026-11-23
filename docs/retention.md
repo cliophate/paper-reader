@@ -46,7 +46,7 @@ These rules also cover references stored as JSON or URLs.
 | `retention_auto_read` | Record the first retention auto-read time and later unread exemption. Cascade with the article. |
 | `retention_removals` | Keep the arrival number, removal time, feed ID and title for one year. No article body or URL. |
 | `entry_search_rows`, `entries_fts` | Existing indexed triggers remove search data in the deletion transaction. |
-| `headline_cache`, `pulse_scanned`, `coverage_cluster_entries`, `briefing_considered`, `muted_entries` | Derived data cascades with the article. It does not protect it. `coverage_clusters` and mute rules remain. |
+| `headline_cache`, `pulse_scanned`, `coverage_cluster_entries`, `briefing_considered`, `muted_entries`, `rule_remote_state` | Derived data cascades with the article. It does not protect it. `coverage_clusters` and article rules remain. |
 | `coverage_feedback`, `identity_conflicts` | Keep historical metadata. Candidate IDs may refer to deleted articles. |
 | `undo_actions.entry_ids_json` | Keep the existing expiring token. Undo cannot restore a deleted article or bypass revision checks. |
 | `search_pages.ids_json` | Keep short-lived search snapshots. Page hydration skips missing articles. |

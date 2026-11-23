@@ -16,6 +16,11 @@ port.on('message', async (message: { type: string; id: number; stream: StreamRef
     if (selection) {
       let result
       switch (selection.kind) {
+        case 'rule': {
+          const ids = database.matchingEntryIds(stream, { ...options, includeMuted: true })
+          result = { ids: ids.slice(0, 8), count: ids.length }
+          break
+        }
         case 'preview':
           result = database.previewUnread(stream, options, selection.withRevisions)
           break

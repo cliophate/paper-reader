@@ -52,7 +52,8 @@ export class LocalStateService {
 
   undo(token: string): LocalStateChange {
     const change = this.db.commitLocalUndo(this.backendId, token)
-    this.emit(change)
+    if (change.restoredBoth) this.emitFields(change, { read: false, starred: false })
+    else this.emit(change)
     return change
   }
 

@@ -1,3 +1,4 @@
+import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import { archivedBackup } from './fixtures/migration-backup.js'
 import { dropEntryState, expectMatchingEntryState } from './fixtures/entry-state.js'
 import { ENTRY_STATE_VERSION } from '../src/server/entry-state-schema.js'
@@ -39,7 +40,7 @@ describe('Paper read model', () => {
     const arrival = sql.prepare("SELECT sequence FROM article_arrivals WHERE entry_id = 'keep'").get()!.sequence
     database.close()
     database = new PaperDatabase(file)
-    expect(database.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(ENTRY_STATE_VERSION)
+    expect(database.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
     expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
     const prior = new DatabaseSync(backup, { readOnly: true })
     try {
@@ -65,6 +66,7 @@ describe('Paper read model', () => {
     database = new PaperDatabase(file)
     expectMatchingEntryState(database.greaderDatabase)
     expect(fs.readdirSync(directory).filter(name => name.includes('.before-entry-state'))).toHaveLength(1)
+    expect(fs.readdirSync(directory).filter(name => name.includes('.before-article-rules'))).toHaveLength(1)
   })
 
   it('replaces an interrupted backup and archives the last complete copy on retry', () => {

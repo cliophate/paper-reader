@@ -23,7 +23,8 @@ If Paper cannot verify membership, the delivery log shows why it skipped the sen
   the untagged destinations in the saved configuration. [Apprise API tag handling](https://github.com/caronc/apprise-api#plain-text-messages-and-headers)
 
 Only signed webhooks receive new articles. All three services can receive
-stars and manual sends. Open **Article options > Send to webhook** to queue
+stars, manual sends and rule notifications. Choose **Notify** and a target in
+**Settings > Article rules**. The target's feed or folder scope also applies to the rule. Open **Article options > Send to webhook** to queue
 the selected article for every matching manual target. **Send test** queues
 a sample without any article data. To change a destination URL or push
 credential, add a replacement target and remove the old one. Removal deletes
@@ -47,10 +48,10 @@ The event names and the single-entry and multiple-entry shapes follow the
 
 | Field | JSON type | Content |
 | --- | --- | --- |
-| `event_type` | string | `new_entries`, `starred_entry`, `save_entry` or `test` |
+| `event_type` | string | `new_entries`, `starred_entry`, `save_entry`, `rule_entry` or `test` |
 | `delivery_id` | string | Stable across retries of this delivery |
 | `entries` | array of article objects | Present for `new_entries` |
-| `entry` | article object | Present for `starred_entry` and manual `save_entry` |
+| `entry` | article object | Present for `starred_entry`, `save_entry` and `rule_entry` |
 
 Each article contains string fields `id`, `feed_id`, `title` and `url`.
 Paper takes a snapshot when it queues the event. IDs and titles have a

@@ -73,7 +73,7 @@ export interface ReaderBackend extends EntrySource {
   importPage?(options: ImportPageOptions): Promise<EntryPage>
   applyFeedCommand?(command: Extract<OrganizationCommand, { type: 'rename-feed' | 'move-feed' | 'unsubscribe' }>): Promise<void>
   // Set the requested state. Repeating an operation must not toggle it.
-  editEntries(ids: string[], operation: EntryStateOperation): Promise<void>
+  editEntries(ids: string[], operation: EntryStateOperation, options?: { retry: boolean }): Promise<void>
   addFeed(url: string, title?: string, folder?: string): Promise<void>
   editFeed(id: string, title: string, folder: string, currentFolder: string): Promise<void>
   removeFeed(id: string): Promise<void>

@@ -178,6 +178,32 @@ See [Miniflux setup and behavior](docs/miniflux.md).
 To use a different local port, change `PAPER_PORT` and `PUBLIC_URL` in `.env`.
 For access from other devices, follow the [remote access guide](docs/access.md).
 
+## Article rules
+
+Open **Settings > Article rules** and enter a search such as
+`title:"weekly roundup" -feed:science`. Choose **Hide**, **Mark read**, **Star**
+or **Notify**. You can combine actions. Notify uses a target from
+**Reading & connections > Webhooks and push notifications**.
+
+Choose **Preview matches** to see the count and examples from your Paper archive.
+By default, the rule runs once when Paper first imports each article. Select
+**Also apply to existing matches** before saving to include your archive.
+The scan uses each article's state when it reaches it.
+Paper sends rule read and star changes to FreshRSS and Miniflux once.
+If a write goes unconfirmed, Settings > Activity shows the rule and article.
+The next sync picks up the upstream state.
+
+Hide removes matches from Paper's local lists. Open the hidden count beside a
+rule to read its matches. Starred matches also appear in Starred. Removing the
+rule reveals articles unless another rule still hides them. Removing a rule
+keeps its read and star changes. In standalone mode, **Undo state changes**
+can reverse each archive batch for one hour. If an article in a batch has
+changed since the rule ran, Paper leaves that batch alone. Notifications already
+sent cannot be recalled. Article deletion belongs to retention settings.
+
+Existing mute filters keep matching the same literal phrases and feeds.
+For query examples, see [search syntax](docs/search-index.md#search-syntax).
+
 ## Reading preferences
 
 In source builds after 0.2.0-alpha.3, open **Settings > Reading & connections**

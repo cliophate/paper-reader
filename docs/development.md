@@ -161,6 +161,20 @@ and another took 279.70 seconds for 1,000,000. Both timings include the backup
 and end when coordinated startup returns. The source databases occupied
 2.83 GiB and 14.13 GiB respectively.
 
+Schema v31 adds article rules. Paper saves `paper.sqlite.before-article-rules-v31`
+before upgrading. Existing mute filters become Hide rules and keep their IDs,
+substring matching, feed scope, hidden articles and backfill checkpoints.
+New rules use the search parser. Ingestion evaluates all queries against the
+incoming state before applying actions. Archive scans advance a durable cursor
+in batches of 64. Paper sends each rule read or star change to FreshRSS or
+Miniflux once. Settings > Activity lists unconfirmed writes by rule and article
+number. Each sync reconciles local state even while a rule write is pending.
+
+To roll back v31, stop Paper and preserve the data directory. In a separate
+copy, restore the pre-upgrade backup as `paper.sqlite` and remove the newer
+WAL and SHM files before starting the previous build. Restoring SQLite leaves
+changes already sent to a remote reader or notification target in place.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh
@@ -212,6 +226,8 @@ Settings polls every two seconds while work is pending. One runner scans 256 row
 at a time with the ingestion matcher, outside write transactions. Preview uses the
 existing timestamp/id indexes, applies feed scope first, and yields between batches
 until 10,240 rows or about one second. Incomplete counts are lower bounds.
+It also times 1,000 arrivals with and without 50 rules of 24 OR terms and
+probes the HTTP health endpoint during each import.
 The script retains its synthetic database and results in a new temporary directory.
 Pass an optional path to a baseline module exporting `PaperDatabase` to compare it.
 

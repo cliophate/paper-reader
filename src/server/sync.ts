@@ -12,6 +12,8 @@ export class BackendSynchronizer {
   private stopped = false
   private running: Promise<void> | null = null
   private queue: Promise<void> = Promise.resolve()
+  private snapshotRevision = 0
+  private ruleWrites: Promise<void> = Promise.resolve()
   private timer: NodeJS.Timeout | null = null
   private stateListeners = new Set<(change: { ids: string[]; operation: EntryStateOperation } | null) => void>()
 
@@ -56,6 +58,7 @@ export class BackendSynchronizer {
     this.timer = null
     await this.queue
     await this.running
+    await this.ruleWrites
   }
 
   syncNow(origin = 'manual'): Promise<void> {
@@ -78,17 +81,51 @@ export class BackendSynchronizer {
   async editEntries(ids: string[], operation: EntryStateOperation, origin = 'reader') {
     if (!ids.length) return
     await this.exclusive(async () => {
+      await this.ruleWrites
       await this.backend.editEntries(ids, operation)
-      this.db.editLocalEntryState(ids, operation)
-      this.db.recordActivity({
-        kind: 'state',
-        origin,
-        summary: stateActivitySummary(operation, ids.length),
-        count: ids.length,
-        details: { operation, ids: ids.slice(0, 30) },
-      })
-      this.stateChanged({ ids, operation })
+      this.recordState(ids, operation, origin)
     })
+  }
+
+  private recordState(ids: string[], operation: EntryStateOperation, origin: string, applyLocally = true) {
+    if (applyLocally) this.db.editLocalEntryState(ids, operation)
+    this.db.recordActivity({
+      kind: 'state',
+      origin,
+      summary: stateActivitySummary(operation, ids.length),
+      count: ids.length,
+      details: { operation, ids: ids.slice(0, 30) },
+    })
+    if (applyLocally) this.stateChanged({ ids, operation })
+  }
+
+  async flushRuleState() {
+    // Start alongside reconciliation, but preserve ordering with manual writes.
+    const { writes } = await this.exclusive(async () => ({ writes: this.startRuleWrites() }))
+    await writes
+  }
+
+  private startRuleWrites() {
+    const writes = this.ruleWrites.then(() => this.writeRuleState())
+    this.ruleWrites = writes.catch(() => console.error('Paper could not record a rule state change.'))
+    return writes
+  }
+
+  private async writeRuleState() {
+    for (const operation of ['read', 'star'] as const) {
+      while (!this.stopped) {
+        const { ids, events } = this.db.rules.takeRemote(operation, this.backendName)
+        if (!ids.length) break
+        const revision = this.snapshotRevision
+        try { await this.backend.editEntries(ids, operation, { retry: false }) }
+        catch (error) { this.db.rules.failRemote(events, error); continue }
+        this.db.transaction(() => {
+          // A newer upstream snapshot takes precedence over a late acknowledgement.
+          this.recordState(ids, operation, 'rule', revision === this.snapshotRevision)
+          this.db.rules.confirmRemote(events)
+        })
+      }
+    }
   }
 
   // A resolved result confirms the remote add. A later local refresh failure
@@ -256,6 +293,7 @@ export class BackendSynchronizer {
       })
       this.db.checkpointWalIfLarge()
       for (const listener of this.syncListeners) listener(completedAt)
+      void this.startRuleWrites()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.db.setSyncValue('last_sync_error', message.slice(0, 1000))
@@ -318,7 +356,7 @@ export class BackendSynchronizer {
     ])]
     for (let offset = 0; offset < ids.length; offset += 100) {
       const entries = await this.backend.entriesByIds(ids.slice(offset, offset + 100))
-      this.db.upsertEntries(entries)
+      await this.db.upsertEntriesInChunks(entries)
     }
     this.db.clearArticleCache()
     this.db.setSyncValue(SOURCE_CONTENT_MARKER, 'true')
@@ -329,7 +367,7 @@ export class BackendSynchronizer {
     const seen = new Set<string>()
     while (true) {
       const page = await this.backend.entriesPage(ALL, { unreadOnly: false, limit: 250, continuation })
-      this.db.upsertEntries(page.items)
+      await this.db.upsertEntriesInChunks(page.items)
       const next = page.continuation
       if (!next || next === continuation || seen.has(next)) {
         this.db.setSyncValue('backfill_continuation', '')
@@ -352,7 +390,7 @@ export class BackendSynchronizer {
     while (true) {
       const page = await this.backend.entriesPage(ALL, { unreadOnly: false, limit: pageSize, after, continuation })
       const currentItems = page.items.filter(entry => (entry.crawledAt || entry.timestamp) >= after.getTime())
-      this.db.upsertEntries(currentItems)
+      await this.db.upsertEntriesInChunks(currentItems)
       const reachedWindowStart = page.items.some(entry => (entry.crawledAt || entry.timestamp) < after.getTime())
       if (page.items.length < pageSize || reachedWindowStart || !page.continuation || page.continuation === continuation || seen.has(page.continuation)) {
         return
@@ -367,7 +405,9 @@ export class BackendSynchronizer {
       this.backend.entryIds(ALL, true),
       this.backend.entryIds(STARRED, false),
     ])
-    return { remoteUnread: unreadIds.length, ...this.db.reconcileEntryState(unreadIds, starredIds) }
+    const changes = this.db.reconcileEntryState(unreadIds, starredIds)
+    this.snapshotRevision++
+    return { remoteUnread: unreadIds.length, ...changes }
   }
 
   private async pullNavigation() {

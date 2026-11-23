@@ -77,8 +77,8 @@ export class MinifluxClient implements ReaderBackend {
     this.account = minifluxIdentity(this.baseUrl, numericId(me.id))
   }
 
-  private async request(path: string, method: 'GET' | 'PUT' | 'POST' | 'DELETE' = 'GET', body?: JsonObject, missing = false, signal?: AbortSignal): Promise<unknown> {
-    const retryable = method === 'GET' || method === 'PUT' && path === 'v1/entries'
+  private async request(path: string, method: 'GET' | 'PUT' | 'POST' | 'DELETE' = 'GET', body?: JsonObject, missing = false, signal?: AbortSignal, retry = true): Promise<unknown> {
+    const retryable = retry && (method === 'GET' || method === 'PUT' && path === 'v1/entries')
     for (let attempt = 0; ; attempt++) {
       signal?.throwIfAborted()
       const retryDelay = this.retryAfterUntil - Date.now()
@@ -337,14 +337,14 @@ export class MinifluxClient implements ReaderBackend {
     return result
   }
 
-  async editEntries(ids: string[], operation: EntryStateOperation) {
+  async editEntries(ids: string[], operation: EntryStateOperation, { retry } = { retry: true }) {
     const unique = [...new Set(ids)], upstreamIds = unique.map(id => this.upstreamId(id, 'entry'))
     if (!['read', 'unread', 'star', 'unstar'].includes(operation)) throw new BackendValidationError('Choose a valid state operation')
     for (let offset = 0; offset < upstreamIds.length; offset += 500) {
       const body: JsonObject = { entry_ids: upstreamIds.slice(offset, offset + 500) }
       if (operation === 'read' || operation === 'unread') body.status = operation
       else body.starred = operation === 'star'
-      await this.request('v1/entries', 'PUT', body)
+      await this.request('v1/entries', 'PUT', body, false, undefined, retry)
     }
   }
 

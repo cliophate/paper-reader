@@ -262,6 +262,37 @@ describe('Miniflux state and subscriptions', () => {
 })
 
 describe('native change synchronization', () => {
+  it('sends a rule PUT once when Miniflux applies it but the response is lost', async () => {
+    const synchronizer = sync()
+    database!.rules.save({ query: 'title:"Synthetic article 2"', actions: ['star'] })
+    vi.mocked(fetch).mockImplementation(async (url, options) => {
+      const response = await fixture.fetch(url, options)
+      if (options?.method === 'PUT') throw new Error('Synthetic lost acknowledgement')
+      return response
+    })
+    await synchronizer.syncNow()
+    await synchronizer.flushRuleState()
+    expect(fixture.entries[1].starred).toBe(true)
+    fixture.entries[1].starred = false
+    await synchronizer.syncNow()
+    await synchronizer.flushRuleState()
+    expect(fixture.calls.filter(call => call.method === 'PUT')).toHaveLength(1)
+    expect(database!.entryState(id('entry', 2))?.starred).toBe(false)
+  })
+
+  it('writes rule actions through the native API once per imported article', async () => {
+    const synchronizer = sync()
+    database!.rules.save({ query: 'title:"Synthetic article 2" is:unread', actions: ['read', 'star', 'hide'] })
+    await synchronizer.syncNow()
+    await synchronizer.flushRuleState()
+    expect(fixture.entries[1]).toMatchObject({ status: 'read', starred: true })
+    expect(database!.localEntry(id('entry', 2))).toMatchObject({ read: true, starred: true })
+    await synchronizer.editEntries([id('entry', 2)], 'unstar')
+    await synchronizer.syncNow()
+    expect(fixture.entries[1].starred).toBe(false)
+    expect(database!.muteFilters()[0].matchCount).toBe(1)
+  })
+
   it('revisits content-only edits in bounded pages and resumes the sweep after restart', async () => {
     fixture = minifluxApi({ size: 751 }); vi.mocked(fetch).mockImplementation(fixture.fetch)
     const synchronizer = sync()

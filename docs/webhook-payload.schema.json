@@ -5,7 +5,7 @@
   "required": ["event_type", "delivery_id"],
   "properties": {
     "delivery_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
-    "event_type": { "enum": ["new_entries", "starred_entry", "save_entry", "test"] }
+    "event_type": { "enum": ["new_entries", "starred_entry", "save_entry", "rule_entry", "test"] }
   },
   "oneOf": [
     {
@@ -17,7 +17,7 @@
     },
     {
       "properties": {
-        "event_type": { "enum": ["starred_entry", "save_entry"] },
+        "event_type": { "enum": ["starred_entry", "save_entry", "rule_entry"] },
         "entry": { "$ref": "#/$defs/article" }
       },
       "required": ["entry"]

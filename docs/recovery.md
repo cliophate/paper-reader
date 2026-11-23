@@ -407,10 +407,14 @@ browser clears storage and are not a backup of the server database.
 Changing `PAPER_BACKEND` alone cannot switch ownership. After restoring, use the
 backend and account configuration that owns that backup.
 
-### Mute filter repair
+### Article rules and older mute filters
 
-All existing filters gain missing Unicode matches after startup. The schema stays
-at v13. Each filter saves its row cursor and scan boundary in `sync_state` under
+Schema v31 saves `paper.sqlite.before-article-rules-v31` before migrating mute
+filters to article rules. Restoring that backup returns the local rules, hidden
+articles and reading state to their pre-upgrade values. It cannot recall a
+notification or undo a change already sent to FreshRSS or Miniflux.
+
+Paper still checks older literal filters for missing Unicode matches at startup. Each filter saves its row cursor and scan boundary in `sync_state` under
 `mute_unicode_v1:<filter-id>`, then records `done`. The `mute_js_v1` marker resets
 old ASCII checkpoints once to repair matches missed by SQLite's lowercase rules.
 Matches, progress and the final activity count commit in short transactions.

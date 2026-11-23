@@ -314,11 +314,11 @@ describe('mobile reader switching', () => {
   })
 
   it('refreshes the reader when a pending filter finishes after Settings closes', async () => {
-    const pending = { id: 'filter', phrase: 'kelvin', scope: 'title' as const, feedId: '', feedTitle: '', matchCount: 0, matching: true, createdAt: '2026-01-01' }
+    const pending = { id: 'filter', phrase: 'kelvin', scope: 'title' as const, feedId: '', feedTitle: '', matchCount: 0, matching: true, createdAt: '2026-01-01', actions: ['hide' as const], undoTokens: [], targetId: '', targetName: '' }
     vi.mocked(api.filters).mockResolvedValue([pending])
     await mount()
     await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: ',', bubbles: true })) })
-    const filtersTab = [...container.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find(button => button.textContent === 'Filters')!
+    const filtersTab = [...container.querySelectorAll<HTMLButtonElement>('.settings-nav button')].find(button => button.textContent === 'Article rules')!
     await act(async () => { filtersTab.click() })
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(container.textContent).toContain('Matching...')

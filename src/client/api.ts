@@ -104,6 +104,11 @@ export const api = {
   updateConnections: (settings: ConnectionsUpdate) => request<ConnectionsSettings>('/api/settings/connections', { method: 'PATCH', body: JSON.stringify(settings) }),
   recentReading: () => request<Entry[]>('/api/reading'),
   saveProgress: (id: string, position: number) => request<{ ok: boolean }>('/api/reading', { method: 'POST', body: JSON.stringify({ id, position }), keepalive: true }),
+  previewRule: (query: string) => request<{ count: number; items: Array<Pick<Entry, 'id' | 'title' | 'feedTitle'>> }>('/api/rules/preview', { method: 'POST', body: JSON.stringify({ query }) }),
+  addRule: (query: string, actions: MuteFilter['actions'], targetId: string, applyExisting: boolean) =>
+    request<MuteFilter>('/api/rules', { method: 'POST', body: JSON.stringify({ query, actions, targetId, applyExisting }) }),
+  hiddenByRule: (id: string, after = '') => request<{ items: Array<Pick<Entry, 'id' | 'title'>>; next: string }>(
+    '/api/rules/' + encodeURIComponent(id) + '/hidden?after=' + encodeURIComponent(after)),
   previewFilter: (phrase: string, scope: string, feedId: string) => request<{ count: number; items: Entry[]; truncated: boolean }>('/api/filters/preview', { method: 'POST', body: JSON.stringify({ phrase, scope, feedId }) }),
   previewFeed: (url: string) => request<{ url: string; title: string; items: Array<{ title: string; date: string }> }>('/api/feeds/preview', { method: 'POST', body: JSON.stringify({ url }) }),
   repairFeed: (id: string, target: { url: string } | { repairRef: string }, expectedUrl: string) => request<{ ok: boolean }>('/api/feeds/repair', { method: 'POST', body: JSON.stringify({ id, ...target, expectedUrl }) }),

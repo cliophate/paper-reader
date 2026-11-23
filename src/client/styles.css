@@ -1361,3 +1361,13 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
 .pulse-settings ul { list-style: none; padding: 0; }
 .pulse-settings li { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; gap: 10px; border-bottom: 1px solid var(--line); }
 .pulse-settings li small { display: block; color: var(--muted); }
+
+.rule-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.rule-form .filter-phrase, .rule-form fieldset, .rule-form .rule-existing { grid-column: 1 / -1; }
+.rule-form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; display: flex; flex-wrap: wrap; gap: 12px; }
+.rule-form fieldset label, .rule-form .rule-existing { flex-direction: row; align-items: center; min-height: 32px; }
+.rule-form input[type="checkbox"] { width: 16px; height: 16px; }
+.rule-row { flex-wrap: wrap; }
+.rule-row > div:first-child { flex: 1 1 180px; }
+.rule-row .hidden-articles { flex-basis: 100%; align-items: flex-start; }
+.hidden-articles button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
