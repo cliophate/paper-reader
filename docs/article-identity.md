@@ -104,47 +104,23 @@ Events are notifications, not a durable change log; reconnecting clients must
 reload current state. No offline delivery guarantee is exposed.
 
 Standalone mode rejects remote state reconciliation and legacy remote-write
-methods. `BackendSynchronizer` accepts only FreshRSS. FreshRSS keeps its existing
-remote-first queue: acknowledge the remote write, update local state, then emit.
+methods. For FreshRSS and Miniflux, `BackendSynchronizer` waits for the remote
+write to succeed before it updates local state and emits an event.
 A failed remote batch leaves local state unchanged; the next complete remote
 snapshot reconciles any partial upstream application. Content imports never
-reset existing read/star flags.
+reset existing read/star flags. Switching backends requires a separate data directory.
 
-## Pending remote writes, before offline support
+## Offline edits
 
-Offline FreshRSS writes and live backend switching remain disabled. Their later
-implementation must add a durable outbox before accepting those writes:
-
-- Each operation needs a UUID, backend and subscription IDs, immutable article
-  ID, external alias, target field/value, local revision, creation time, attempt
-  count, next-attempt time, lease expiry and terminal status. Use a uniqueness
-  constraint on article, field and revision within the backend.
-- Commit the desired state, revision, activity and outbox row together. Emit
-  only after commit. Worker leases must survive crashes and expire so another
-  worker can retry. A process-local queue alone cannot supply this guarantee.
-- Retry explicit set-state operations after transport failures with bounded
-  exponential backoff and jitter. A crash after remote success but before local
-  acknowledgement may replay the same value safely. Authentication failures
-  pause that backend; deleted or invalid remote aliases become visible terminal
-  failures. Never retry against another backend's current credentials.
-- Serialize delivery by article and field. Coalesce unsent superseded operations;
-  never allow an older in-flight retry to overwrite a newer delivered value.
-  Acknowledgement may clear pending status only for its matching revision.
-- While a local field has pending intent, remote snapshots must not overwrite
-  it. Once acknowledged, reconcile against a fresh complete snapshot. FreshRSS
-  has no compare-and-set revision API, so simultaneous external edits cannot
-  have lossless conflict detection. Expose that limit and retain conflicting
-  pending intent for user resolution rather than silently discarding it.
-- Persist snapshot cursors by backend and generation. Stage incomplete snapshots;
-  publish state and the completion checkpoint atomically only when complete.
-  Failed or partial snapshots cannot mean an empty unread or starred set.
-
-These are requirements for that later implementation, not guarantees provided
-by the current FreshRSS adapter.
+The browser queues read status, stars and reading positions across restarts.
+On reconnect, Paper checks each queued read or star against the live article
+in FreshRSS or Miniflux before sending the edit. Neither backend supports
+conditional writes, so another client can change the field between that check
+and the write. See [offline downloads and replay](development.md#offline-downloads-and-replay).
 
 ## Upgrade and recovery
 
-The current schema is v14. [Retention](retention.md) documents its migration,
+Schema v14 added retention. See [Retention](retention.md) for the migration,
 tombstones and `.before-retention-v14` backup. [Standalone feed scheduling](feed-scheduling.md#schema-v13-and-recovery)
 documents its check settings, Retry-After and attempt columns, and the
 `.before-feed-checks-v13` backup. [Reader routes](reader-routes.md) documents v12's additive

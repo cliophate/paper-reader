@@ -12,6 +12,7 @@ export class StandaloneRuntime {
   private readonly listeners = new Set<(completedAt: string) => void>()
   constructor(private readonly db: PaperDatabase, private readonly backend: StandaloneBackend, private readonly enabled: boolean, trustedOrigins: string[]) {
     this.scheduler = new StandaloneFeedScheduler(db, backend.identity.id, { trustedOrigins })
+    db.rules.onHiddenMatches = () => backend.state.invalidate()
   }
   onStateChanged(listener: Parameters<StandaloneBackend['state']['onStateChanged']>[0]) { return this.backend.state.onStateChanged(listener) }
   onSyncCompleted(listener: (completedAt: string) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }

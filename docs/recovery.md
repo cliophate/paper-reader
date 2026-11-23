@@ -116,6 +116,16 @@ The 0.2.0-alpha.3 release uses database schema v17.
 The [alpha.3 upgrade steps](#upgrade-from-020-alpha2-to-020-alpha3) describe
 the migration backup from schema v16.
 
+A direct upgrade from 0.2.0-alpha.3 to v34 creates 17 full SQLite backups,
+one before each migration from v18 through v34. Allow roughly one
+database-sized file per step, plus room for the replacement article table
+and write-ahead log during the v33 rebuild.
+
+To roll back, follow the restore steps below with the snapshot for your build.
+For alpha.3, use `paper.sqlite.before-feed-icons-v18`, which contains schema v17.
+For v32, use `paper.sqlite.before-entry-state-writes-v33`. Once you verify the
+upgrade, you can remove intermediate backups for versions you no longer need.
+
 ### Article state migration and recovery
 
 When upgrading from v32 to v33, stop Paper and briefing commands, back up the
