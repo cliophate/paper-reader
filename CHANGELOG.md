@@ -2,63 +2,97 @@
 
 ## Unreleased
 
-- Standalone Reader apps can mark a feed, folder, article label or the whole reading list as read.
+### Reading
 
-- Marking articles read or starred now writes only the article state table.
-  Schema v33 backs up the database before removing the old state columns.
-  On the test machine, the upgrade took about 45 seconds for 200,000 articles
-  and 16 minutes for 1 million. Set the reader health check
-  `start_period` to `30m` in custom Compose files to match the shipped file.
-  See the [upgrade and rollback steps](docs/recovery.md#article-state-migration-and-recovery).
-- Hide rules can match regular expressions in titles, authors, URLs and
-  article text. Settings > Activity records skipped batches and disabled rules.
-- Save named article views in the sidebar. Combine feeds, folders, keywords,
-  authors, dates, reading time and read or star status. Views sync across devices.
 - Download folders, saved views, search results or selected articles for offline reading.
   Search saved copies, check missing images and set a device storage limit.
   Paper queues read status, stars and reading positions across restarts.
   Paper checks each field against the live article before replaying it.
-- The web reader, Reader apps and article cleanup now read status and stars from the indexed article state table.
-- Connect FreshRSS or Miniflux on first start, or choose standalone. Test the
-  connection during setup or later in Settings > Backend & data.
-- Standalone Reader apps can label articles and import subscriptions from OPML.
-- Paper backs up the database before copying article read status and stars into
-  a separate table in schema v30. On the test machine, downtime was about
-  25 seconds for 200,000 articles and 5 minutes for 1 million, mostly for the
-  backup.
-- Save search queries as article rules to hide, mark read, star or send matching
-  articles to a notification target. Preview matches and choose whether to apply
-  a rule to the archive. Existing mute filters keep their hidden articles.
-
-- Queued webhooks honor feed and folder changes, and briefings apply feed exclusions before filling their article lists.
-- Manage feeds can set a user agent and cookie per feed, select the article
-  body, remove elements, fix lazy images and strip tracking parameters. Preview
-  the result on a recent article before saving.
 - Save highlights and personal notes in the web reader. Search them in Highlights
   and download an article, selected annotations or everything as Markdown.
-- Send signed webhooks for new articles, stars and manual sends. Add ntfy or Apprise
-  for push notifications and retry failed deliveries in Reading & connections.
-- Follow, mute or snooze stories in Pulse. Followed stories stay at the top
-  when coverage goes quiet. Muting preserves each article's read status. Pulse
-  settings can apply follows and mutes to briefings.
-- AI settings show recent requests, reported token usage and optional cost estimates.
-  Set daily background limits and exclude feeds or folders from automatic requests.
-- Add Linux ARM64 support for the reader and Codex worker. Both use the same
-  release tags as amd64. Reader archives are available for each architecture.
-- Save articles to Linkding, Wallabag, Readeck, Raindrop.io or Linkwarden.
-  Set up a destination in Settings > Reading & connections, then press `q` in the reader.
-- Manage feeds groups possible duplicates and lets you set last-post filters in days.
-  In standalone mode, review redirects and use a publisher's new feed address
-  while keeping folders, articles and reading state.
 - Play podcast episodes and video attachments in the reader. Paper remembers
   your place across devices and skips media files when you save articles offline.
 - Search supports phrases, alternatives, exclusions and filters for article fields,
   reading state and dates. Open **Search syntax** beside the search box for examples.
 - Share reading preferences across devices, including per-feed full-text choices.
   Settings shows device overrides and keeps offline edits until Paper reconnects.
-- Pulse ranks active collections by recent reporting and shows the first 25.
-  New collections need three articles from at least two publications within a week.
-  Collections whose newest article is over seven days old move to the archive under Quiet.
+
+### Organizing
+
+- Subscribe from a browser bookmarklet or share a page to Paper on Android.
+  Choose the feed and folder before confirming.
+- Standalone Paper fetches feed icons and keeps them in the database for both
+  the web reader and Reader apps.
+- Save named article views in the sidebar. Combine feeds, folders, keywords,
+  authors, dates, reading time and read or star status. Views sync across devices.
+- Save search queries as article rules to hide, mark read, star or send matching
+  articles to a notification target. Preview matches and choose whether to apply
+  a rule to the archive. Existing mute filters keep their hidden articles.
+- Hide rules can match regular expressions in titles, authors, URLs and
+  article text. Settings > Activity records skipped batches and disabled rules.
+- Manage feeds groups possible duplicates and lets you set last-post filters in days.
+  In standalone mode, review redirects and use a publisher's new feed address
+  while keeping folders, articles and reading state.
+- Manage feeds can set a user agent and cookie per feed, select the article
+  body, remove elements, fix lazy images and strip tracking parameters. Preview
+  the result on a recent article before saving.
+
+### Pulse and briefings
+
+- Browse Pulse collections as story threads. Preview the newest reporting
+  or expand a thread to read earlier articles.
+- New collections need three articles from at least two publications within a week.
+  Active ranks stories covered by at least two publications in the past 72 hours
+  and shows the first 25. When a story's newest article is over seven days old,
+  the story moves to the archive under Quiet unless you follow it.
+- Follow, mute or snooze stories in Pulse. Followed stories stay at the top of
+  Active when coverage goes quiet. Muting preserves each article's read status.
+  Pulse settings can apply follows and mutes to briefings.
+- Mark a collection or a whole section as read from the Pulse list. Undo
+  restores the articles you marked.
+- Catch-ups in expanded threads cite the articles behind each Latest and
+  Background item. Paper asks for details the sources state and generates new
+  summaries only for active collections with at least three articles.
+- Open **Go deeper** in a thread to ask a question and see the articles behind the answer.
+- Briefing emails and the library show short news items as bullets, list
+  background sources separately and link to new reporting in Pulse.
+- Schedule morning and evening briefings in Paper and email them through your
+  SMTP relay. You can set a display name for the sender.
+
+### Reader apps
+
+- Standalone Reader apps can mark a feed, folder, article label or the whole reading list as read.
+- Standalone Reader apps can label articles and import subscriptions from OPML.
+
+### Integrations
+
+- Send signed webhooks for new articles, stars and manual sends. Add ntfy or Apprise
+  for push notifications and retry failed deliveries in Reading & connections.
+- AI settings show recent requests, reported token usage and optional cost estimates.
+  Set daily background limits and exclude feeds or folders from automatic requests.
+- Save articles to Linkding, Wallabag, Readeck, Raindrop.io or Linkwarden.
+  Set up a destination in Settings > Reading & connections, then press `q` in the reader.
+
+### Setup and upgrades
+
+- Connect FreshRSS or Miniflux on first start, or choose standalone. Test the
+  connection during setup or later in Settings > Backend & data.
+- Add Linux ARM64 support for the reader and Codex worker. Both use the same
+  release tags as amd64. Reader archives are available for each architecture.
+- In schema v34, one indexed table holds each article's read status and stars.
+  The web reader, Reader apps and article cleanup all use it. Paper backs
+  up the database before removing the old columns. The upgrade can take minutes
+  on large databases. For timings, custom Compose health checks and rollback
+  steps, see the [recovery guide](docs/recovery.md#article-state-migration-and-recovery).
+
+### Fixes
+
+- Queued webhooks honor feed and folder changes, and briefings apply feed exclusions before filling their article lists.
+- Paper keeps idle connections open long enough for reverse proxies such as
+  Caddy to reuse them without intermittent 502 errors.
+- Paper shuts down cleanly with live event streams open in browser tabs.
+- Article cleanup handles deeply nested paragraphs in smaller pieces so a
+  malformed article can finish importing.
 
 ## 0.2.0-alpha.3
 

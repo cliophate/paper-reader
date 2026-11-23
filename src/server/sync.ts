@@ -31,6 +31,7 @@ export class BackendSynchronizer {
   ) {
     if (backend.identity.kind === 'standalone') throw new Error('Local state cannot use remote snapshot synchronization')
     db.bindBackend(backend.identity)
+    db.rules.onHiddenMatches = () => this.stateChanged()
   }
 
   private get backendName() { return this.backend.identity.kind === 'miniflux' ? 'Miniflux' : 'FreshRSS' }

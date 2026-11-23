@@ -417,6 +417,25 @@ function deferred() {
   return { promise, resolve }
 }
 
+it('invalidates unread counts after a regex rule commits new hidden matches', async () => {
+  const sync = new BackendSynchronizer(database, new FakeBackend([]), true, [28, 58])
+  await database.rules.save({ query: 'author~/Ada/', actions: ['hide'] })
+  const changed = vi.fn(() => ({
+    unread: database.localNavigation().unread,
+    inTransaction: database.greaderDatabase.isTransaction,
+  }))
+  sync.onStateChanged(changed)
+  database.upsertEntries([entry()])
+  expect(database.localNavigation().unread).toBe(1)
+  await database.rules.drainRegex()
+  expect(changed.mock.calls).toEqual([[null]])
+  expect(changed).toHaveReturnedWith({ unread: 0, inTransaction: false })
+
+  database.upsertEntries([entry({ id: 'two', author: 'Lee' })])
+  await database.rules.drainRegex()
+  expect(changed).toHaveBeenCalledTimes(1)
+})
+
 it('hides regex matches without a FreshRSS write', async () => {
   const source = new FakeBackend([{ items: [entry()], continuation: '' }])
   const sync = new BackendSynchronizer(database, source, true, [28, 58])

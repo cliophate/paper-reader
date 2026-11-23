@@ -56,6 +56,7 @@ type MatchedEntry = Pick<Entry, 'id' | 'read' | 'starred'>
 const ruleSelect = 'SELECT r.*, f.phrase FROM article_rules r JOIN mute_filters f ON f.id=r.id LEFT JOIN regex_rules x ON x.id=r.id'
 
 export class ArticleRules {
+  onHiddenMatches?: () => void
   private readonly db: DatabaseSync
   constructor(private readonly paper: PaperDatabase) { this.db = paper.greaderDatabase }
 
@@ -248,9 +249,9 @@ export class ArticleRules {
         }
       }
       if (this.closed) break
-      await retryBusy(() => {
+      const inserted = await retryBusy(() => {
         if (this.closed) return
-        transaction(this.db, () => {
+        return transaction(this.db, () => {
           // Another connection may have removed the rule or committed this batch.
           const updated = this.db.prepare(`UPDATE regex_rules SET cursor=?, failures=CASE
             WHEN ? THEN ? WHEN ? THEN failures+1 ELSE 0 END WHERE id=? AND cursor=? RETURNING failures`)
@@ -262,11 +263,12 @@ export class ArticleRules {
                 : Number(updated.failures) >= REGEX_FAILURE_LIMIT ? 'Disabled regex hide rule.' : 'Skipped regex hide rule batch.',
               details: { ruleId: rule.id, reason: error?.message ?? queueLimitMessage, ...(!job && { article: through }), failures: updated.failures } })
           } else if (matches.length) {
-            this.db.prepare(`INSERT OR IGNORE INTO muted_entries(filter_id,entry_id)
-              SELECT ?,entry_id FROM article_arrivals WHERE sequence IN (SELECT value FROM json_each(?))`).run(rule.id, JSON.stringify(matches))
+            return this.db.prepare(`INSERT OR IGNORE INTO muted_entries(filter_id,entry_id)
+              SELECT ?,entry_id FROM article_arrivals WHERE sequence IN (SELECT value FROM json_each(?))`).run(rule.id, JSON.stringify(matches)).changes
           }
         })
       })
+      if (inserted) this.onHiddenMatches?.()
     }
     return true
   }

@@ -1,7 +1,9 @@
 # Reader apps
 
-Paper provides a Google Reader API in standalone mode. It starts disabled on
-new and upgraded installations. In FreshRSS or Miniflux mode, Paper returns 404
+Paper provides a Google Reader API in standalone mode. Reader access starts
+disabled on new installations and on upgrades from schemas older than v16.
+Upgrades from v16 or later keep the access setting and existing app passwords.
+In FreshRSS or Miniflux mode, Paper returns 404
 with a message directing you to your feed server. For FreshRSS labels, connect
 the app directly to FreshRSS.
 

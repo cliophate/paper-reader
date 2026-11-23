@@ -26,7 +26,7 @@ describe('FreshRSS import adapter', () => {
   it('reports acknowledged creation as created when local activity recording fails', async () => {
     const { backend } = fixture()
     backend.addFeed = vi.fn(async () => {})
-    const db = { bindBackend() {}, recordActivity() { throw new Error('Synthetic cache failure') } } as unknown as PaperDatabase
+    const db = { rules: {}, bindBackend() {}, recordActivity() { throw new Error('Synthetic cache failure') } } as unknown as PaperDatabase
     const sync = new BackendSynchronizer(db, backend, false, [])
     const importer = new SubscriptionImporter(freshRssImportStore(backend, sync))
     const preview = await importer.preview('<opml><body><outline xmlUrl="https://new.test/rss"/></body></opml>')
