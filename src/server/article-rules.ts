@@ -208,7 +208,7 @@ export class ArticleRules {
   private scheduled?: NodeJS.Immediate
   private closed = false
   private hiddenNotice?: NodeJS.Timeout
-  private lastHiddenNotice = 0
+  private lastHiddenNotice = -Infinity
 
   close() {
     this.closed = true
@@ -221,9 +221,9 @@ export class ArticleRules {
     if (this.hiddenNotice) return
     this.hiddenNotice = setTimeout(() => {
       this.hiddenNotice = undefined
-      this.lastHiddenNotice = Date.now()
+      this.lastHiddenNotice = performance.now()
       this.onHiddenMatches?.()
-    }, Math.max(0, this.lastHiddenNotice + 1000 - Date.now()))
+    }, Math.max(0, this.lastHiddenNotice + 1000 - performance.now()))
   }
 
   scheduleRegex() {
