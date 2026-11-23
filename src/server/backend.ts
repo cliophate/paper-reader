@@ -17,6 +17,13 @@ export interface EntryOptions {
   before?: Date
 }
 
+export interface BriefingEntryOptions extends EntryOptions {
+  before: Date
+  surfaced?: ReadonlySet<string>
+  followed?: ReadonlySet<string>
+  muted?: ReadonlySet<string>
+}
+
 export interface EntryPageOptions {
   reverse?: boolean
   signal?: AbortSignal
@@ -45,7 +52,7 @@ export interface EntryPage {
 }
 
 export interface EntrySource {
-  briefingEntries?(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; before: Date; signal?: AbortSignal }): Promise<Entry[]>
+  briefingEntries?(stream: StreamRef, options: BriefingEntryOptions): Promise<Entry[]>
   navigation(signal?: AbortSignal): Promise<NavigationPayload>
   entries(stream: StreamRef, options?: EntryOptions): Promise<Entry[]>
   entriesPage(stream: StreamRef, options?: EntryPageOptions): Promise<EntryPage>

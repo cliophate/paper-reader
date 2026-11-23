@@ -1350,3 +1350,12 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
     bottom: calc(128px + env(safe-area-inset-bottom));
   }
 }
+.pulse-following-badge { display: inline-block; border-radius: 99px; padding: 3px 8px; background: var(--soft); color: var(--muted); font: 600 12px/1.4 var(--ui); }
+.pulse-section-heading, .pulse-settings h3 { font: 650 16px/1.4 var(--ui); }
+.pulse-settings { max-height: 85dvh; overflow: auto; }
+.pulse-settings fieldset { display: flex; flex-wrap: wrap; gap: 10px; border: 0; padding: 0; }
+.pulse-settings legend, .pulse-settings label { padding-block: 6px; }
+.pulse-settings label { display: flex; align-items: center; gap: 6px; }
+.pulse-settings ul { list-style: none; padding: 0; }
+.pulse-settings li { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; gap: 10px; border-bottom: 1px solid var(--line); }
+.pulse-settings li small { display: block; color: var(--muted); }

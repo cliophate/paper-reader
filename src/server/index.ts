@@ -61,7 +61,7 @@ import { ArticleSearchEvaluator, usesFolder } from './search.js'
 import { BackendSynchronizer } from './sync.js'
 import { escapeHtml } from './text.js'
 import { TopicService } from './topics.js'
-import { PulseService } from './pulse.js'
+import { PulseService, storedPulseCollections } from './pulse.js'
 import { streamXMedia } from './x-media.js'
 import { XThreadService } from './x-thread.js'
 import { BackendValidationError, type EntryStateOperation } from './backend.js'
@@ -107,7 +107,7 @@ const entriesSource = switchingEntrySource(() => localReadsActive, repository, b
 const webhooks = new Webhooks(database.webhooks, config.stateDir, config.trustedSaveOrigins, entriesSource.navigation)
 const pulse = new PulseService(database, (prompt, input, schema) => runAiBatch(config, 'grouping', config.collections.model, prompt, input, schema, 'medium'),
   providerConfigured(config) && config.collections.enabled)
-const topics = new TopicService(database, entriesSource, () => pulse.list().collections)
+const topics = new TopicService(database, entriesSource, () => storedPulseCollections(database).collections)
 const briefings = new BriefingService(config, database, entriesSource, reader, topics)
 const briefingDelivery = new BriefingDelivery(config, database, briefings)
 const briefingLibrary = new BriefingLibraryService(database, ids => synchronizer.editEntries(ids, 'read', 'briefing'))
@@ -522,6 +522,21 @@ app.get('/api/topics', asyncRoute(async (request, response) => {
 app.get('/api/pulse', asyncRoute(async (request, response) => {
   response.json(request.query.hours !== undefined ? await topics.list(Number(request.query.hours) || 24) : pulse.list())
 }))
+
+app.post('/api/pulse/choice', (request, response) => {
+  try {
+    const { collectionId, kind, until } = request.body || {}
+    response.json(pulse.setChoice(String(collectionId || ''), kind, until))
+  } catch (error) {
+    response.status(400).json({ error: error instanceof Error ? error.message : 'Could not save story choice' })
+  }
+})
+
+app.post('/api/pulse/briefing-settings', (request, response) => {
+  if (typeof request.body?.enabled !== 'boolean') return response.status(400).json({ error: 'Choose whether to use story choices in briefings' })
+  pulse.setBriefingChoices(request.body.enabled)
+  response.json({ ok: true })
+})
 
 app.post('/api/pulse/visit', (request, response) => {
   try { response.json(pulse.visit(String(request.body?.collectionId || ''), Number(request.body?.sequence))) }
@@ -1084,6 +1099,7 @@ async function shutdown() {
   for (const response of eventResponses) response.end()
   headlines.setEnabled(false)
   pulse.setEnabled(false)
+  pulse.stop()
   discussions.stopAll()
   await retention.stop()
   await synchronizer.stop()

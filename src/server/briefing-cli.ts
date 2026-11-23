@@ -5,7 +5,7 @@ import { openRuntimeStorage } from './runtime-storage.js'
 import { ConnectionSettings } from './connections.js'
 import { PaperRepository } from './repository.js'
 import { ReaderService } from './reader.js'
-import { PulseService } from './pulse.js'
+import { storedPulseCollections } from './pulse.js'
 import { TopicService } from './topics.js'
 
 const controller = new AbortController()
@@ -21,8 +21,7 @@ if (aiEnabled(config) && config.ai.briefingsEnabled && !providerConfigured(confi
 const repository = new PaperRepository(database)
 const reader = new ReaderService(database, config.readerFallbackEnabled)
 const entries = backend.identity.kind === 'standalone' || config.sync.localReads && database.getSyncValue('backfill_complete') === 'true' ? repository : backend
-const pulse = new PulseService(database, async () => { throw new Error('Grouping runs in the Paper service') }, false)
-const coverage = new TopicService(database, entries, () => pulse.list().collections)
+const coverage = new TopicService(database, entries, () => storedPulseCollections(database).collections)
 const service = new BriefingService(config, database, entries, reader, coverage)
 const kind = process.argv[2] === 'evening' ? 'evening' : 'morning'
 const force = process.argv.includes('--force')

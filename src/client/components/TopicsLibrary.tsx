@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ACTIVE_VISIBLE, NEW_MIN_ARTICLES, NEW_MIN_PUBLICATIONS } from '../../server/pulse-rules'
 import { api } from '../api'
 import { acknowledgePulseVisit, refreshPulseState } from '../pulse'
 import type { PulseCollection, PulsePayload, PulseSource } from '../../shared/pulse'
 import { CollectionQuestions } from './CollectionQuestions'
 import { Icon } from './Icon'
+import { PulseStorySettings, StoryChoiceDialog } from './PulseStorySettings'
 import { Modal } from './Modal'
 import { PulseCatchUp, PulseCollectionOptions } from './PulseCatchUp'
 
@@ -12,6 +13,7 @@ type ArticleFilter = 'new' | 'unread' | 'read' | 'all'
 type CollectionFilter = 'unread' | 'active' | 'quiet' | 'small' | 'archived'
 
 function collectionSection(collection: PulseCollection): Exclude<CollectionFilter, 'unread'> {
+  if (collection.followed) return 'active'
   if (collection.archived) return 'archived'
   if (collection.articleCount < NEW_MIN_ARTICLES || collection.publicationCount < NEW_MIN_PUBLICATIONS) return 'small'
   return collection.active ? 'active' : 'quiet'
@@ -67,6 +69,8 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
   const [filter, setFilter] = useState<ArticleFilter>(directLink ? directLink.filter || 'all' : returnToPulse?.filter || 'all')
   const [section, setSection] = useState<CollectionFilter>(returnToPulse?.section || 'active')
   const [allActive, setAllActive] = useState(Boolean(!directLink && returnToPulse?.allActive))
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [storyDialog, setStoryDialog] = useState<PulseCollection | null>(null)
   const [mergeFrom, setMergeFrom] = useState<string | null>(null)
   const [markPreview, setMarkPreview] = useState<{ ids: string[]; collectionCount: number } | null>(null)
   const [marking, setMarking] = useState<{ collectionId?: string } | null>(null)
@@ -77,6 +81,9 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
   const requestId = useRef(0)
   const scroll = useRef<HTMLDivElement>(null)
   const heading = useRef<HTMLHeadingElement>(null)
+  const choiceFocus = useRef<{ nextId?: string; index: number } | null>(null)
+  const displayedCards = useRef<{ open: string | null; section: CollectionFilter; revision?: string; ids: string[] }>(null)
+  const preserveWakeOrder = useRef(false)
   const markFocus = useRef<{ button: HTMLButtonElement; title?: HTMLButtonElement | null } | null>(null)
   const mounted = useRef(true)
   const restoreScroll = useRef(directLink ? 0 : returnToPulse?.scroll || 0)
@@ -93,6 +100,16 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
       markFocus.current = null
     } else if (!marking) markFocus.current = null
   }, [markPreview, marking, payload])
+
+  useEffect(() => {
+    if (storyDialog || !choiceFocus.current) return
+    const { nextId, index } = choiceFocus.current
+    const cards = [...(scroll.current?.querySelectorAll<HTMLButtonElement>('.pulse-title') || [])]
+    const next = cards.find(card => card.getAttribute('aria-controls') === `pulse-${nextId}`) || cards[index]
+    const target = next || heading.current
+    target?.focus()
+    choiceFocus.current = null
+  }, [storyDialog])
 
   const finishVisit = useCallback(async () => {
     const leaving = visit.current
@@ -113,7 +130,11 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
       const next = await api.pulse()
       if (!mounted.current || id !== requestId.current) return
       setError('')
-      if (!current.current || replace) {
+      const choicesChanged = JSON.stringify(current.current?.storyChoices) !== JSON.stringify(next.storyChoices)
+      const waking = choicesChanged && current.current?.storyChoices?.some(({ id, choice }) =>
+        choice.kind === 'snooze' && next.collections.some(collection => collection.id === id))
+      if (!current.current || replace || (choicesChanged && !open.current && !waking)) {
+        preserveWakeOrder.current = false
         install(next)
         setHasUpdates(false)
         const restored = next.collections.find(collection => collection.id === open.current)
@@ -121,7 +142,7 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
           const section = collectionSection(restored)
           const keepUnread = !linked.current && view.current.section === 'unread' && ['quiet', 'active'].includes(section) && restored.unreadCount > 0
           setSection(keepUnread ? 'unread' : section)
-          if (section === 'active' && next.collections.filter(item => collectionSection(item) === 'active').indexOf(restored) >= ACTIVE_VISIBLE) setAllActive(true)
+          if (section === 'active' && next.collections.filter(item => collectionSection(item) === 'active' && !item.followed).indexOf(restored) >= ACTIVE_VISIBLE) setAllActive(true)
         }
         if (linked.current) {
           const { id, filter } = linked.current
@@ -142,15 +163,28 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
           requestAnimationFrame(() => { if (scroll.current) scroll.current.scrollTop = position })
         }
       } else {
+        if (waking) preserveWakeOrder.current = true
         setHasUpdates(next.revision !== current.current.revision)
         install(refreshPulseState(current.current, next, open.current))
       }
+      return next
     } catch (reason) {
       if (mounted.current && id === requestId.current) setError(reason instanceof Error ? reason.message : 'Paper could not load Pulse')
     }
   }, [install])
 
   useEffect(() => { void load() }, [load, refreshKey])
+  const nextWake = payload?.storyChoices?.reduce((earliest, { choice }) =>
+    choice.kind === 'snooze' ? Math.min(earliest, choice.until) : earliest, Infinity)
+  useEffect(() => {
+    if (!nextWake || !Number.isFinite(nextWake)) return
+    const delay = nextWake - Date.now()
+    // The regular refresh handles longer snoozes and a clock change on the device.
+    if (delay > 30_000) return
+    const timer = window.setTimeout(() => void load(), Math.max(0, delay))
+    return () => window.clearTimeout(timer)
+  }, [nextWake, now, load])
+
   useEffect(() => {
     if (!initialCollection) {
       if (open.current) { void finishVisit(); open.current = null; setExpanded(null) }
@@ -226,13 +260,13 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
     onOpenEntry(id, { id: collection.id, title: collection.headline, ids, linkNumber: collection.linkNumber })
   }
   const markRead = async (ids: string[], collectionId?: string) => {
-    if (marking) return
+    if (marking) return false
     const unread = new Map<string, number | undefined>()
     for (const collection of current.current?.collections || []) {
       for (const source of collection.sources) if (!source.read) unread.set(source.id, source.stateRevision)
     }
     const marked = new Set(ids.filter(id => unread.has(id)))
-    if (!marked.size) return
+    if (!marked.size) return true
     const requested = [...marked]
     const revisions = requested.every(id => unread.get(id) !== undefined) ? Object.fromEntries(requested.map(id => [id, unread.get(id)!])) : undefined
     setMarking({ collectionId })
@@ -244,6 +278,7 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
           return { ...collection, sources, unreadCount: sources.filter(source => !source.read).length }
         }) })
       }
+      return saved
     } finally { setMarking(null) }
   }
   const saveFeedback = async (action: 'not_same' | 'not_useful' | 'merge', id: string, entryId = '', target = '') => {
@@ -259,14 +294,17 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
   }
 
   const sections: Record<CollectionFilter, PulseCollection[]> = { active: [], quiet: [], archived: [], small: [], unread: [] }
+  const following: PulseCollection[] = []
   for (const collection of payload?.collections || []) {
     const home = collectionSection(collection)
-    sections[home].push(collection)
+    if (collection.followed) following.push(collection)
+    else sections[home].push(collection)
     if ((home === 'active' || home === 'quiet') && collection.unreadCount > 0) sections.unread.push(collection)
   }
   const collections = sections[section]
-  const visible = section === 'active' && !allActive ? collections.slice(0, ACTIVE_VISIBLE) : collections
-  const unreadCollections = visible.filter(collection => collection.unreadCount > 0)
+  const visible = section === 'active' && !allActive ? collections.slice(0, Math.max(ACTIVE_VISIBLE, collections.findIndex(item => item.id === expanded) + 1)) : collections
+  const pinned = section === 'active' ? following : []
+  const unreadCollections = [...pinned, ...visible].filter(collection => collection.unreadCount > 0)
   const openMarkPreview = (button: HTMLButtonElement) => {
     if (marking) return
     const ids = [...new Set(unreadCollections.flatMap(collection => collection.sources.filter(source => !source.read).map(source => source.id)))]
@@ -275,8 +313,23 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
     markFocus.current = { button }
     setMarkPreview({ ids, collectionCount: unreadCollections.length })
   }
-  const lead = section === 'archived' ? undefined : [...visible].sort((a, b) => b.newCount - a.newCount || Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || a.id.localeCompare(b.id))[0]
-  const ordered = lead ? [lead, ...visible.filter(collection => collection !== lead)] : visible
+  const previous = displayedCards.current
+  let ordered = visible
+  if ((expanded || preserveWakeOrder.current) && previous?.open === expanded && previous.section === section && previous.revision === payload?.revision) {
+    // Keep the displayed lead and other existing cards in order, filling the slots around waking stories.
+    const byId = new Map(visible.map(card => [card.id, card]))
+    const existing = previous.ids.flatMap(id => byId.get(id) || [])
+    const existingIds = new Set(existing.map(card => card.id))
+    let index = 0
+    ordered = visible.map(card => existingIds.has(card.id) ? existing[index++] : card)
+  } else if (section !== 'archived' && visible.length) {
+    const lead = [...visible].sort((a, b) => b.newCount - a.newCount || Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || a.id.localeCompare(b.id))[0]
+    ordered = [lead, ...visible.filter(collection => collection !== lead)]
+  }
+  useLayoutEffect(() => {
+    displayedCards.current = { open: expanded, section, revision: payload?.revision, ids: ordered.map(card => card.id) }
+  })
+  const lead = section === 'archived' ? undefined : ordered[0]
   const merging = payload?.collections.find(collection => collection.id === mergeFrom)
   return <section className="topics-library panel">
     <div className="topics-scroll" ref={scroll}>
@@ -291,6 +344,7 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
               {sections.small.length > 0 && <button aria-pressed={section === 'small'} onClick={() => void changeSection('small')}>Small <span>{sections.small.length}</span></button>}
             </div>
             {unreadCollections.length > 0 && <button type="button" className="pulse-mark-all" aria-disabled={Boolean(marking)} onClick={event => openMarkPreview(event.currentTarget)}>Mark all read</button>}
+            <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Pulse settings"><Icon name="settings" /></button>
             <button className={`icon-button ${refreshing ? 'spinning' : ''}`} disabled={refreshing} onClick={() => void refresh()} aria-label="Reload articles"><Icon name="refresh" /></button>
           </div>
         </header>
@@ -301,10 +355,12 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
         {payload && !payload.status.enabled && <p className="pulse-notice">Automatic grouping is paused. Saved collections are still available.</p>}
         {section === 'archived' && <h2 id="pulse-archived-heading" tabIndex={-1}>Archived collections</h2>}
         {collections.length > 0 && <p className="visually-hidden">{descriptions[section]}</p>}
-        {merging && <div className="topics-merge-notice"><span>Open the collection that belongs with "{merging.headline}", then choose Merge into this collection.</span><button onClick={() => setMergeFrom(null)}>Cancel</button></div>}
         {!payload && !error && <div className="topics-state"><h2>Loading Pulse</h2></div>}
-        {payload && !collections.length && <div className="topics-state"><h2>{emptyHeadings[section]}</h2><p>{descriptions[section]}</p></div>}
-        {ordered.map(collection => <CollectionCard key={collection.id} collection={collection}
+        {payload && !collections.length && !pinned.length && <div className="topics-state"><h2>{emptyHeadings[section]}</h2><p>{descriptions[section]}</p></div>}
+        {[...pinned, ...ordered].map(collection => <Fragment key={collection.id}>
+          {collection === pinned[0] && <h2 className="pulse-section-heading">Following</h2>}
+          {pinned.length > 0 && collection === ordered[0] && <h2 className="pulse-section-heading">Active</h2>}
+          <CollectionCard onStoryOptions={() => setStoryDialog(collection)} collection={collection}
           lead={collection === lead} now={now} unreadOnly={section === 'unread'} summariesEnabled={Boolean(payload?.status.enabled)} discussionConfigured={discussionConfigured}
           expanded={expanded === collection.id} filter={filter} onExpand={next => showCollection(collection, next)} onCollapse={() => void closeCollection()}
           onOpenEntry={id => openArticle(id, collection)} marking={marking?.collectionId === collection.id} markDisabled={Boolean(marking)}
@@ -314,9 +370,8 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
               markFocus.current = { button, title: button.closest('article')?.querySelector<HTMLButtonElement>('.pulse-title') }
             }
             void markRead(ids, collection.id)
-          }} merging={Boolean(mergeFrom)} mergingThis={mergeFrom === collection.id}
-          onMerge={() => mergeFrom && void saveFeedback('merge', mergeFrom, '', collection.id)} onStartMerge={() => setMergeFrom(collection.id)}
-          onHide={() => void saveFeedback('not_useful', collection.id)} onRemove={id => void saveFeedback('not_same', collection.id, id)} />)}
+          }} onStartMerge={() => setMergeFrom(collection.id)}
+          onHide={() => void saveFeedback('not_useful', collection.id)} onRemove={id => void saveFeedback('not_same', collection.id, id)} /></Fragment>)}
         {visible.length < collections.length && <button className="pulse-list-more" onClick={() => {
           const first = collections[visible.length].id
           setAllActive(true)
@@ -326,6 +381,33 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
           .then(() => requestAnimationFrame(() => document.getElementById('pulse-archived-heading')?.focus()))}>{countLabel(sections.archived.length, 'archived collection')}</button>}
       </div>
     </div>
+    {merging && payload && <Modal title="Merge collection" onClose={() => setMergeFrom(null)}>
+      <p>Undo restores the original choice for the story you merge into another. The destination keeps its current choice.</p>
+      <form onSubmit={event => {
+        event.preventDefault()
+        const target = new FormData(event.currentTarget).get('target')
+        if (typeof target === 'string' && target) void saveFeedback('merge', merging.id, '', target)
+      }}><label>Merge "{merging.headline}" into <select name="target" required defaultValue="">
+        <option value="" disabled>Choose a collection</option>
+        {payload.collections.filter(item => item.id !== merging.id).map(item => <option key={item.id} value={item.id}>{item.headline}</option>)}
+        {payload.storyChoices?.filter(item => item.choice.kind !== 'follow').map(item =>
+          <option key={item.id} value={item.id}>{item.headline} ({item.choice.kind === 'mute' ? 'muted' : 'snoozed'})</option>)}
+      </select></label><button type="submit">Merge</button></form>
+    </Modal>}
+    {settingsOpen && payload && <PulseStorySettings payload={payload} onClose={() => setSettingsOpen(false)}
+      onClear={async id => { await api.setStoryChoice(id, null); await load(true) }}
+      onBriefings={async enabled => { await api.setBriefingStoryChoices(enabled); await load() }} />}
+    {storyDialog && <StoryChoiceDialog collection={storyDialog} onClose={() => setStoryDialog(null)} onSave={async choice => {
+      const { id } = storyDialog
+      const cards = [...pinned, ...ordered]
+      const index = cards.findIndex(item => item.id === id)
+      await api.setStoryChoice(id, choice)
+      if (choice?.kind === 'mute' || choice?.kind === 'snooze') {
+        choiceFocus.current = { nextId: cards[index + 1]?.id, index }
+        await closeCollection()
+      }
+      await load(true)
+    }} />}
     {markPreview && <Modal title="Mark all read" className="pulse-mark-dialog" busy={Boolean(marking)} onClose={() => setMarkPreview(null)}>
       <p>Mark {countLabel(markPreview.ids.length, 'article')} in {countLabel(markPreview.collectionCount, 'collection')} as read?</p>
       <div className="pulse-mark-dialog-actions"><button type="button" disabled={Boolean(marking)} onClick={() => setMarkPreview(null)}>Cancel</button><button type="button" className="primary" disabled={Boolean(marking)} onClick={() => void markRead(markPreview.ids).finally(() => setMarkPreview(null))}>{marking ? 'Marking read…' : 'Mark all read'}</button></div>
@@ -335,11 +417,11 @@ export function TopicsLibrary({ initialCollection, initialFilter, discussionConf
 
 function countLabel(count: number, singular: string) { return `${count.toLocaleString()} ${singular}${count === 1 ? '' : 's'}` }
 
-function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, summariesEnabled, discussionConfigured, onExpand, onCollapse, onOpenEntry, onMarkRead, marking, markDisabled, merging, mergingThis, onMerge, onStartMerge, onHide, onRemove }: {
+function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, summariesEnabled, discussionConfigured, onExpand, onCollapse, onOpenEntry, onMarkRead, marking, markDisabled, onStartMerge, onHide, onRemove, onStoryOptions }: {
   collection: PulseCollection; lead: boolean; now: number; expanded: boolean; filter: ArticleFilter; unreadOnly: boolean; summariesEnabled: boolean; discussionConfigured?: boolean
   onExpand: (filter: ArticleFilter) => Promise<void>; onCollapse: () => void; onOpenEntry: (id: string) => void
-  onMarkRead: (ids: string[], button: HTMLButtonElement) => void; marking: boolean; markDisabled: boolean; merging: boolean; mergingThis: boolean
-  onMerge: () => void; onStartMerge: () => void; onHide: () => void; onRemove: (id: string) => void
+  onMarkRead: (ids: string[], button: HTMLButtonElement) => void; marking: boolean; markDisabled: boolean;
+  onStoryOptions: () => void; onStartMerge: () => void; onHide: () => void; onRemove: (id: string) => void
 }) {
   const [failedImages, setFailedImages] = useState<string[]>([])
   const image = lead && collectionImage(collection.sources, failedImages)
@@ -356,8 +438,8 @@ function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, s
   const background = catchUp?.background || []
   const hasCatchUp = latest.length > 0 || background.length > 0
   const options = (label: string) => <PulseCollectionOptions label={label} name={`${listId}-options`} actions={() => <>
-    {merging && !mergingThis ? <button type="button" className="primary" onClick={onMerge}>Merge into this collection</button>
-      : <button type="button" disabled={mergingThis} onClick={onStartMerge}>Merge collection</button>}
+    <button type="button" onClick={onStoryOptions}>Follow, mute or snooze</button>
+    <button type="button" onClick={onStartMerge}>Merge collection</button>
     <button type="button" onClick={onHide}>Hide collection</button>
     <form onSubmit={event => {
       event.preventDefault()
@@ -368,6 +450,7 @@ function CollectionCard({ collection, lead, now, expanded, filter, unreadOnly, s
   return <article className={`pulse-card ${lead ? 'pulse-lead' : ''}`}>
     <header className="pulse-card-header">
       <div><h2><button className="pulse-title" aria-expanded={expanded} aria-controls={listId} aria-describedby={`${listId}-count`} onClick={() => expanded ? onCollapse() : onExpand(unreadOnly ? 'unread' : 'all')}>{collection.headline}</button></h2>
+        {collection.followed && <span className="pulse-following-badge">{collection.active ? 'Following' : 'Following · Quiet'}</span>}
         <p className="pulse-scope">{collection.scope}</p>
         <span className="visually-hidden" id={`${listId}-count`}>{collection.articleCount} {collection.articleCount === 1 ? 'article' : 'articles'}, {collection.unreadCount} unread</span>
       </div>

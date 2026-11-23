@@ -27,6 +27,13 @@ describe('digest candidate eligibility', () => {
     expect(db.briefingEntries(all, { before: new Date(now + 8 * DAY), unreadOnly: true })).toHaveLength(0)
   })
 
+  it('applies story choices before limiting the local briefing pool', () => {
+    db.upsertEntries(['a', 'b', 'c'].map(id => entry(id)))
+    const options = { before: new Date(now + 1), limit: 1, muted: new Set(['a']) }
+    expect(db.briefingEntries(all, options).map(item => item.id)).toEqual(['b'])
+    expect(db.briefingEntries(all, { ...options, followed: new Set(['c']) }).map(item => item.id)).toEqual(['c'])
+  })
+
   it('rotates past considered candidates and respects mute, read and delivered state', async () => {
     db.upsertEntries([entry('a'), entry('b'), entry('muted'), { ...entry('read'), read: true }])
     const creating = db.createMuteFilter('feature muted', 'title')

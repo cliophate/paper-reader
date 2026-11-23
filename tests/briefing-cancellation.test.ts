@@ -1,10 +1,12 @@
 import fs from 'node:fs/promises'
 import { runCodex } from '../src/server/codex.js'
+import { PulseService, storedPulseCollections } from '../src/server/pulse.js'
 import { TopicService } from '../src/server/topics.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BriefingService } from '../src/server/briefing.js'
 import { PaperDatabase } from '../src/server/db.js'
-import type { EntrySource } from '../src/server/backend.js'
+import { switchingEntrySource } from '../src/server/repository.js'
+import type { EntrySource, EntryOptions } from '../src/server/backend.js'
 import type { Config } from '../src/server/config.js'
 import type { Entry, NavigationPayload } from '../src/server/types.js'
 
@@ -142,6 +144,43 @@ describe('briefing cancellation before model work', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(result).toHaveBeenCalledTimes(1)
     expect(signal.aborted).toBe(true)
+  })
+
+  it.each([false, true])('includes 15-hour-old remote unread articles in a first morning briefing with story choices enabled or disabled (%s)', async enabled => {
+    const now = new Date()
+    const published = new Date(now.getTime() - 15 * 3_600_000)
+    const articles: Entry[] = []
+    const pulse = new PulseService(db, vi.fn(), false)
+    for (const group of ['ordinary', 'muted', 'followed']) {
+      const members = [1, 2, 3].map(n => ({
+        id: group + n, title: group + ' footbridge report', feedId: 'feed/' + n, feedTitle: 'Synthetic publisher ' + n,
+        feedUrl: `https://p${n}.test/rss`, url: `https://p${n}.test/${group}`, author: '',
+        contentHtml: '<p>The bridge opens tomorrow.</p>', excerpt: 'The bridge opens tomorrow.', timestamp: published.getTime(),
+        publishedAt: published.toISOString(), read: false, starred: false, readingMinutes: 1, thumbnailUrl: '', kind: 'article' as const,
+      }))
+      db.upsertEntries(members)
+      const entryIds = members.map(entry => entry.id)
+      db.savePulseBatch([{ id: group, headline: group, scope: 'Construction', entryIds }], entryIds, now.toISOString())
+      articles.push(...members)
+    }
+    pulse.setChoice('muted', 'mute')
+    pulse.setChoice('followed', 'follow')
+    if (enabled) pulse.setBriefingChoices(true)
+    db.setSyncValue('coverage_generated_at', now.toISOString())
+    const coverage = new TopicService(db, source, () => storedPulseCollections(db).collections)
+    const remoteEntries = (options?: EntryOptions) => articles.filter(item => !options?.after || item.timestamp > options.after.getTime())
+    vi.mocked(source.entries).mockImplementation(async (_stream, options) => remoteEntries(options))
+    source.entriesPage = async (_stream, options) => ({ items: remoteEntries(options), continuation: '' })
+    service = new BriefingService(config, db, switchingEntrySource(() => false, source, source), undefined, coverage)
+    vi.spyOn(fs, 'readFile').mockResolvedValue('Synthetic editorial profile.')
+    vi.mocked(runCodex).mockResolvedValueOnce({ writerIds: [], newsClusterIds: ['ordinary', 'muted', 'followed'], newsGroups: [], socialIds: [] })
+      .mockResolvedValueOnce({ news: [], social: [], worthNoticing: ['followed1', 'muted1'].map(entryId => ({ entryId, reason: 'Bridge update', summary: 'The bridge opens tomorrow.' })) })
+    const result = await service.generate('morning', true)
+    const input = vi.mocked(runCodex).mock.calls[0][3] as { newsClusters: { id: string; followed?: boolean }[] }
+    expect(input.newsClusters.map(item => item.id)).toContain('ordinary')
+    expect(input.newsClusters.some(item => item.id === 'muted')).toBe(!enabled)
+    if (enabled) expect(input.newsClusters[0]).toMatchObject({ id: 'followed', followed: true })
+    expect(result.selection.worthNoticing.map(item => item.entryId)).toEqual(enabled ? ['followed1'] : ['followed1', 'muted1'])
   })
 
   it('saves lead prose and short brief lines when the shortlist fails', async () => {

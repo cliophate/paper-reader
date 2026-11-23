@@ -1,8 +1,36 @@
 import type { PaperDatabase, PageOptions } from './db.js'
-import type { EntryOptions, EntryPageOptions, EntrySource } from './backend.js'
-import type { StreamRef } from './types.js'
+import type { BriefingEntryOptions, EntryOptions, EntryPageOptions, EntrySource } from './backend.js'
+import type { Entry, StreamRef } from './types.js'
 
 export type { EntrySource } from './backend.js'
+
+const REMOTE_PAGE_SIZE = 250
+const MAX_REMOTE_BRIEFING_PAGES = 5
+
+export async function briefingCandidates(source: EntrySource, stream: StreamRef, options: BriefingEntryOptions): Promise<Entry[]> {
+  if (source.briefingEntries) return source.briefingEntries(stream, options)
+  if (!options.followed?.size && !options.muted?.size) return source.entries(stream, options)
+
+  const limit = options.limit || 1000
+  const priority = new Map<string, Entry>()
+  const other = new Map<string, Entry>()
+  const cursors = new Set<string>()
+  let continuation = ''
+  for (let pageIndex = 0; pageIndex < MAX_REMOTE_BRIEFING_PAGES; pageIndex++) {
+    options.signal?.throwIfAborted()
+    const page = await source.entriesPage(stream, { ...options, limit: REMOTE_PAGE_SIZE, continuation })
+    for (const entry of page.items) {
+      if (options.muted?.has(entry.id) || options.surfaced?.has(entry.id)) continue
+      if (options.followed?.has(entry.id)) priority.set(entry.id, entry)
+      else if (other.size < limit) other.set(entry.id, entry)
+    }
+    if (priority.size >= limit || (priority.size === (options.followed?.size || 0) && priority.size + other.size >= limit)) break
+    continuation = page.continuation
+    if (!continuation || cursors.has(continuation)) break
+    cursors.add(continuation)
+  }
+  return [...priority.values(), ...other.values()].slice(0, limit)
+}
 
 // Keep a stable source reference while the first background import completes.
 export function switchingEntrySource(useLocal: () => boolean, local: EntrySource, remote: EntrySource): EntrySource {
@@ -13,17 +41,14 @@ export function switchingEntrySource(useLocal: () => boolean, local: EntrySource
     entries: (stream, options) => current().entries(stream, options),
     entriesPage: (stream, options) => current().entriesPage(stream, options),
     entryIds: (stream, unreadOnly, signal) => current().entryIds(stream, unreadOnly, signal),
-    briefingEntries: (stream, options) => {
-      const source = current()
-      return source.briefingEntries ? source.briefingEntries(stream, options) : source.entries(stream, options)
-    },
+    briefingEntries: (stream, options) => briefingCandidates(current(), stream, options),
   }
 }
 
 export class PaperRepository implements EntrySource {
   constructor(private readonly db: PaperDatabase) {}
 
-  async briefingEntries(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; before: Date; signal?: AbortSignal }) {
+  async briefingEntries(stream: StreamRef, options: BriefingEntryOptions) {
     options.signal?.throwIfAborted()
     return this.db.briefingEntries(stream, options)
   }

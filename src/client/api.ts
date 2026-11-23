@@ -7,7 +7,7 @@ import type { WebhookCreate, WebhookSettings, WebhookSubscription } from '../sha
 import type { RetentionPolicy, RetentionPreview, RetentionView } from '../shared/retention'
 import type { FeedMaintenance, StaleDays, FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarget } from '../shared/feed-checks'
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
-import type { PulsePayload } from '../shared/pulse'
+import type { PulsePayload, StoryChoice } from '../shared/pulse'
 import type { CollectionAnswer } from '../shared/discussion'
 import type { ConnectionsSettings, ConnectionsUpdate, DestinationUpdate, SaveDestination, SaveDestinationId } from '../shared/connections'
 import type { BriefingReadResult } from '../shared/briefings'
@@ -117,6 +117,10 @@ export const api = {
     request<{ questions: string[] }>(`/api/discussion/collection/${encodeURIComponent(id)}/suggestions`, { method: 'POST', body: JSON.stringify({ revision, refresh }), signal: sourceRequestSignal(signal) }),
   collectionAnswer: (id: string, revision: string, question: string, previousAnswer: string | undefined, signal: AbortSignal) =>
     request<CollectionAnswer>(`/api/discussion/collection/${encodeURIComponent(id)}/answer`, { method: 'POST', body: JSON.stringify({ revision, question, previousAnswer }), signal: sourceRequestSignal(signal) }),
+  setStoryChoice: (collectionId: string, choice: StoryChoice | null) => request<{ ok: boolean }>('/api/pulse/choice', {
+    method: 'POST', body: JSON.stringify({ collectionId, ...(choice ?? { kind: 'clear' }) }),
+  }),
+  setBriefingStoryChoices: (enabled: boolean) => request<{ ok: boolean }>('/api/pulse/briefing-settings', { method: 'POST', body: JSON.stringify({ enabled }) }),
   visitPulse: (collectionId: string, sequence: number) => request<{ ok: boolean }>('/api/pulse/visit', { method: 'POST', body: JSON.stringify({ collectionId, sequence }), keepalive: true }),
   pulseFeedback: (action: 'not_same' | 'not_useful' | 'merge', clusterId: string, entryId = '', targetClusterId = '') =>
     request<CoverageFeedback>('/api/pulse/feedback', { method: 'POST', body: JSON.stringify({ action, clusterId, entryId, targetClusterId }) }),

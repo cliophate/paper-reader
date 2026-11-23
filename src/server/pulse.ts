@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import type { PaperDatabase, CoverageFeedbackRecord, CoverageFeedbackAction } from './db.js'
 import type { Entry } from './types.js'
-import type { PulseCollection, PulsePayload } from '../shared/pulse.js'
+import type { PulseCollection, PulsePayload, StoryChoice } from '../shared/pulse.js'
 import { canonicalTopicUrl } from './topics.js'
 import { decodeHtmlText, plainText } from './text.js'
 import { generatePulseCatchUps, pulseCatchUpRevision, validatePulseCatchUp } from './pulse-catch-up.js'
@@ -59,7 +59,12 @@ function validateProposal(value: unknown, { allowed, existing, claimed, groups }
   if (typeof group.collectionId !== 'string' || typeof group.title !== 'string' || typeof group.scope !== 'string' || !Array.isArray(group.members)) throw new Error('Invalid collection fields')
   let current = existing.find(collection => collection.id === group.collectionId)
   if (group.collectionId && !current) throw new Error('Unknown collection ID')
-  current ||= existing.find(collection => normalize(collection.headline) === normalize(String(group.title)))
+  const title = normalize(group.title)
+  const proposedScope = normalize(group.scope)
+  const matchesDescription = (collection: PulseCollection) => normalize(collection.headline) === title
+    && (collection.sources.length > 0 || normalize(collection.scope) === proposedScope)
+  if (current && !current.sources.length && !matchesDescription(current)) current = undefined
+  current ||= existing.find(matchesDescription)
   const headline = current?.headline || group.title.trim()
   const scope = current?.scope || group.scope.trim()
   if (headline.length < 3 || headline.length > 120 || scope.length < 12 || scope.length > 1200 || /[<>\r\n\u0000-\u001f]/.test(headline + scope)) throw new Error('Invalid collection description')
@@ -85,7 +90,8 @@ function validateProposal(value: unknown, { allowed, existing, claimed, groups }
   if (!ids.length) return
 
   // A second proposal with the same name in one response also reuses the first ID.
-  const prior = groups.find(item => current ? item.id === current.id : normalize(item.headline) === normalize(headline))
+  const prior = groups.find(item => current ? item.id === current.id
+    : normalize(item.headline) === title && normalize(item.scope) === proposedScope)
   if (!current && prior && !qualifiesForNewCollection([...prior.entryIds.map(id => allowed.get(id)!), ...accepted])) return
   ids.forEach(id => claimed.add(id))
   if (prior) prior.entryIds.push(...ids)
@@ -250,35 +256,56 @@ export function summarizeCollection(collection: StoredCollection, now = Date.now
     latestPublishedAt: sources.length ? new Date(latest).toISOString() : '', recentArticleCount: recent.length, recentPublicationCount, active, archived, quiet: !active && !archived }
 }
 
-function correctedCollections(input: StoredCollection[], feedback: CoverageFeedbackRecord[], now = Date.now(), includeHidden = false) {
-  const collections = new Map(input.map(collection => [collection.id, { ...collection, sources: [...collection.sources] }]))
+function collectionMerges(ids: string[], feedback: CoverageFeedbackRecord[]) {
+  const existing = new Set(ids)
   const aliases = new Map<string, string>()
-  const resolve = (id: string): string => aliases.get(id) || id
-  for (const item of feedback.filter(item => item.action === 'merge')) {
-    const from = resolve(item.clusterId)
-    const into = resolve(item.targetClusterId)
-    const source = collections.get(from)
-    const target = collections.get(into)
-    if (!source || !target || from === into) continue
-    target.sources = [...new Map([...target.sources, ...source.sources].map(entry => [entry.id, entry])).values()]
-    for (const [alias, destination] of aliases) if (destination === from) aliases.set(alias, into)
+  const merges: Array<{ from: string; into: string }> = []
+  for (const item of feedback) {
+    if (item.action !== 'merge') continue
+    const from = aliases.get(item.clusterId) || item.clusterId
+    const into = aliases.get(item.targetClusterId) || item.targetClusterId
+    if (!existing.has(from) || !existing.has(into) || from === into) continue
+    merges.push({ from, into })
+    for (const [alias, target] of aliases) if (target === from) aliases.set(alias, into)
     aliases.set(from, into)
+  }
+  return { merges, aliases }
+}
+
+function correctedCollections(input: StoredCollection[], feedback: CoverageFeedbackRecord[], now = Date.now(), includeHidden = false, keepEmpty?: Set<string>) {
+  const collections = new Map(input.map(collection => [collection.id, { ...collection, sources: [...collection.sources] }]))
+  const { merges, aliases } = collectionMerges([...collections.keys()], feedback)
+  for (const { from, into } of merges) {
+    const source = collections.get(from)!
+    const target = collections.get(into)!
+    target.sources = [...new Map([...target.sources, ...source.sources].map(entry => [entry.id, entry])).values()]
     collections.delete(from)
   }
   for (const item of feedback) {
-    const collection = collections.get(resolve(item.clusterId))
+    const collection = collections.get(aliases.get(item.clusterId) || item.clusterId)
     if (!collection) continue
     if (item.action === 'not_useful' && !includeHidden) collections.delete(collection.id)
     if (item.action === 'not_same') collection.sources = collection.sources.filter(source => source.id !== item.entryId)
   }
-  const visible = [...collections.values()].filter(collection => collection.sources.length)
+  const visible = [...collections.values()].filter(collection => collection.sources.length || keepEmpty?.has(collection.id))
     .map(collection => summarizeCollection(collection, now))
     .sort(comparePulseCollections)
   const collectionAliases = input.flatMap(({ id, linkNumber }) => {
     const targetId = aliases.get(id)
     return targetId && collections.get(targetId)?.sources.length ? [{ id, linkNumber, targetId }] : []
   })
-  return { collections: visible, collectionAliases }
+  return { collections: visible, collectionAliases, aliases }
+}
+
+function mergedChoice(left?: StoryChoice, right?: StoryChoice): StoryChoice | null {
+  if (left?.kind === 'follow' || right?.kind === 'follow') return { kind: 'follow' }
+  if (left?.kind === 'mute' || right?.kind === 'mute') return { kind: 'mute' }
+  if (left?.kind === 'snooze' && right?.kind === 'snooze') return left.until >= right.until ? left : right
+  return left || right || null
+}
+
+export function storedPulseCollections(db: PaperDatabase, now = Date.now(), includeHidden = false) {
+  return correctedCollections(db.pulseCollections(), db.coverageFeedback(), now, includeHidden)
 }
 
 export class PulseService {
@@ -297,24 +324,53 @@ export class PulseService {
   setEnabled(enabled: boolean) {
     if (enabled === this.enabled) return
     this.enabled = enabled
-    if (enabled) { this.retryAfter = 0; this.catchUpRetries.clear(); this.start() } else this.stop()
+    if (enabled) {
+      this.retryAfter = 0
+      this.catchUpRetries.clear()
+      if (this.timer) void this.refresh()
+      else this.start()
+    }
     this.notify()
   }
 
   start() {
-    if (!this.enabled || this.timer) return
-    this.timer = setInterval(() => { void this.refresh() }, 5 * 60_000)
+    if (this.timer) return
+    const tick = () => {
+      this.pruneOrphanedChoices()
+      void this.refresh()
+    }
+    this.timer = setInterval(tick, 5 * 60_000)
     this.timer.unref()
-    void this.refresh()
+    tick()
   }
   stop() { if (this.timer) clearInterval(this.timer); this.timer = undefined }
   onUpdated(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   private notify() { for (const listener of this.listeners) listener() }
 
+  private pruneOrphanedChoices(visible?: ReadonlySet<string>) {
+    const ids = this.db.storyChoicesToCheck(visible)
+    if (!ids.length) return
+    const stories = new Map(ids.map(id => [id, { originals: [id], removed: [] as string[] }]))
+    const feedback = this.db.coverageFeedback()
+    const { aliases } = collectionMerges(this.db.pulseCollectionIds(), feedback)
+    for (const [original, target] of aliases) stories.get(target)?.originals.push(original)
+    for (const item of feedback) {
+      if (item.action === 'not_same') stories.get(aliases.get(item.clusterId) || item.clusterId)?.removed.push(item.entryId)
+    }
+    this.db.pruneOrphanedStoryChoices(this.now(), stories)
+  }
+
   list(): PulsePayload {
-    const { collections: corrected, collectionAliases } = correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now())
-    const collections = corrected.map(collection => ({
+    const now = this.now()
+    const { collections: corrected, collectionAliases } = storedPulseCollections(this.db, now)
+    const available = new Set(corrected.map(collection => collection.id))
+    this.pruneOrphanedChoices(available)
+    const storyChoices = this.db.storyChoices(now).filter(item => available.has(item.id))
+    const choices = new Map(storyChoices.map(item => [item.id, item.choice]))
+    const visible = corrected.filter(collection => !choices.has(collection.id) || choices.get(collection.id)?.kind === 'follow')
+    const collections = visible.map(collection => ({
       ...collection,
+      followed: choices.get(collection.id)?.kind === 'follow',
       questionsRevision: crypto.createHash('sha256').update(JSON.stringify([collection.headline, collection.scope,
         collection.sources.map(source => [source.id, source.sequence, source.title, source.publication, source.development])])).digest('hex'),
     }))
@@ -325,12 +381,38 @@ export class PulseService {
     }
     const revision = crypto.createHash('sha1').update(JSON.stringify(collections.map(collection =>
       [collection.id, collection.questionsRevision, collection.active, collection.archived, collection.publicationCount, collection.recentPublicationCount, collection.recentArticleCount, collection.latestPublishedAt, saved?.get(collection.id)?.revision]))).digest('hex')
-    return { collections, ...(collectionAliases.length ? { collectionAliases } : {}), revision, status: { enabled: this.enabled, running: Boolean(this.running),
+    return { collections, storyChoices, useStoryChoicesInBriefings: this.db.useStoryChoicesInBriefings, ...(collectionAliases.length ? { collectionAliases } : {}), revision, status: { enabled: this.enabled, running: Boolean(this.running),
       lastCompletedAt: this.db.getSyncValue('pulse_completed_at') || null, failed: this.failed } }
   }
 
+  setChoice(id: string, kind: unknown, until?: unknown) {
+    let choice: StoryChoice | null
+    if (kind === 'snooze') {
+      if (typeof until !== 'number' || !Number.isSafeInteger(until) || until <= this.now() || !Number.isFinite(new Date(until).getTime())) {
+        throw new Error('Choose a future snooze time')
+      }
+      choice = { kind, until }
+    } else if (kind === 'follow' || kind === 'mute') choice = { kind }
+    else if (kind === 'clear') choice = null
+    else throw new Error('Unknown story choice')
+    const originals = this.db.pulseCollectionIds()
+    if (!originals.includes(id)) throw new Error('Collection not found')
+    const { aliases } = collectionMerges(originals, this.db.coverageFeedback())
+    this.db.transaction(() => {
+      this.db.setStoryChoice(aliases.get(id) || id, choice)
+      this.pruneOrphanedChoices()
+    })
+    this.notify()
+    return { ok: true }
+  }
+
+  setBriefingChoices(enabled: boolean) {
+    this.db.useStoryChoicesInBriefings = enabled
+    this.notify()
+  }
+
   visit(id: string, sequence: number) {
-    const collection = this.list().collections.find(item => item.id === id)
+    const collection = storedPulseCollections(this.db, this.now()).collections.find(item => item.id === id)
     if (!collection) throw new Error('Collection not found')
     if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > collection.revision) throw new Error('Invalid collection visit')
     const ids = new Set(collection.sources.filter(source => source.sequence <= sequence).map(source => source.id))
@@ -343,16 +425,38 @@ export class PulseService {
   }
 
   feedback(input: { action: CoverageFeedbackAction; clusterId: string; entryId?: string; targetClusterId?: string }) {
-    const collections = this.list().collections
-    const collection = collections.find(item => item.id === input.clusterId)
-    if (!collection) throw new Error('Collection not found')
-    if (input.action === 'not_same' && !collection.sources.some(source => source.id === input.entryId)) throw new Error('Article not found in collection')
-    if (input.action === 'merge' && (input.clusterId === input.targetClusterId || !collections.some(item => item.id === input.targetClusterId))) throw new Error('Choose another collection')
-    const result = this.db.createCoverageFeedback(input)
+    const result = this.db.transaction(() => {
+      const { collections } = storedPulseCollections(this.db, this.now())
+      const collection = collections.find(item => item.id === input.clusterId)
+      if (!collection) throw new Error('Collection not found')
+      if (input.action === 'not_same' && !collection.sources.some(source => source.id === input.entryId)) throw new Error('Article not found in collection')
+      const record = this.db.createCoverageFeedback(input)
+      if (input.action === 'merge') {
+        const target = collections.find(item => item.id === input.targetClusterId)
+        if (!target || target.id === collection.id) throw new Error('Choose another collection')
+        const choices = new Map(this.db.storyChoices(this.now()).map(item => [item.id, item.choice]))
+        const choice = mergedChoice(choices.get(collection.id), choices.get(target.id))
+        this.db.saveMergeChoice(record.id, collection.id, choices.get(collection.id) || null)
+        this.db.setStoryChoice(collection.id, null)
+        this.db.setStoryChoice(target.id, choice)
+      }
+      this.pruneOrphanedChoices()
+      return record
+    })
     this.notify()
     return result
   }
-  removeFeedback(id: string) { const removed = this.db.deleteCoverageFeedback(id); if (removed) this.notify(); return removed }
+  removeFeedback(id: string) {
+    const removed = this.db.transaction(() => {
+      const absorbed = this.db.absorbedStoryChoice(id)
+      if (absorbed) this.db.setStoryChoice(absorbed.id, absorbed.choice)
+      const deleted = this.db.deleteCoverageFeedback(id)
+      if (deleted) this.pruneOrphanedChoices()
+      return deleted
+    })
+    if (removed) this.notify()
+    return removed
+  }
 
   refresh(): Promise<void> {
     if (this.running) return this.running
@@ -414,7 +518,9 @@ export class PulseService {
         const cached = this.db.getArticleForEntry(entry.id)
         return cached ? { ...entry, contentHtml: cached.contentHtml, excerpt: cached.excerpt } : entry
       })
-      const all = correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now(), true).collections
+      const groupingCollections = () => correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now(), true,
+        new Set(this.db.storyChoices(this.now()).map(choice => choice.id))).collections
+      const all = groupingCollections()
       const words = new Set(articles.flatMap(entry => normalize(entry.title).match(/[\p{L}\p{N}]+/gu) || []))
       const score = (collection: PulseCollection) => (normalize(`${collection.headline} ${collection.scope}`).match(/[\p{L}\p{N}]+/gu) || [])
         .filter(word => word.length >= 3 && words.has(word)).length
@@ -433,8 +539,14 @@ export class PulseService {
       }, checked.groups, articles, existing)
       if (!this.enabled) return
       // Corrections may have arrived while the model was running. Do not recreate a hidden or merged collection.
-      const current = new Set(correctedCollections(this.db.pulseCollections(), this.db.coverageFeedback(), this.now(), true).collections.map(collection => collection.id))
-      const valid = groups.filter(group => !all.some(collection => collection.id === group.id) || current.has(group.id))
+      const current = new Map(groupingCollections().map(collection => [collection.id, collection]))
+      const valid = groups.filter(group => {
+        const original = all.find(collection => collection.id === group.id)
+        if (!original) return true
+        const latest = current.get(group.id)
+        // Recheck title and scope in the next batch if corrections emptied the story during review.
+        return latest && (latest.articleCount > 0 || original.articleCount === 0)
+      })
       const deferred = new Set([...checked.deferred, ...groups.filter(group => !valid.includes(group)).flatMap(group => group.entryIds)])
       this.db.savePulseBatch(valid, fresh.filter(entry => !deferred.has(entry.id)).map(entry => entry.id), new Date(this.now()).toISOString())
       this.failed = checked.reasons.size > 0

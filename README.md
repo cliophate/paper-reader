@@ -226,6 +226,29 @@ archive. Open it from the bottom of Quiet or follow a saved link. Adding an old
 article counts as new since your visit, but only its publication date counts
 toward activity. Articles without a publication date never count toward activity.
 
+Open a collection's options menu and choose **Follow, mute or snooze**.
+Follow pins it under **Following** at the top of the Active tab. A followed
+story stays there with a Quiet badge when coverage slows, even after a week.
+Mute hides the story from Pulse lists, unread collection counts and new-article
+indicators. Snooze hides it until tomorrow at 8 am, a week from today at 8 am,
+or a date and time you choose. Times use your device's local time. When the
+snooze ends, Pulse includes the articles that arrived while it was hidden.
+
+Articles from muted and snoozed stories stay in their feeds and count toward
+feed unread totals. To clear the collection's unread articles before muting
+it, choose **Mark read** on its card in the Pulse list.
+
+Open **Pulse settings** to review or clear a choice. Each story has one choice.
+The merge picker includes muted and snoozed stories. Follow wins over mute,
+and mute wins over snooze. For two snoozes, Paper keeps the later time.
+Undo restores the absorbed story's pre-merge choice. The destination keeps its
+current choice. Removing an article leaves the choice on its collection. These
+controls work with automatic grouping paused.
+
+In **Pulse settings**, turn on **Prioritize followed stories and skip muted
+stories in briefings** to apply those choices to future editions. This starts
+off. Snoozing affects Pulse only.
+
 ## Highlights and notes
 
 Select a passage in the article body, then choose **Use selected text > Save

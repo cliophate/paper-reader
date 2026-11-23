@@ -172,3 +172,84 @@ for (const scenario of ['standalone', 'freshrss', 'partial failure'] as const) {
     expect(read.size).toBe(0)
   })
 }
+
+test('follows and mutes a saved story and restores it from Pulse settings', async ({ page, request }) => {
+  const payload: PulsePayload = await (await request.get('/api/pulse')).json()
+  const story = payload.collections[0]
+  const title = page.getByRole('button', { name: story.headline, exact: true })
+  const settings = page.getByRole('dialog', { name: 'Pulse settings' })
+  const options = page.getByRole('dialog', { name: 'Story options' })
+  const choose = async (label: string) => {
+    if (await title.getAttribute('aria-expanded') !== 'true') await title.click()
+    await page.locator('.pulse-collection-options summary').first().click()
+    await page.getByRole('button', { name: 'Follow, mute or snooze' }).click()
+    await options.getByRole('radio', { name: label, exact: true }).check()
+    if (label === 'Snooze') {
+      await options.getByLabel('Snooze until').selectOption('custom')
+      await options.getByLabel('Date and time').fill('2099-09-23T12:15')
+    }
+    if (label === 'Mute') await expect(options.getByText(/use Mark read on the collection/)).toBeVisible()
+    await options.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(options).toHaveCount(0)
+  }
+  try {
+    await page.goto('/pulse')
+    await choose('Follow')
+    await expect(page.getByRole('heading', { name: 'Following' })).toBeVisible()
+    await page.reload()
+    await expect(page.locator('.pulse-following-badge')).toHaveText('Following')
+    await choose('Mute')
+    await expect(title).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: 'Pulse', exact: true })).toBeFocused()
+    await page.getByRole('button', { name: 'Pulse settings' }).click()
+    await expect(settings.getByText('Muted', { exact: true })).toBeVisible()
+    const briefingSetting = settings.getByRole('checkbox', { name: /briefings/ })
+    await expect(briefingSetting).not.toBeChecked()
+    await briefingSetting.check()
+    await expect(briefingSetting).toBeChecked()
+    await settings.getByRole('button', { name: `Clear choice for ${story.headline}` }).click()
+    await expect(settings.getByText('No saved story choices.')).toBeVisible()
+    await settings.getByRole('button', { name: 'Close' }).click()
+    await expect(title).toBeVisible()
+    const restored: PulsePayload = await (await request.get('/api/pulse')).json()
+    expect(restored.collections[0].unreadCount).toBe(story.unreadCount)
+    await choose('Snooze')
+    await expect(title).toHaveCount(0)
+    await page.getByRole('button', { name: 'Pulse settings' }).click()
+    await expect(settings.getByText(/Snoozed until .*2099/)).toBeVisible()
+    await settings.getByRole('button', { name: `Clear choice for ${story.headline}` }).click()
+    await settings.getByRole('button', { name: 'Close' }).click()
+  } finally {
+    await request.post('/api/pulse/choice', { data: { collectionId: story.id, kind: 'clear' } })
+    await request.post('/api/pulse/briefing-settings', { data: { enabled: false } })
+  }
+})
+
+test('offers hidden merge targets and focuses the next card after muting', async ({ page, request }) => {
+  const payload: PulsePayload = await (await request.get('/api/pulse')).json()
+  const first = payload.collections[0]
+  const second = { ...first, id: 'next', headline: 'Second story' }
+  payload.collections.push(second)
+  payload.storyChoices = [
+    { id: 'muted', headline: 'Muted story', choice: { kind: 'mute' } },
+    { id: 'sleeping', headline: 'Sleeping story', choice: { kind: 'snooze', until: Date.now() + 60_000 } },
+  ]
+  await page.route('**/api/pulse', route => route.fulfill({ json: payload }))
+  await page.route('**/api/pulse/choice', route => {
+    payload.collections = [second]
+    return route.fulfill({ json: { ok: true } })
+  })
+  await page.goto('/pulse')
+  await page.getByRole('button', { name: first.headline, exact: true }).click()
+  const menu = page.locator('.pulse-collection-options summary').first()
+  await menu.click()
+  await page.getByRole('button', { name: 'Merge collection' }).click()
+  const picker = page.getByRole('dialog', { name: 'Merge collection' })
+  await expect(picker.locator('option')).toHaveText(['Choose a collection', 'Second story', 'Muted story (muted)', 'Sleeping story (snoozed)'])
+  await picker.getByRole('button', { name: 'Close' }).click()
+  await menu.click()
+  await page.getByRole('button', { name: 'Follow, mute or snooze' }).click()
+  await page.getByRole('radio', { name: 'Mute', exact: true }).check()
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Second story', exact: true })).toBeFocused()
+})

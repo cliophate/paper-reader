@@ -3,7 +3,7 @@ import { transaction } from './transaction.js'
 
 export const FEED_MAINTENANCE_VERSION = 21
 export const FEED_OVERRIDE_VERSION = 22
-export { WEBHOOK_SCHEMA_VERSION as DATABASE_VERSION } from './webhook-store.js'
+export { STORY_CHOICES_VERSION as DATABASE_VERSION } from './pulse-schema.js'
 
 export function migrateAuth(db: DatabaseSync) {
   transaction(db, () => db.exec(`
