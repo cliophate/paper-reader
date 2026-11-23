@@ -6,7 +6,7 @@ Paper stores additional user state. Back up each application you use.
 
 Paper's data directory contains paper.sqlite and potentially its SQLite WAL
 and shared-memory files. It includes reading positions, cached full text,
-discussions, filters, briefing history, Pulse collections, and feedback.
+discussions, highlights and personal notes, filters, briefing history, Pulse collections, and feedback.
 An empty remote-backend cache can resync articles but cannot recover that additional
 state. An empty standalone database cannot recover subscriptions or reading state.
 The same directory also holds connections.json when connections have been edited

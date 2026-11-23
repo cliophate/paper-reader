@@ -320,7 +320,7 @@ it('keeps the article foreign-key inventory explicit for future schema changes',
     const table = String(row.name)
     return sql.prepare(`PRAGMA foreign_key_list("${table.replaceAll('"', '""')}")`).all().some(key => key.table === 'entries') ? [table] : []
   }).sort()
-  expect(references).toEqual(['article_arrivals', 'article_enclosures', 'article_urls', 'briefing_considered', 'coverage_cluster_entries', 'entry_search_rows',
+  expect(references).toEqual(['annotations', 'article_arrivals', 'article_enclosures', 'article_urls', 'briefing_considered', 'coverage_cluster_entries', 'entry_search_rows',
     'headline_cache', 'muted_entries', 'pulse_memberships', 'pulse_scanned', 'reading_progress', 'retention_auto_read'].sort())
 })
 
@@ -480,4 +480,17 @@ it('lists retention controls in navigation order without counting article histor
     expect(view.policy.feedDays).toEqual({ [feed]: 5 })
     expect(view.policy.folderDays).toEqual({ [folders[0]]: 20 })
   } finally { navigation.mockRestore() }
+})
+
+it('keeps articles with a highlight or article note until the last annotation is removed', async () => {
+  const [highlighted, annotated, ordinary] = seed(3)
+  const highlight = db.annotations.create({ entryId: highlighted, anchor: { body: 'feed',
+    quote: { exact: 'fixture', prefix: '', suffix: '' }, position: { start: 0, end: 7 } } })
+  db.annotations.create({ entryId: annotated, note: 'Synthetic note.' })
+  expect(await save(policy({ unreadDays: 1 }))).toMatchObject({ deleted: 1 })
+  expect(db.entryState(ordinary)).toBeNull()
+  expect(db.entryState(highlighted)).not.toBeNull()
+  expect(db.entryState(annotated)).not.toBeNull()
+  db.annotations.change(highlight, 1)
+  expect(await service.preview(policy({ unreadDays: 1 }))).toMatchObject({ deleted: 1 })
 })

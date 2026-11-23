@@ -203,6 +203,27 @@ archive. Open it from the bottom of Quiet or follow a saved link. Adding an old
 article counts as new since your visit, but only its publication date counts
 toward activity. Articles without a publication date never count toward activity.
 
+## Highlights and notes
+
+Select a passage in the article body, then choose **Use selected text > Save
+highlight**. You can also right-click the selection or press Shift+F10. On a
+phone, long-press the text and adjust the selection handles first.
+
+Open **Article options > Article notes** to add a note or export the article's
+annotations as Markdown. Under **Highlight options**, add a note to a passage
+or send the quote to Kirby if configured. For keyboard selection, choose
+**Select passage** in Article notes, select text with Shift and the arrow keys,
+then tab to **Save highlight**. Paper looks for the quote and its surrounding
+text in either version of the article. If it cannot identify the passage,
+**Passage not found** appears beside the saved quote.
+
+Open **Highlights** in the sidebar to search quotes and notes, return to an
+article, or download selected annotations or the whole list. Each article can
+hold 500 highlights and notes in total. If you lose your connection while
+writing a note, leave the editor open and save it when you reconnect. Paper keeps them out of Reader app sync and
+offline storage. If another tab changes a note, reopen your notes before editing
+it again.
+
 ## Your data
 
 Back up `./data` and your private `.env`. The data directory holds reading
@@ -223,8 +244,7 @@ external services.
 
 This is an alpha release. Keep backups before upgrading. Folders are flat, and OPML
 transfers subscriptions, not article history or settings. Offline browser copies
-are not server backups and do not protect server articles from retention. Star
-articles to keep their server copies. Cleanup frees database pages for reuse;
+are not server backups and do not protect server articles from retention. Star an article or add a highlight or note to keep its server copy. Cleanup frees database pages for reuse;
 it does not shrink the file or remove backups. Identity conflicts have no dedicated resolution UI.
 Broad searches can still take time, although they run outside the HTTP event
 loop. Article cleanup avoids known repeated-markup scans; very deep or large

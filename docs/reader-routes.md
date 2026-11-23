@@ -17,6 +17,7 @@ its links. A number copied from another installation can identify a different it
 | Collection article | `/collection/<number>/a/<number>` |
 | Continue reading | `/recent` |
 | Offline articles | `/offline` |
+| Highlights and notes | `/highlights` |
 | Briefings | `/briefings` |
 | Pulse | `/pulse` |
 | Subscribe to a website or feed | `/subscribe?url=<encoded URL>` |

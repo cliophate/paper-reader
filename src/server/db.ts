@@ -6,6 +6,7 @@ import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
 import { migrateGreader } from './greader-schema.js'
+import { ANNOTATIONS_VERSION, AnnotationStore, migrateAnnotations } from './annotations.js'
 import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION, FEED_OVERRIDE_VERSION, migrateAuth } from './auth-schema.js'
 import { AuthStore } from './auth-store.js'
 import { StateConflictError, UndoExpiredError } from './state-errors.js'
@@ -190,6 +191,7 @@ const BACKEND_CHECKPOINTS = new Set(['backfill_complete', 'backfill_continuation
 export class PaperDatabase {
   private readonly db: DatabaseSync
   private readonly databasePath: string
+  readonly annotations: AnnotationStore
   readonly retention: RetentionStore
   readonly auth: AuthStore
   readonly identities: IdentityStore
@@ -253,6 +255,10 @@ export class PaperDatabase {
           if (version > 0) this.backupBeforeMigration(ENCLOSURE_SCHEMA_VERSION, 'podcast-enclosures')
           migrateEnclosures(this.db)
         }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < ANNOTATIONS_VERSION) {
+          if (version > 0) this.backupBeforeMigration(ANNOTATIONS_VERSION, 'annotations')
+          migrateAnnotations(this.db)
+        }
       }
       this.db.function('checked_url_match', { directOnly: true }, matched => {
         const now = performance.now()
@@ -262,6 +268,7 @@ export class PaperDatabase {
         }
         return matched
       })
+      this.annotations = new AnnotationStore(this.db)
       this.retention = new RetentionStore(this.db, ids => { this.commitLocalEntryState(this.activeBackendId, ids, 'read', { origin: 'retention' }) })
       this.auth = new AuthStore(this.db)
       this.identities = new IdentityStore(this.db)

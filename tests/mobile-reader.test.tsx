@@ -9,6 +9,7 @@ import { offlineArticles } from '../src/client/offline'
 import type { Entry, EntryPage, Feed } from '../src/client/types'
 
 vi.mock('../src/client/api', async () => ({ ...await vi.importActual('../src/client/api'), api: {
+  annotations: vi.fn().mockResolvedValue([]),
   reload: vi.fn(), organization: vi.fn(), organize: vi.fn(), recentReading: vi.fn(), navigation: vi.fn(), status: vi.fn(), entries: vi.fn(), entry: vi.fn(), entryByNumber: vi.fn(), editState: vi.fn(), markStreamRead: vi.fn(),
   saveArticle: vi.fn(), saveReadwise: vi.fn(), markRelativeRead: vi.fn(), undo: vi.fn(),
   setStreamOrder: vi.fn(), removeFeed: vi.fn(), fullText: vi.fn(), previewRead: vi.fn(), confirmRead: vi.fn(), filters: vi.fn(),

@@ -28,7 +28,7 @@ async function openReader(page: Page, short = false, crossFeeds = false, episode
       : pathname === '/api/status' ? { backend: 'freshrss', backendInstance: 'fixture', discussionConfigured: false, readwiseConfigured: true, saveDestinations: [{ id: 'linkding', name: 'Linkding' }], kirbyConfigured: false, briefingConfigured: false, sync: { lastCompletedAt: null } }
       : pathname === '/api/entries' ? { items, continuation: '' }
       : pathname === '/api/entries/item' ? { entry: items.find(item => item.id === route.request().postDataJSON().id) }
-      : pathname === '/api/reading' ? [] : { ok: true }
+      : pathname === '/api/annotations' ? { items: [], parents: {}, next: null } : pathname === '/api/reading' ? [] : { ok: true }
     if (pathname === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': fixture\n\n' })
     await route.fulfill({ json })
   })

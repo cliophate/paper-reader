@@ -1,6 +1,7 @@
 import type { FeedOverrideView, FeedOverrideUpdate } from '../shared/feed-overrides'
 import { PlaybackQueue, type PlaybackPosition } from './playback'
 import { checkSearchSize, SEARCH_SIZE_HINT } from '../server/search-query'
+import type { Annotation, AnnotationPage, NewAnnotation } from '../shared/annotations'
 import type { RetentionPolicy, RetentionPreview, RetentionView } from '../shared/retention'
 import type { FeedMaintenance, StaleDays, FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarget } from '../shared/feed-checks'
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
@@ -35,7 +36,32 @@ export const playback = new PlaybackQueue(item => request<PlaybackPosition>('/ap
   method: 'POST', body: JSON.stringify(item), keepalive: true,
 }))
 
+function annotationPage({ entryId, before, limit, signal }: {
+  entryId?: string; before?: number; limit?: number; signal?: AbortSignal
+}): Promise<AnnotationPage> {
+  const params = new URLSearchParams()
+  if (entryId !== undefined) params.set('entryId', entryId)
+  if (before !== undefined) params.set('before', String(before))
+  if (limit !== undefined) params.set('limit', String(limit))
+  return request('/api/annotations?' + params, { signal })
+}
+
 export const api = {
+  annotationPage,
+  annotationArticleIds: (after: string) => request<string[]>('/api/annotations/articles?' + new URLSearchParams({ after })),
+  async annotations(entryId: string, signal?: AbortSignal) {
+    const items: Annotation[] = []
+    let before: number | undefined
+    do {
+      const page = await annotationPage({ entryId, before, signal })
+      items.push(...page.items)
+      before = page.next ?? undefined
+    } while (before)
+    return items
+  },
+  addAnnotation: (data: NewAnnotation) => request<{ id: number }>('/api/annotations', { method: 'POST', body: JSON.stringify(data) }),
+  editNote: (id: number, revision: number, note: string) => request<{ ok: boolean }>(`/api/annotations/${id}`, { method: 'PATCH', body: JSON.stringify({ revision, note }) }),
+  removeAnnotation: (id: number, revision: number) => request<{ ok: boolean }>(`/api/annotations/${id}`, { method: 'DELETE', body: JSON.stringify({ revision }) }),
   retention: () => request<RetentionView>('/api/retention'),
   previewRetention: (policy: RetentionPolicy) => request<RetentionPreview>('/api/retention/preview', { method: 'POST', body: JSON.stringify({ policy }) }),
   saveRetention: (policy: RetentionPolicy, revision: number, token?: string) => request<RetentionView>('/api/retention', { method: 'POST', body: JSON.stringify({ policy, revision, token }) }),

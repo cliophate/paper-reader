@@ -1,3 +1,4 @@
+import { ANNOTATIONS_PER_ARTICLE } from '../src/server/annotations'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -313,4 +314,56 @@ describe('replacement feed preview', () => {
   it('rejects website pages, malformed feeds and entity declarations', () => {
     for (const value of ['<html><title>Website</title></html>', '<rss><broken>', '<!DOCTYPE rss [<!ENTITY test SYSTEM "file:///etc/passwd">]><rss/>']) expect(() => parseFeedPreview(value, 'https://example.test/feed')).toThrow()
   })
+})
+
+it('upgrades schema v23 before adding annotations and restores highlights and notes with the database', () => {
+  db.upsertEntries([article(1)])
+  db.greaderDatabase.exec('DROP TABLE annotations; PRAGMA user_version = 23')
+  db.close()
+  const file = path.join(directory, 'test.sqlite')
+  db = new PaperDatabase(file)
+  expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(24)
+  const backup = file + '.before-annotations-v24'
+  expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
+  const previous = new DatabaseSync(backup, { readOnly: true })
+  try {
+    expect(previous.prepare('PRAGMA user_version').get()?.user_version).toBe(23)
+    expect(previous.prepare("SELECT 1 FROM sqlite_master WHERE name = 'annotations'").get()).toBeUndefined()
+    expect(previous.prepare("SELECT title FROM entries WHERE id = '1'").get()?.title).toBe(article(1).title)
+  } finally { previous.close() }
+  const parentId = db.annotations.create({ entryId: '1', anchor: { body: 'feed',
+    quote: { exact: 'short', prefix: 'A ', suffix: ' teaser.' }, position: { start: 2, end: 7 } } })
+  db.annotations.create({ entryId: '1', parentId, note: 'A synthetic note.' })
+  const restoredFile = path.join(directory, 'restored.sqlite')
+  db.greaderDatabase.prepare('VACUUM INTO ?').run(restoredFile)
+  const restored = new PaperDatabase(restoredFile)
+  try {
+    expect(restored.annotations.list()).toEqual(db.annotations.list())
+    expect(restored.annotations.list().items.map(item => item.parentId)).toEqual([parentId, null])
+  } finally { restored.close() }
+})
+
+it('caps annotations within each article and pages through notes without duplicating the parent quote', () => {
+  db.upsertEntries([article(1), article(2)])
+  const anchor = { body: 'feed' as const, quote: { exact: 'short', prefix: '', suffix: '' }, position: { start: 0, end: 5 } }
+  const parentId = db.annotations.create({ entryId: '1', anchor })
+  for (let index = 1; index < ANNOTATIONS_PER_ARTICLE; index++)
+    db.annotations.create({ entryId: '1', parentId, note: 'Note ' + index })
+  expect(() => db.annotations.create({ entryId: '1', note: 'Over limit' })).toThrow(/limit of 500/)
+  db.annotations.create({ entryId: '2', note: 'Separate article' })
+  const first = db.annotations.list()
+  expect(first.items).toHaveLength(50)
+  expect(first.parents).toEqual({ [parentId]: anchor })
+  expect(first.items.every(item => item.anchor === null)).toBe(true)
+  const ids = first.items.map(item => item.id)
+  let next = first.next
+  while (next) {
+    const page = db.annotations.list(undefined, next)
+    ids.push(...page.items.map(item => item.id))
+    next = page.next
+  }
+  expect(new Set(ids).size).toBe(ANNOTATIONS_PER_ARTICLE + 1)
+  expect(ids).toHaveLength(ANNOTATIONS_PER_ARTICLE + 1)
+  expect(db.annotations.articleIds('')).toEqual(['1', '2'])
+  expect(db.annotations.articleIds('1')).toEqual(['2'])
 })

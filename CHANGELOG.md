@@ -5,6 +5,8 @@
 - Manage feeds can set a user agent and cookie per feed, select the article
   body, remove elements, fix lazy images and strip tracking parameters. Preview
   the result on a recent article before saving.
+- Save highlights and personal notes in the web reader. Search them in Highlights
+  and download an article, selected annotations or everything as Markdown.
 - Add Linux ARM64 support for the reader and Codex worker. Both use the same
   release tags as amd64. Reader archives are available for each architecture.
 - Save articles to Linkding, Wallabag, Readeck, Raindrop.io or Linkwarden.

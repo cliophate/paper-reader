@@ -7,7 +7,7 @@ export interface ReaderLocation {
   articleNumber?: number
   collectionNumber?: number
   collectionFilter?: 'new'
-  view: 'reader' | 'briefings' | 'pulse'
+  view: 'reader' | 'briefings' | 'pulse' | 'highlights'
   stream: StreamRef
   selectedId: string
   unreadOnly: boolean
@@ -73,7 +73,8 @@ export function readReaderLocation(input = window.location.pathname + window.loc
       location.stream = { kind: place === 'feed' ? 'feed' : 'category', id: '', title: '', linkNumber: number(parts[1]) }
       if ((parts.length === 4 || parts.length === 5) && parts.at(-2) === 'a') location.articleNumber = number(parts.at(-1))
     }
-  } else if (place === 'a' && parts.length === 2) location.articleNumber = number(parts[1])
+  } else if (place === 'highlights' && parts.length === 1) location.view = 'highlights'
+  else if (place === 'a' && parts.length === 2) location.articleNumber = number(parts[1])
   else if (place === 'collection' && [2, 4].includes(parts.length)) {
     location.collectionNumber = number(parts[1])
     location.view = 'pulse'
@@ -153,7 +154,7 @@ export function readerLocationUrl(location: ReaderLocation, links: ReaderLinks =
   const collectionNumber = links.collections?.find(item => item.id === location.collection)?.linkNumber || location.collectionNumber
   const articleNumber = location.selectedId ? links.entries?.find(item => item.id === location.selectedId)?.linkNumber || location.articleNumber : location.articleNumber
   let path = '/'
-  if (location.view === 'briefings') path = '/briefings'
+  if (location.view === 'highlights' || location.view === 'briefings') path = `/${location.view}`
   else if (collectionNumber) path = `/collection/${collectionNumber}`
   else if (location.view === 'pulse') path = '/pulse'
   else if (location.library === 'recent' || location.library === 'offline') path = `/${location.library}`
