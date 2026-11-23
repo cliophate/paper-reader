@@ -921,6 +921,11 @@ app.post('/api/streams/confirm-read', asyncRoute(async (request, response) => {
       ids = (await withRequestSignal(request, response, signal => search.select(stream, options,
         { kind: 'preview', withRevisions: false, ids }, signal))).ids
     }
+    if (!standalone && ids.length) {
+      const unread = new Set(await withRequestSignal(request, response, signal =>
+        backend.entryIds({ kind: 'all', id: 'all', title: 'All' }, true, signal)))
+      ids = ids.filter(id => unread.has(id))
+    }
     if (view) database.savedViews.get(view.stream.id, view.revision)
     if (!bulkPreviews.delete(token) || preview.expires < Date.now())
       throw new SearchSnapshotError('The preview expired. Check the count again.')

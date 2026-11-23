@@ -134,6 +134,19 @@ describe('folder ordering', () => {
 })
 
 describe('FreshRSS transport', () => {
+  it.each([true, false])('honors retry=%s after a state write returns 503', async retry => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response('Auth=synthetic-token'))
+      .mockResolvedValueOnce(new Response('edit-token'))
+      .mockResolvedValueOnce(new Response('Unavailable', { status: 503 }))
+      .mockResolvedValueOnce(new Response('OK'))
+    vi.stubGlobal('fetch', fetcher)
+    const client = new FreshRssClient({ baseUrl: 'http://freshrss', username: 'fixture', apiPassword: 'synthetic' })
+    const write = client.editEntries(['1'], 'read', retry ? undefined : { retry: false })
+    if (retry) await expect(write).resolves.toBeUndefined()
+    else await expect(write).rejects.toThrow('503')
+    expect(fetcher.mock.calls.filter(([url]) => url.endsWith('/edit-tag'))).toHaveLength(retry ? 2 : 1)
+  })
+
   it('retries when FreshRSS closes a response body early', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response('Auth=clio/token\n'))

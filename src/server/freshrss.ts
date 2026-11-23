@@ -82,17 +82,17 @@ export class FreshRssClient implements ReaderBackend {
     }
   }
 
-  private async request(path: string, init: SourceRequest = {}, retry = true): Promise<Response> {
+  private async request(path: string, init: SourceRequest = {}, retry = true, refreshAuth = retry): Promise<Response> {
     init.signal?.throwIfAborted()
     if (!this.authToken) await this.login(init.signal)
     const headers = new Headers(init.headers)
     headers.set('Authorization', `GoogleLogin auth=${this.authToken}`)
-    const response = await this.fetchBuffered(`${this.baseUrl}${path}`, { ...init, headers })
-    if (response.status === 401 && retry) {
+    const response = await this.fetchBuffered(`${this.baseUrl}${path}`, { ...init, headers }, retry ? undefined : 0)
+    if (response.status === 401 && refreshAuth) {
       this.authToken = ''
       this.editToken = ''
       await this.login(init.signal)
-      return this.request(path, init, false)
+      return this.request(path, init, retry, false)
     }
     if (!response.ok) throw new Error(`FreshRSS request failed with ${response.status} for ${path}`)
     return response

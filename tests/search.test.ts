@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
+import { searchCopies } from '../src/client/offlineSearch.js'
 import { compileSearch } from '../src/server/search-sql.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
@@ -67,6 +68,21 @@ it.each(cases)('agrees on %s for single articles, search pages, bulk preview and
   if (page.length) {
     expect(db.localRelativeUnreadEntryIds(all, page[0].id, 'below', { query })).toEqual(page.slice(1).filter(entry => !entry.read).map(entry => entry.id))
   }
+})
+
+it.each([
+  ['Αθήνα', 'title:"Αθηνα"', false],
+  ['Αθήνα', 'title:"ΑΘΉΝΑ"', true],
+  ['κόσμος', 'title:"κόσμοσ"', true],
+  ['école hộp', 'title:"ecole hop"', true],
+  ['cafe\u0301 noir', 'title:"café noir"', true],
+  ['one\u034ftwo', 'title:"one two"', true],
+  ['one\ue000two', 'title:"one two"', false],
+] as const)('matches SQLite offline for %s and %s', (title, query, expected) => {
+  const entry = { ...base, title }
+  const online = evaluator.matches(parseSearch(query).root, entry)
+  expect(online).toBe(expected)
+  expect(searchCopies([entry], query).length === 1).toBe(online)
 })
 
 it('ranks mixed alternatives, keeps the selected scope and pages metadata-only matches', () => {
