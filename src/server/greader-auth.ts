@@ -47,8 +47,9 @@ export function greaderPath(path: string) { return /^\/api\/greader\.php(?:\/|$)
 
 // Call only inside the transaction that commits the reader mutation.
 export function assertReaderCredential(db: DatabaseSync, app: Pick<AppCredential, 'id' | 'generation' | 'globalGeneration'>) {
-  const row = db.prepare(`SELECT a.generation, m.generation AS global_generation, s.enabled
+  const row = db.prepare(`SELECT a.generation, a.article_labels, m.generation AS global_generation, s.enabled
     FROM auth_apps a CROSS JOIN auth_meta m CROSS JOIN greader_settings s
     WHERE a.id = ? AND a.revoked IS NULL AND a.scope = 'reader-sync' AND m.id = 1 AND s.id = 1`).get(app.id)
   if (!row?.enabled || row.generation !== app.generation || row.global_generation !== app.globalGeneration) throw new ReaderError('Unauthorized.', 401)
+  return { articleLabels: Boolean(row.article_labels) }
 }

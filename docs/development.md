@@ -501,9 +501,11 @@ lock release. Any 429 during sync fails the run. Output includes each organizati
 operation, health latency, page timings, total sync time and combined process RSS,
 which must stay below 1 GiB. Read jobs allow five seconds.
 
-`mark-all-as-read` is deferred until it passes the 15-second disk-backed 200,000-
-article gate. The script asserts its terminal JSON 404; the pinned apps mark
-explicit IDs with `edit-tag`.
+The script calls `mark-all-as-read` on the 200,000-article feed and checks
+the committed state, stars and unread counts. The call must finish in under
+15 seconds and each concurrent health probe in under two seconds. On the
+schema v33 disk fixture, the call took 1.437 seconds. The slowest of 210
+health probes during the write took 3 ms.
 
 Client fixtures are source-derived, not device captures. Their pinned sources
 and replay contracts are in tests/fixtures/greader. Manual HTTPS client checks

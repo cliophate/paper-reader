@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Standalone Reader apps can mark a feed, folder, article label or the whole reading list as read.
+
 - Marking articles read or starred now writes only the article state table.
   Schema v33 backs up the database before removing the old state columns.
   On the test machine, the upgrade took about 45 seconds for 200,000 articles

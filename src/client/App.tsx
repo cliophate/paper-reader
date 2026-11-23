@@ -337,7 +337,7 @@ function Reader() {
     }
   }, [applyOrganizationSnapshot])
 
-  const loadEntries = useCallback(async (target = currentReader.current.stream, select: 'keep' | 'first' | 'last' = 'keep', background: boolean | 'replace-in-place' = false) => {
+  const loadEntries = useCallback(async (target = currentReader.current.stream, select: 'keep' | 'first' | 'last' = 'keep', background: boolean | 'replace-in-place' = false, refreshPinnedState = false) => {
     const serial = ++requestSerial.current
     const source = query ? searchStream : target
     const scope = JSON.stringify([libraryMode, source.kind, source.kind === 'view' ? [source.id, viewQuery] : source.id, query ? searchUnread : unreadOnly && target.kind !== 'starred', query, query ? dates : {}])
@@ -378,6 +378,10 @@ function Reader() {
         cursor = reverse ? page.previousContinuation : page.continuation
       }
       if (serial !== requestSerial.current) return
+      const pinnedId = selectedIdRef.current
+      const pinnedState = refreshPinnedState && pinnedId && !result.items.some(item => item.id === pinnedId)
+        ? await api.offlineState(pinnedId).catch(() => null) : null
+      if (serial !== requestSerial.current) return
       const scopeChanged = loadedEntriesScope.current !== scope
       loadedEntriesScope.current = scope
       const orderChanged = Boolean(result.order && result.order !== entryOrderRef.current)
@@ -400,7 +404,8 @@ function Reader() {
             // missing-entry effect would otherwise fetch and prepend it.
             const nextSurvivor = current.slice(selectedIndex + 1).find(item => next.some(incoming => incoming.id === item.id))
             const index = nextSurvivor ? next.findIndex(item => item.id === nextSurvivor.id) : next.length
-            next.splice(index, 0, selectedEntry)
+            const fresh = selectedEntry.id === pinnedId && pinnedState && (pinnedState.stateRevision ?? 0) >= (selectedEntry.stateRevision ?? 0)
+            next.splice(index, 0, fresh ? { ...selectedEntry, ...pinnedState } : selectedEntry)
           }
           return next
         }
@@ -628,15 +633,18 @@ function Reader() {
     return () => { abort(); window.removeEventListener('pagehide', abort); window.removeEventListener('pageshow', restored); window.removeEventListener('online', reload) }
   }, [loadNavigation, loadStatus])
 
-  const synced = useEffectEvent(() => {
+  const synced = useEffectEvent((event: Event) => {
     void loadNavigation().catch(() => {})
     void loadStatus().catch(() => {})
-    if (view === 'reader') void loadEntries(stream, 'keep', stream.kind === 'view' ? 'replace-in-place' : true)
+    if (view === 'reader') {
+      const bulkStateChange = event.type === 'state'
+      void loadEntries(stream, 'keep', bulkStateChange || stream.kind === 'view' ? 'replace-in-place' : true, bulkStateChange)
+    }
     setTopicsRefreshKey(current => current + 1)
   })
   const stateChanged = useEffectEvent((event: MessageEvent) => {
     const change = JSON.parse(event.data) as { ids: string[]; operation: 'read' | 'unread' | 'star' | 'unstar'; revisions?: Record<string, number> } | null
-    if (!change) { synced(); return }
+    if (!change) { synced(event); return }
     const ids = new Set(change.ids)
     const patch = change.operation === 'read' ? { read: true } : change.operation === 'unread' ? { read: false } : change.operation === 'star' ? { starred: true } : { starred: false }
     setEntries(current => current.map(entry => ids.has(entry.id) ? { ...entry, ...patch, stateRevision: change.revisions?.[entry.id] ?? entry.stateRevision } : entry))

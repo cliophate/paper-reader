@@ -288,3 +288,28 @@ test('opens syntax help from search and shortcuts and explains a malformed query
   await expect(page.getByText('Missing closing quote. Searching as plain terms.')).toBeVisible()
   await expect(page.locator('.story-row').first()).toBeVisible()
 })
+
+test('a bulk read removes unread rows and refreshes the article kept open', async ({ page, request }) => {
+  const { article, feed } = await fixture(page)
+  const { items }: { items: Entry[] } = await (await request.get('/api/entries?unread=1')).json()
+  const unread = items.filter(entry => entry.feedId === feed.id)
+  await page.goto(`/feed/${feed.linkNumber}/synthetic-feed/a/${article.linkNumber}`)
+  const rows = page.locator('.story-row')
+  await expect(rows).toHaveCount(unread.length)
+  await expect(rows.filter({ hasText: article.title })).not.toHaveClass(/\bread\b/)
+
+  // Rule backfill emits the same null state event as Reader mark-all-as-read.
+  const response = await request.post('/api/rules', { data: {
+    query: 'feedid:' + feed.id, actions: ['read'], applyExisting: true,
+  } })
+  expect(response.status()).toBe(201)
+  const { id } = await response.json()
+  try {
+    await expect(rows).toHaveCount(1)
+    await expect(rows).toContainText(article.title)
+    await expect(rows).toHaveClass(/\bread\b/)
+  } finally {
+    await request.delete('/api/filters/' + id)
+    await request.post('/api/entries/state', { data: { ids: unread.map(entry => entry.id), operation: 'unread' } })
+  }
+})

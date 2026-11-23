@@ -168,7 +168,7 @@ export function AccessSettings() {
         <pre>npm run paper-auth -- app-password create &lt;name&gt;{'\n'}npm run paper-auth -- reader-api enable &lt;username&gt;{'\n'}npm run paper-auth -- reader-api disable</pre>
         <p>API username: {reader.username || 'Not configured'}</p>
       </>}
-      <p>Choose FreshRSS in each app. Use the API username and its app password. In standalone mode, apps can import subscriptions from OPML.</p>
+      <p>Choose FreshRSS in each app. Use the API username and its app password. In standalone mode, apps can import subscriptions from OPML and mark a whole stream as read.</p>
       <p>NetNewsWire: <code>{reader.addresses.netNewsWire}</code></p>
       <p>Read You: <code>{reader.addresses.readYou}</code></p>
       <p>Capy Reader: <code>{reader.addresses.capyReader}</code></p>

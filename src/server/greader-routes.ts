@@ -5,6 +5,7 @@ import type { PaperDatabase } from './db.js'
 import { AuthError } from './auth-store.js'
 import { GreaderAuth, ReaderError, assertReaderCredential, equal, greaderPath } from './greader-auth.js'
 import { GreaderLimits } from './greader-limits.js'
+import { arrivalCutoff, resolveMarkReadStream } from './greader-mark-read.js'
 import { GreaderPool } from './greader-pool.js'
 import { GreaderOrganization, organizationSources } from './greader-organization.js'
 import { itemNumber, resolveStream, READING, STATE, type Query } from './greader-query.js'
@@ -19,6 +20,7 @@ export const GREADER_ENDPOINTS: Record<string, { method: string; fields: string[
   'stream/contents': { method: 'GET', fields: ['s', 'n', 'c', 'ot', 'nt', 'it', 'xt', 'r'] },
   'stream/items/contents': { method: 'POST', fields: ['i', 'T', 'r'] },
   'edit-tag': { method: 'POST', fields: ['i', 'a', 'r', 'T'] },
+  'mark-all-as-read': { method: 'POST', fields: ['s', 'ts', 'T'] },
   'subscription/import': { method: 'POST', fields: ['T'] },
   'subscription/quickadd': { method: 'POST', fields: ['quickadd', 'T'] },
   'subscription/edit': { method: 'POST', fields: ['s', 'ac', 't', 'a', 'r', 'T'] },
@@ -108,9 +110,14 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
       const authorize = () => { abort.signal.throwIfAborted(); assertReaderCredential(db.greaderDatabase, app) }
       const mutation = req.method === 'POST' && endpoint !== 'stream/items/contents'
       const xmlImport = endpoint === 'subscription/import' && req.is(['text/xml', 'application/xml', 'application/*+xml', 'text/x-opml'])
-      if (((mutation && !xmlImport) || p.has('T')) && !equal((p.get('T') || '').replace(/\r?\n$/, ''), auth.token(app, 'T'))) { res.set('X-Reader-Google-Bad-Token', 'true'); throw new ReaderError('Invalid token.', 403) }
+      const reederToken = endpoint === 'mark-all-as-read' && p.get('T') === 'x'
+      if (((mutation && !xmlImport) || p.has('T')) && !reederToken && !equal((p.get('T') || '').replace(/\r?\n$/, ''), auth.token(app, 'T'))) { res.set('X-Reader-Google-Bad-Token', 'true'); throw new ReaderError('Invalid token.', 403) }
       if (p.has('output') && p.get('output') !== 'json') throw new ReaderError('Only JSON is supported.')
       if (['subscription/edit', 'rename-tag', 'disable-tag'].includes(endpoint)) organizationSources(p)
+      const markRead = endpoint === 'mark-all-as-read' ? {
+        stream: resolveMarkReadStream(db.greaderDatabase, p.get('s') || '', app.articleLabels),
+        cutoff: arrivalCutoff(p.get('ts')),
+      } : undefined
       await limits.acquire(app.id, mutation, abort.signal)
       authorize()
       // Read You and Capy send this body back verbatim, newline included.
@@ -144,6 +151,12 @@ export function greaderRoutes(db: PaperDatabase, auth: GreaderAuth, backend: str
         if (!Object.keys(fields).length && !labels.size) throw new ReaderError('Supply a state or label change.')
         if (labels.size * ids.length > 4096) throw new ReaderError('Too many article label changes.', 413)
         state!.editReaderNumbers(ids.map(BigInt), fields, authorize, labels)
+      } else if (markRead) {
+        const changed = await writer.run({ kind: 'mark-read', path: db.searchDatabasePath, backend,
+          ...markRead,
+          app: { id: app.id, generation: app.generation, globalGeneration: app.globalGeneration } }, abort.signal)
+        if (Number(changed)) state?.invalidate()
+        db.checkpointWalIfLarge()
       } else if (['stream/items/ids', 'stream/contents'].includes(endpoint)) {
         if (p.getAll('s').length > 1 || p.getAll('r').length > 1) throw new ReaderError('Supply one stream and order.')
         const streamName = pathStream || p.get('s') || ''
