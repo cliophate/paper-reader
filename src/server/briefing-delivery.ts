@@ -1,5 +1,7 @@
+import { AiLimitError } from './ai-activity.js'
 import { aiEnabled } from './ai-provider.js'
-import type { BriefingService } from './briefing.js'
+import { AiError } from './ai-errors.js'
+import { BriefingGenerationError, type BriefingService } from './briefing.js'
 import { BriefingClock, shiftDate } from './briefing-schedule.js'
 import type { Config } from './config.js'
 import type { PaperDatabase } from './db.js'
@@ -129,9 +131,14 @@ export class BriefingDelivery {
     try { checkSmtp(this.config.smtp) }
     catch (error) { return state('failed', (error as SmtpError).message) }
 
-    if (!briefingId) {
-      briefingId = store.edition(job) ?? null
-      if (briefingId) store.attach(job.id, briefingId, this.now())
+    try {
+      const key = await this.db.aiActivity.withTrigger('scheduled', async () => this.db.aiActivity.exclusionKey)
+      briefingId ??= store.edition(job) ?? null
+      if (briefingId && (this.db.getBriefing(briefingId)?.exclusionKey ?? '') !== key) briefingId = null
+      if (briefingId && briefingId !== job.briefingId) store.attach(job.id, briefingId, this.now())
+    } catch (error) {
+      if (error instanceof AiLimitError) return state('skipped', error.message)
+      throw error
     }
     if (!briefingId) {
       state('generating')
@@ -144,11 +151,18 @@ export class BriefingDelivery {
           attached = true
         })
         briefingId = record.id
-      } catch {
+      } catch (error) {
+        if (error instanceof AiLimitError) return state('skipped', error.message)
         if (this.stopped) return
         const reason = this.skipReason()
         if (reason) return state('skipped', reason)
-        return state('failed', 'Paper could not generate the briefing. Check AI settings and the server logs.')
+        const message = error instanceof BriefingGenerationError || error instanceof AiError
+          ? error.message : 'Could not generate the briefing.'
+        const source = error instanceof BriefingGenerationError && error.cause instanceof Error ? error.cause : error
+        // Backend error messages can quote response bodies. Keep only their stack frames.
+        const frames = source instanceof Error ? source.stack?.slice(source.toString().length).split('\n').filter(line => line.startsWith('    at ')) : []
+        console.error(['Scheduled briefing failed: ' + message, ...(frames ?? [])].join('\n'))
+        return state('failed', message + ' Check the server logs.')
       } finally { this.generating = undefined }
       // A shared request can return an edition that was already stored.
       if (!attached) store.attach(job.id, briefingId, this.now())
@@ -165,7 +179,14 @@ export class BriefingDelivery {
       await sendSmtp(this.config.smtp, {
         subject: briefing.subject, text: briefing.text, html: briefing.html,
         messageId: `<${job.id}@${senderDomain(this.config.smtp.from)}>`,
-      }, () => {
+      }, async () => {
+        try {
+          const key = await this.db.aiActivity.withTrigger('scheduled', async () => this.db.aiActivity.exclusionKey)
+          if ((briefing.exclusionKey ?? '') !== key) throw new DeliverySkipped('Source exclusions changed before delivery.')
+        } catch (error) {
+          if (error instanceof AiLimitError) throw new DeliverySkipped(error.message)
+          throw error
+        }
         const disabled = this.skipReason()
         if (disabled) throw new DeliverySkipped(disabled)
         if (delivered(briefingId)) throw new DeliverySkipped('This edition was already delivered.')

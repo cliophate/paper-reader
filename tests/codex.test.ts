@@ -78,9 +78,12 @@ describe('Codex tool isolation', () => {
   })
 
   it('uses the same disabling config for batch argv, chat argv and chat threads', async () => {
-    const batch = await runCodex(config, 'synthetic-model', 'Return a title.', input, schema) as Capture
+    const usage = vi.fn()
+    const batch = await runCodex(config, 'synthetic-model', 'Return a title.', input, schema, undefined, undefined, usage) as Capture
+    expect(usage).toHaveBeenCalledWith({ input: 37, output: 8 })
     const onText = vi.fn()
-    const text = await createChatModel(config.bin, 'synthetic-model')(input, new AbortController().signal, onText)
+    const text = await createChatModel(config.bin, 'synthetic-model')(input, new AbortController().signal, onText, usage)
+    expect(usage).toHaveBeenCalledWith({ input: 42, output: 7 })
     const chat = JSON.parse(text)
     expect(readConfig(chat.argv)).toEqual(expectedConfig)
     expect(readConfig(batch.argv)).toEqual(readConfig(chat.argv))

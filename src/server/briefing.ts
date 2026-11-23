@@ -1,3 +1,5 @@
+import { interruptedAiWork } from './ai-activity.js'
+import type { AiTrigger } from '../shared/ai-activity.js'
 import crypto from 'node:crypto'
 import { abortable } from './abort.js'
 import { AiError } from './ai-errors.js'
@@ -133,6 +135,8 @@ function briefingStoryChoices(db: PaperDatabase, now: number) {
   }
   return { followed, muted }
 }
+// Only Paper-authored messages from this class may appear in delivery history.
+export class BriefingGenerationError extends Error {}
 
 export class BriefingService {
   private readonly generating = new Map<string, {
@@ -148,26 +152,29 @@ export class BriefingService {
     private readonly entries: EntrySource,
     private readonly reader?: ReaderService,
     private readonly coverage?: TopicService,
-  ) {}
+  ) {
+    this.db.aiActivity.navigation ??= signal => this.entries.navigation(signal)
+  }
 
-  async generate(kind: 'morning' | 'evening', force = false, signal?: AbortSignal): Promise<BriefingRecord> {
-    return this.shareGeneration(kind, force, signal)
+  async generate(kind: 'morning' | 'evening', force = false, signal?: AbortSignal, trigger: AiTrigger = 'manual'): Promise<BriefingRecord> {
+    return this.db.aiActivity.withTrigger(trigger, () => this.shareGeneration(kind, force, signal), 'briefing', signal)
   }
 
   generateScheduled(kind: 'morning' | 'evening', signal: AbortSignal, onSaved: (record: BriefingRecord) => void): Promise<BriefingRecord> {
     // Scheduled delivery checks for a saved edition by its local date.
-    return this.shareGeneration(kind, true, signal, onSaved)
+    return this.db.aiActivity.withTrigger('scheduled', () => this.shareGeneration(kind, true, signal, onSaved), 'briefing', signal)
   }
 
   private async shareGeneration(kind: 'morning' | 'evening', force: boolean, signal?: AbortSignal, onSaved?: (record: BriefingRecord) => void): Promise<BriefingRecord> {
     signal?.throwIfAborted()
-    let job = this.generating.get(kind)
+    const key = JSON.stringify([kind, this.db.aiActivity.trigger, this.db.aiActivity.exclusionKey])
+    let job = this.generating.get(key)
     if (!job) {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(new AiError('timeout')), 600_000)
       const clear = () => {
         clearTimeout(timer)
-        if (this.generating.get(kind) === current) this.generating.delete(kind)
+        if (this.generating.get(key) === current) this.generating.delete(key)
       }
       controller.signal.addEventListener('abort', clear, { once: true })
       const saved = new Set<(record: BriefingRecord) => void>()
@@ -176,7 +183,7 @@ export class BriefingService {
         controller.signal.removeEventListener('abort', clear)
       }) }
       job = current
-      this.generating.set(kind, current)
+      this.generating.set(key, current)
     }
     const current = job
     current.callers += 1
@@ -199,16 +206,26 @@ export class BriefingService {
     signal.throwIfAborted()
     if (!this.config.ai.briefingsEnabled || !aiEnabled(this.config)) throw new Error('Briefing generation is disabled. Enable it in Settings.')
     const recent = force ? null : this.db.recentGeneratedBriefing(kind, new Date(Date.now() - 15 * 60_000))
-    if (recent) return recent
+    const exclusionKey = this.db.aiActivity.exclusionKey
+    if (recent && (recent.exclusionKey ?? '') === exclusionKey) return recent
 
     const cutoff = new Date()
     const lastCutoff = this.db.lastDeliveredCutoff()
     const windowStart = lastCutoff ? new Date(lastCutoff) : new Date(cutoff.getTime() - (kind === 'morning' ? 14 : 11) * 3_600_000)
     const unreadOnly = shouldLimitBriefingToUnread(cutoff, this.config.briefing.includeReadUntil)
     const stableFolderIds = this.db.organizationCapabilities.stableFolderIds
-    const writersFolder = resolveWritersFolder(await abortable(() => this.entries.navigation(signal), signal), stableFolderIds, this.db.getSyncValue('briefing_writers_folder_id'))
+    const sourceFailure = (message: string) => (cause: unknown): never => {
+      signal.throwIfAborted()
+      if (this.db.aiActivity.trigger !== 'scheduled') throw cause
+      throw new BriefingGenerationError(message, { cause })
+    }
+    const navigation = await abortable(() => this.entries.navigation(signal), signal)
+      .catch(sourceFailure('Could not load feed navigation.'))
+    const excluded = this.db.aiActivity.excludedFeeds()
+    const restrictSources = excluded.size > 0
+    const writersFolder = resolveWritersFolder(navigation, stableFolderIds, this.db.getSyncValue('briefing_writers_folder_id'))
     signal.throwIfAborted()
-    if (writersFolder.status === 'ambiguous') throw new Error('More than one Writers folder exists. Give the briefing folder a unique name before generating a briefing.')
+    if (writersFolder.status === 'ambiguous') throw new BriefingGenerationError('More than one Writers folder exists. Give the briefing folder a unique name before generating a briefing.')
     if (stableFolderIds && writersFolder.stream) this.db.setSyncValue('briefing_writers_folder_id', writersFolder.stream.id)
     const allStream: StreamRef = { kind: 'all', id: 'all', title: 'All articles' }
     const { followed, muted } = briefingStoryChoices(this.db, cutoff.getTime())
@@ -216,9 +233,10 @@ export class BriefingService {
     const candidates = (stream: StreamRef, limit: number) => abortable(() => briefingCandidates(this.entries, stream,
       { unreadOnly, limit, ...(this.entries.briefingEntries ? {} : { after: windowStart }), before: cutoff, signal, ...choices }), signal)
     const [writers, all] = await Promise.all([writersFolder.stream ? candidates(writersFolder.stream, 250) : Promise.resolve([]), candidates(allStream, 1000)])
+      .catch(sourceFailure('Could not load articles for the briefing.'))
     signal.throwIfAborted()
     const surfaced = this.db.surfacedEntryIds()
-    const eligible = (entries: Entry[]) => entries.filter(entry => !surfaced.has(entry.id) && !muted.has(entry.id))
+    const eligible = (entries: Entry[]) => entries.filter(entry => !surfaced.has(entry.id) && !muted.has(entry.id) && !excluded.has(entry.feedId))
       .sort((a, b) => Number(followed.has(b.id)) - Number(followed.has(a.id)))
     const eligibleWriters = eligible(writers)
     const eligibleAll = eligible(all)
@@ -227,7 +245,8 @@ export class BriefingService {
     const { news: newsCandidates, social: socialCandidates } = splitBriefingCandidates(eligibleAll, writers)
     let clusters: NewsCluster[]
     try {
-      clusters = this.coverage
+      // Saved collection descriptions and past coverage can quote an excluded source.
+      clusters = this.coverage && !restrictSources
         ? (await abortable(() => this.coverage!.clustersForEntries(newsCandidates, signal), signal)).map(topic => ({
             id: topic.id,
             collectionId: topic.collectionId,
@@ -258,7 +277,8 @@ export class BriefingService {
 
     let selection: BriefingSelection
     try {
-      const shortlist = await this.shortlist(kind, eligibleWriters, clusters, newsCandidates, socialCandidates, entryMap, signal)
+      await this.db.aiActivity.requireAllowance('briefing', newsCandidates.length ? 4 : 2)
+      const shortlist = await this.shortlist(kind, eligibleWriters, clusters, newsCandidates, socialCandidates, entryMap, signal, restrictSources)
       const semanticClusters = proposedNewsClusters(shortlist.newsGroups, newsCandidates, clusters)
       availableClusters = [...clusters, ...semanticClusters]
       selection = await this.edit(kind, {
@@ -267,10 +287,15 @@ export class BriefingService {
       }, entryMap, availableClusters, signal)
     } catch (error) {
       signal.throwIfAborted()
+      if (interruptedAiWork(error)) throw error
       console.error('Briefing model failed, using deterministic selection', error)
       selection = fallbackSelection(kind, eligibleWriters, clusters, socialCandidates, entryMap)
     }
     selection = validateSelection(selection, entryMap, availableClusters, kind)
+    if (this.db.aiActivity.trigger !== 'manual') {
+      const stories = Math.floor(this.db.aiActivity.remaining('briefing') / 2)
+      if (selection.news.length > stories) selection = { ...selection, intro: '', news: selection.news.slice(0, stories) }
+    }
     selection = await checkBriefingSources(selection, entryMap, (instruction, input, schema) => this.runModel('editor', instruction, input, schema, signal),
       new Map(availableClusters.filter(cluster => cluster.collectionId).map(cluster => [cluster.collectionId!, cluster.previousCoverage || []])), signal)
     // Only checked memberships may become reusable semantic groups in the coverage index.
@@ -300,6 +325,7 @@ export class BriefingService {
       text: rendered.text,
       status: 'generated',
       tokenHash,
+      exclusionKey,
       selection,
       createdAt: new Date().toISOString(),
       deliveredAt: null,
@@ -343,7 +369,7 @@ export class BriefingService {
     })
   }
 
-  private async shortlist(kind: 'morning' | 'evening', writers: Entry[], clusters: NewsCluster[], news: Entry[], social: Entry[], entries: Map<string, Entry>, signal: AbortSignal): Promise<Shortlist> {
+  private async shortlist(kind: 'morning' | 'evening', writers: Entry[], clusters: NewsCluster[], news: Entry[], social: Entry[], entries: Map<string, Entry>, signal: AbortSignal, restrictSources: boolean): Promise<Shortlist> {
     const profile = await abortable(() => fs.readFile(path.join(this.profileDirectory(), 'editorial-profile.md'), { encoding: 'utf8', signal }), signal)
     const input = {
       briefing: kind,
@@ -362,7 +388,7 @@ export class BriefingService {
       })),
       newsArticles: news.slice(0, 1000).map(entry => compactEntry(entry, 180)),
       social: social.slice(0, 80).map(entry => compactEntry(entry, 350)),
-      recentFeedback: this.db.recentBriefingFeedback(8),
+      recentFeedback: restrictSources ? [] : this.db.recentBriefingFeedback(8),
     }
     const result = await retryModel('briefing shortlist', async attempt => this.runModel(
       'shortlist',
@@ -420,7 +446,7 @@ export class BriefingService {
     signal.throwIfAborted()
     if (!this.config.ai.briefingsEnabled) throw new Error('Briefing generation is disabled.')
     const model = stage === 'shortlist' ? this.config.codex.shortlistModel : this.config.codex.editorModel
-    return abortable(() => runAiBatch(this.config, stage, model, instruction, input, schema, undefined, signal), signal)
+    return abortable(() => runAiBatch(this.config, stage, model, instruction, input, schema, undefined, signal, this.db.aiActivity), signal)
   }
 
   private async enrichEntries(writerIds: string[], clusters: NewsCluster[], entries: Map<string, Entry>, signal: AbortSignal) {
@@ -752,6 +778,7 @@ async function retryModel(label: string, task: (attempt: number) => Promise<unkn
       return result
     } catch (error) {
       signal.throwIfAborted()
+      if (interruptedAiWork(error)) throw error
       lastError = error
       if (attempt === 0) console.warn(`${label} failed; retrying once`, error)
     }

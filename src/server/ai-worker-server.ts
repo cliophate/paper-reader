@@ -1,3 +1,4 @@
+import type { TokenUsage } from './ai-usage.js'
 import crypto from 'node:crypto'
 import http from 'node:http'
 import os from 'node:os'
@@ -14,6 +15,7 @@ export interface WorkerOptions {
   concurrency?: number
   queueCapacity?: number
   queueWaitMs?: number
+  slotTtlMs?: number
 }
 
 export function createAiWorker(options: WorkerOptions) {
@@ -24,6 +26,14 @@ export function createAiWorker(options: WorkerOptions) {
   const queue = new AiQueue(options.concurrency, options.queueCapacity, options.queueWaitMs)
   const ready = runModelProcess(options.codexBin, ['--version'], os.tmpdir(), 5000).then(() => true, () => false)
   const controllers = new Set<AbortController>()
+  const slots = new Map<string, { release: () => void; timer: NodeJS.Timeout }>()
+  function takeSlot(token: string) {
+    const slot = slots.get(token)
+    if (!slot) return
+    clearTimeout(slot.timer)
+    slots.delete(token)
+    return slot.release
+  }
   app.use(async (request, response, next) => {
     response.set('Cache-Control', 'no-store')
     const supplied = request.get('x-paper-ai-secret') || ''
@@ -35,8 +45,46 @@ export function createAiWorker(options: WorkerOptions) {
       else response.status(503).json({ status: 'error', cli: 'unavailable', category: 'spawn' })
       return
     }
+    // Reserve over a bodyless request so waiting never consumes the body receive deadline.
+    if (request.path === '/v1/slot' && request.method === 'GET') {
+      const controller = new AbortController()
+      controllers.add(controller)
+      const close = () => controller.abort()
+      response.once('close', close)
+      try {
+        const release = await queue.acquire(controller.signal)
+        if (response.destroyed) { release(); return }
+        const token = crypto.randomUUID()
+        const timer = setTimeout(() => takeSlot(token)?.(), options.slotTtlMs ?? 15_000)
+        slots.set(token, { release, timer })
+        response.json({ token })
+      } catch {
+        if (!response.destroyed) response.status(503).set('Retry-After', '5').json({ category: 'busy' })
+      } finally { controllers.delete(controller); response.off('close', close) }
+      return
+    }
+    const token = request.get('x-paper-ai-slot')
+    if (request.path === '/v1/slot' && request.method === 'PUT') {
+      const slot = token && slots.get(token)
+      if (!slot) { response.status(503).json({ category: 'busy' }); return }
+      slot.timer.refresh()
+      response.sendStatus(204)
+      return
+    }
+    if (request.path === '/v1/slot' && request.method === 'DELETE') {
+      if (token) takeSlot(token)?.()
+      response.sendStatus(204)
+      return
+    }
     if (request.method !== 'POST' || !['/v1/codex', '/v1/discussion'].includes(request.path)) {
       response.status(404).json({ error: 'Unknown worker endpoint' }); return
+    }
+    if (token) {
+      const release = takeSlot(token)
+      if (!release) { response.status(503).json({ category: 'busy' }); return }
+      // Until validation completes, a malformed or disconnected request owns the slot.
+      response.once('close', release)
+      response.locals.takeSlot = () => { response.off('close', release); return release }
     }
     const bodyTimer = setTimeout(() => { response.status(408).json({ error: 'Request body timed out' }); request.destroy() }, 15_000)
     request.once('end', () => clearTimeout(bodyTimer))
@@ -65,9 +113,11 @@ export function createAiWorker(options: WorkerOptions) {
     response.once('close', cancel)
     try {
       if (response.destroyed) controller.abort()
-      release = await queue.acquire(controller.signal)
+      release = response.locals.takeSlot?.() ?? await queue.acquire(controller.signal)
       if (controller.signal.aborted) throw new AiError('cancelled')
       startedAt = performance.now()
+      let usage: TokenUsage | undefined
+      const report = (tokens: TokenUsage) => { usage = tokens }
       if (discussion) {
         response.set({ 'Content-Type': 'application/x-ndjson', 'X-Content-Type-Options': 'nosniff' })
         response.flushHeaders()
@@ -76,11 +126,11 @@ export function createAiWorker(options: WorkerOptions) {
           const delta = text.slice(previous.length)
           previous = text
           if (!response.write(JSON.stringify({ type: 'delta', text: delta }) + '\n') && response.writableLength > 256_000) controller.abort()
-        })
-        response.end(JSON.stringify({ type: 'done' }) + '\n')
+        }, report)
+        response.end(JSON.stringify({ type: 'done', usage }) + '\n')
       } else {
-        const result = await runLocalCodex({ enabled: true, bin: options.codexBin }, body.model, body.instruction, body.input, body.schema, body.reasoningEffort, controller.signal)
-        response.json({ result })
+        const result = await runLocalCodex({ enabled: true, bin: options.codexBin }, body.model, body.instruction, body.input, body.schema, body.reasoningEffort, controller.signal, report)
+        response.json({ result, usage })
       }
     } catch (error) {
       const failure = error instanceof AiError ? error : new AiError('unknown')
@@ -110,5 +160,10 @@ export function createAiWorker(options: WorkerOptions) {
   }) as ErrorRequestHandler)
   const server = http.createServer({ requestTimeout: 15_000, headersTimeout: 10_000, maxHeaderSize: 8192 }, app)
   server.maxConnections = 64
-  return { server, stop: () => { for (const controller of controllers) controller.abort(); server.close(); server.closeAllConnections() } }
+  return { server, stop: () => {
+    for (const controller of controllers) controller.abort()
+    for (const token of slots.keys()) takeSlot(token)?.()
+    server.close()
+    server.closeAllConnections()
+  } }
 }

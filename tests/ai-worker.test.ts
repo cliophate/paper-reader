@@ -72,6 +72,50 @@ function hang() {
 }
 
 describe('isolated AI protocol', () => {
+  it('holds the Codex request body until the worker has a slot and Paper admits it', async () => {
+    await start({ concurrency: 1 })
+    const blocker = hang()
+    const db = new PaperDatabase(':memory:')
+    try {
+      await starts(1)
+      const paths: string[] = []
+      worker.server.on('request', req => paths.push(req.url!))
+      const headers = new Promise<void>(resolve => worker.server.once('request', () => resolve()))
+      const log = db.aiActivity
+      const queued = log.withTrigger('sync', () => log.attempt('headlines', 'codex', 'fixture')(
+        (report, admit) => workerBatch(body, undefined, report, admit), true))
+      await headers
+      expect(log.view().used).toEqual({})
+      log.savePolicy({ ...log.policy(), feeds: ['new-exclusion'] })
+      blocker.controller.abort()
+      await expect(queued).rejects.toMatchObject({ category: 'cancelled' })
+      expect(log.view().used).toEqual({})
+      expect(paths).toEqual(['/v1/slot', '/v1/slot', '/v1/slot'])
+      expect(log.view().items).toMatchObject([{ outcome: 'cancelled' }])
+      await starts(1)
+    } finally { blocker.controller.abort(); await blocker.result; db.close() }
+  })
+
+  it('rejects an expired slot before reserving quota after a slow folder lookup', async () => {
+    await start({ slotTtlMs: 20 })
+    const db = new PaperDatabase(':memory:')
+    try {
+      const log = db.aiActivity
+      log.savePolicy({ ...log.policy(), folders: ['news'] })
+      const navigation = { folders: [{ id: 'news', feeds: [] }] }
+      log.navigation = vi.fn().mockResolvedValueOnce(navigation).mockImplementationOnce(async () => {
+        await new Promise(resolve => setTimeout(resolve, 50))
+        return navigation
+      })
+      db.greaderDatabase.exec("CREATE TRIGGER no_reservation BEFORE INSERT ON ai_daily_usage BEGIN SELECT RAISE(ABORT, 'expired slot reserved quota'); END")
+      await expect(log.withTrigger('scheduled', () => log.attempt('briefing', 'codex', 'fixture')(
+        (report, admit) => workerBatch(body, undefined, report, admit), true))).rejects.toMatchObject({ category: 'busy' })
+      expect(log.view().used).toEqual({})
+      expect(log.view().items).toMatchObject([{ outcome: 'busy' }])
+      await expect(fs.access(path.join(directory, 'starts'))).rejects.toThrow()
+    } finally { db.close() }
+  })
+
   it.each(['queued', 'running'])('cancels a %s briefing when its HTTP caller disconnects, without saving or retrying', async state => {
     await start({ concurrency: 1, queueCapacity: 1 })
     await fs.writeFile(path.join(directory, 'editorial-profile.md'), 'Synthetic editorial profile.')
@@ -259,11 +303,14 @@ describe('isolated AI protocol', () => {
     try { expect((await post()).status).toBe(200) } finally { partial.destroy() }
   })
   it('routes batch and discussion calls through the socket with the model environment allowlist', async () => {
-    const result = await runCodex({ ...config(), bin: '/must-not-spawn-in-paper' }, body.model, body.instruction, body.input, body.schema, 'low') as any
+    const usage = vi.fn()
+    const result = await runCodex({ ...config(), bin: '/must-not-spawn-in-paper' }, body.model, body.instruction, body.input, body.schema, 'low', undefined, usage) as any
+    expect(usage).toHaveBeenCalledWith({ input: 26, output: 4 })
     expect(result.input).toContain('private article')
     expect(result.env).toEqual({ HOME: directory, PATH: process.env.PATH, NO_COLOR: '1', CI: '1' })
     const onText = vi.fn()
-    expect(await createChatModel('/must-not-spawn-in-paper', 'fixture')({}, new AbortController().signal, onText)).toBe('Fixture reply.')
+    expect(await createChatModel('/must-not-spawn-in-paper', 'fixture')({}, new AbortController().signal, onText, usage)).toBe('Fixture reply.')
+    expect(usage).toHaveBeenCalledWith({ input: 20, output: 2 })
     expect(onText.mock.calls).toEqual([['Fixture '], ['Fixture reply.']])
   })
   it('lets a discussion wait behind two active runs and complete when a slot opens', async () => {

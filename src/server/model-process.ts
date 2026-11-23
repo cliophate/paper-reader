@@ -1,3 +1,4 @@
+import { tokenUsage, type ReportUsage } from './ai-usage.js'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { AiError, codexEventFailure } from './ai-errors.js'
 
@@ -14,7 +15,7 @@ export function modelEnvironment() {
   return { PATH: process.env.PATH, HOME: process.env.HOME, NO_COLOR: '1', CI: '1' }
 }
 
-export async function runModelProcess(bin: string, args: string[], cwd: string, timeoutMs: number, signal?: AbortSignal, input?: string, jsonEvents = false) {
+export async function runModelProcess(bin: string, args: string[], cwd: string, timeoutMs: number, signal?: AbortSignal, input?: string, jsonEvents = false, report?: ReportUsage) {
   if (signal?.aborted) throw new AiError('cancelled')
   return new Promise<string>((resolve, reject) => {
     const child = spawn(bin, args, { cwd, detached: true, env: modelEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] })
@@ -27,6 +28,13 @@ export async function runModelProcess(bin: string, args: string[], cwd: string, 
     // JSONL repeats the final message with escaping, so event mode keeps only small error events.
     // The result itself is read from --output-last-message, which has its own size limit.
     const keepEvent = (text: string) => {
+      if (report && text.length <= MAX_EVENT_LINE && text.includes('turn.completed')) {
+        try {
+          const event = JSON.parse(text)
+          const usage = tokenUsage(event.usage?.input_tokens, event.usage?.output_tokens)
+          if (event.type === 'turn.completed' && usage) report(usage)
+        } catch { /* Ignore non-event output. */ }
+      }
       if (events.length < MAX_ERROR_EVENTS && /"type":"(?:error|turn\.failed)"/.test(text)) events.push(text)
     }
     child.stdout.setEncoding('utf8')

@@ -6,6 +6,8 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BriefingDelivery, senderDomain } from '../src/server/briefing-delivery'
+import { BriefingService } from '../src/server/briefing'
+import { PaperRepository } from '../src/server/repository'
 import { BriefingClock } from '../src/server/briefing-schedule'
 import { loadConfig, type Config } from '../src/server/config'
 import { PaperDatabase, type BriefingRecord } from '../src/server/db'
@@ -42,12 +44,12 @@ afterEach(async () => {
   fs.rmSync(directory, { recursive: true, force: true })
 })
 
-function save(kind: BriefingKind, database = db): BriefingRecord {
+function save(kind: BriefingKind, database = db, exclusionKey = ''): BriefingRecord {
   const date = new Date(now).toISOString()
   const record = {
     id: randomUUID(), kind, status: 'generated', cutoff: date, createdAt: date, windowStart: date,
     subject: 'Synthetic briefing', text: 'Synthetic text', html: '<p>Synthetic body</p>',
-    tokenHash: 'fixture', selection: { news: [], social: [], worthNoticing: [] },
+    tokenHash: 'fixture', exclusionKey, selection: { news: [], social: [], worthNoticing: [] },
     deliveredAt: null, acknowledgedAt: null,
   }
   database.createBriefing(record, [])
@@ -57,7 +59,7 @@ const generator = (database?: PaperDatabase) => ({
   generateScheduled: vi.fn(async (kind: BriefingKind, _signal: AbortSignal, onSaved: (record: BriefingRecord) => void) => {
     const owner = database ?? db
     return owner.transaction(() => {
-      const record = save(kind, owner)
+      const record = save(kind, owner, owner.aiActivity.exclusionKey)
       onSaved(record)
       return record
     })
@@ -126,6 +128,29 @@ it('enforces one job and one SMTP send across concurrent ticks and a restart', a
   await scheduler(service).tick()
   expect(smtp.messages).toHaveLength(1)
   expect(db.briefingDelivery.history()).toMatchObject([{ state: 'delivered', attempts: 1 }])
+})
+
+it('logs a navigation failure with its stack and records the reason before any model call', async () => {
+  const entries = new PaperRepository(db)
+  vi.spyOn(entries, 'navigation').mockRejectedValue(new Error('Synthetic private response and token'))
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    await new BriefingDelivery(config, db, new BriefingService(config, db, entries), () => now).tick()
+    expect(db.briefingDelivery.history()).toMatchObject([{ state: 'failed', lastError: 'Could not load feed navigation. Check the server logs.' }])
+    expect(db.aiActivity.view().items).toEqual([])
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/Could not load feed navigation\.\n    at .*briefing-delivery\.test/))
+    expect(log.mock.calls.flat().join(' ')).not.toContain('Synthetic private')
+  } finally { log.mockRestore() }
+})
+
+it('regenerates a saved edition after a feed is excluded', async () => {
+  const old = save('morning')
+  db.aiActivity.savePolicy({ ...db.aiActivity.policy(), feeds: ['excluded'] })
+  const service = generator()
+  await scheduler(service).tick()
+  expect(service.generateScheduled).toHaveBeenCalledOnce()
+  expect(db.getBriefing(old.id)?.deliveredAt).toBeNull()
+  expect(smtp.messages).toHaveLength(1)
 })
 
 it('retries only SMTP after backoff across restart and marks delivery after the final reply', async () => {

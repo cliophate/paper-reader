@@ -1,3 +1,4 @@
+import { interruptedAiWork } from './ai-activity.js'
 import { createHash } from 'node:crypto'
 import { setImmediate } from 'node:timers/promises'
 import type { PaperDatabase, HeadlineRecord } from './db.js'
@@ -103,15 +104,17 @@ export class HeadlineService {
   }
   page<T extends { items: Entry[] }>(page: T): T { return { ...page, items: page.items.map(entry => this.decorate(entry)) } }
 
-  run(): Promise<void> {
-    if (this.running) return Promise.resolve()
-    this.running = this.perform().finally(() => { this.running = null })
+  run(trigger: 'sync' | 'scheduled' = 'scheduled'): Promise<void> {
+    if (!this.enabled || this.running) return Promise.resolve()
+    this.running = this.db.aiActivity.withTrigger(trigger, () => this.perform(), 'headlines').catch(error => {
+      if (!interruptedAiWork(error)) console.warn('Headline refresh failed.')
+    }).finally(() => { this.running = null })
     return this.running
   }
   async drain() { await this.running }
 
   private async perform(): Promise<void> {
-    if (!this.enabled || this.busy) return
+    if (!this.enabled || this.busy || this.db.aiActivity.paused('headlines')) return
     this.busy = true
     const pending: Array<{ entry: Entry; fingerprint: string; attempts: number }> = []
     try {
@@ -126,6 +129,7 @@ export class HeadlineService {
         if (pending.length === BATCH_SIZE) break
       }
       if (!pending.length) return
+      await this.db.aiActivity.requireAllowance('headlines', 2)
       const save = (item: typeof pending[number], status: HeadlineRecord['status'], displayTitle = '') => {
         // A refresh may replace or remove the source while the model is working.
         const current = this.db.localEntry(item.entry.id)
@@ -162,8 +166,8 @@ export class HeadlineService {
         }
       }
       this.lastCompletedAt = new Date().toISOString()
-    } catch {
-      if (!this.enabled) return
+    } catch (error) {
+      if (!this.enabled || interruptedAiWork(error)) return
       this.lastErrorAt = new Date().toISOString()
       console.warn('Headline processing failed; original titles remain available')
       for (const item of pending) {

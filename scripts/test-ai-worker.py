@@ -21,6 +21,13 @@ SENTINEL = 'synthetic-paper-environment-secret-57'
 PROJECT = 'paper-ai-test-' + uuid.uuid4().hex[:10]
 
 
+def check_usage(message):
+    if 'usage' in message:
+        usage = message['usage']
+        assert isinstance(usage, dict) and usage and usage.keys() <= {'input', 'output', 'total'}, usage
+        assert all(type(count) is int and count >= 0 for count in usage.values()), usage
+
+
 def docker(*args, check=True):
     result = subprocess.run(['docker', *args], capture_output=True, text=True, timeout=90)
     if check and result.returncode:
@@ -169,10 +176,13 @@ call.on('error',()=>process.exit(1));call.end(JSON.stringify(payload));'''
                     result = json.loads(docker('exec', paper, 'node', '--input-type=module', '-e', call, name, runner))
                     assert result['status'] == 200, result
                     if runner == 'codex':
-                        assert json.loads(result['body']) == {'result': {'ok': True}}, result
+                        payload = json.loads(result['body'])
+                        assert payload['result'] == {'ok': True}, result
+                        check_usage(payload)
                     else:
                         events = [json.loads(line) for line in result['body'].splitlines()]
-                        assert events[-1] == {'type': 'done'}, events
+                        assert events[-1]['type'] == 'done', events
+                        check_usage(events[-1])
                         assert ''.join(event.get('text', '') for event in events) == 'Fixture discussion reply.', events
                     records = request(fixture + '/records')[1]
                     calls = [item for record in records if ('Isolation probe ' + name) in json.dumps(record.get('input', [])) for item in record.get('input', []) if item['type'] in ['custom_tool_call_output', 'function_call_output']]

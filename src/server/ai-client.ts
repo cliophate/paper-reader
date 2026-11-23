@@ -1,4 +1,6 @@
+import { tokenUsage, type Admit, type ReportUsage } from './ai-usage.js'
 import http from 'node:http'
+import { AiLimitError } from './ai-activity.js'
 import { Readable } from 'node:stream'
 import { AiError, AI_FAILURES, AI_QUEUE_WAIT_MS, type AiFailure } from './ai-errors.js'
 export const AI_UNAVAILABLE = 'AI is unavailable. Select and configure an AI provider. See Settings > Reading & connections.'
@@ -27,21 +29,22 @@ function remoteFailure(payload: unknown, requestId: string | null) {
   return new AiError(category)
 }
 
-async function request(endpoint: string, body: unknown, signal: AbortSignal) {
+async function request(endpoint: string, body: unknown, signal: AbortSignal, slot?: string, method = body === undefined ? 'GET' : 'POST') {
   try {
     const socketPath = process.env.PAPER_AI_WORKER_SOCKET?.trim()
     const secret = process.env.PAPER_AI_WORKER_SECRET?.trim()
     if (!socketPath?.startsWith('/') || !secret) throw new Error()
     const response = await new Promise<Response>((resolve, reject) => {
-      const call = http.request({ socketPath, path: endpoint, method: body === undefined ? 'GET' : 'POST', signal,
-        headers: { 'Content-Type': 'application/json', 'x-paper-ai-secret': secret },
+      const call = http.request({ socketPath, path: endpoint, method, signal,
+        headers: { 'Content-Type': 'application/json', 'x-paper-ai-secret': secret, ...(slot ? { 'x-paper-ai-slot': slot } : {}) },
       }, incoming => {
         const headers = new Headers()
         for (const name of ['content-type', 'x-paper-ai-request-id']) {
           const value = incoming.headers[name]
           if (typeof value === 'string') headers.set(name, value)
         }
-        try { resolve(new Response(Readable.toWeb(incoming) as ReadableStream<Uint8Array>, { status: incoming.statusCode, headers })) }
+        if (incoming.statusCode === 204) incoming.resume()
+        try { resolve(new Response(incoming.statusCode === 204 ? null : Readable.toWeb(incoming) as ReadableStream<Uint8Array>, { status: incoming.statusCode, headers })) }
         catch { incoming.destroy(); reject(new AiError('schema')) }
       })
       call.once('error', reject)
@@ -99,21 +102,39 @@ async function readResponse(response: Response, onLine?: (line: string) => void)
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
 }
 
-export async function workerBatch(body: unknown, signal?: AbortSignal): Promise<unknown> {
+export async function workerBatch(body: unknown, signal?: AbortSignal, report?: ReportUsage, admit?: Admit): Promise<unknown> {
   const timeout = AbortSignal.timeout(AI_QUEUE_WAIT_MS + 320_000)
   try {
-    const response = await request('/v1/codex', body, signal ? AbortSignal.any([signal, timeout]) : timeout)
+    const deadline = signal ? AbortSignal.any([signal, timeout]) : timeout
+    let slot: string | undefined
+    if (admit) {
+      const reservation = await request('/v1/slot', undefined, deadline)
+      const { token } = JSON.parse(await readResponse(reservation))
+      if (typeof token !== 'string' || !token) throw new AiError('schema')
+      slot = token
+      try {
+        await admit(deadline, async () => { await request('/v1/slot', undefined, deadline, token, 'PUT') })
+        deadline.throwIfAborted()
+      }
+      catch (error) {
+        await request('/v1/slot', undefined, AbortSignal.timeout(1000), slot, 'DELETE').catch(() => {})
+        throw error
+      }
+    }
+    const response = await request('/v1/codex', body, deadline, slot)
     const payload = JSON.parse(await readResponse(response))
     if (!payload || !Object.hasOwn(payload, 'result')) throw new Error()
+    const usage = tokenUsage(payload.usage?.input, payload.usage?.output, payload.usage?.total)
+    if (usage) report?.(usage)
     return payload.result
   } catch (error) {
     if (signal?.aborted) throw new AiError('cancelled')
-    if (error instanceof AiError || (error instanceof Error && error.message === AI_UNAVAILABLE)) throw error
+    if (error instanceof AiLimitError || error instanceof AiError || (error instanceof Error && error.message === AI_UNAVAILABLE)) throw error
     throw new AiError('schema')
   }
 }
 
-export async function workerChat(model: string, input: unknown, signal: AbortSignal, onText: (text: string) => void): Promise<string> {
+export async function workerChat(model: string, input: unknown, signal: AbortSignal, onText: (text: string) => void, report?: ReportUsage): Promise<string> {
   const controller = new AbortController()
   try {
     const response = await request('/v1/discussion', { model, input }, AbortSignal.any([signal, controller.signal, AbortSignal.timeout(AI_QUEUE_WAIT_MS + 140_000)]))
@@ -126,7 +147,11 @@ export async function workerChat(model: string, input: unknown, signal: AbortSig
         if (text.length > 24000) throw new Error()
         onText(text)
       } else if (event.type === 'error') throw remoteFailure(event, response.headers.get('x-paper-ai-request-id'))
-      else if (event.type === 'done') completed = true
+      else if (event.type === 'done') {
+        completed = true
+        const usage = tokenUsage(event.usage?.input, event.usage?.output, event.usage?.total)
+        if (usage) report?.(usage)
+      }
       else throw new Error()
     })
     if (!completed || !text.trim()) throw new Error()

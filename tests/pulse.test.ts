@@ -49,6 +49,79 @@ function catchUpResponse(input: CatchUpInput) {
 }
 
 describe('cited Pulse catch-up', () => {
+  it('omits excluded articles and mixed collections from grouping and catch-up input', async () => {
+    save(['1', '2', '3'].map(id => article(id)))
+    db.upsertEntries([article('4'), article('5')])
+    db.aiActivity.savePolicy({ ...db.aiActivity.policy(), feeds: ['feed/two'] })
+    const group = vi.fn(async () => ({ groups: [] }))
+    const summary = vi.fn(async () => ({ collections: [] }))
+    await new PulseService(db, group, true, () => now, summary).refresh()
+    expect(group).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      articles: [expect.objectContaining({ title: article('5').title })], collections: [],
+    }), expect.anything())
+    expect(summary).not.toHaveBeenCalled()
+  })
+
+  it.each(['unrelated', 'muted'])('rebuilds provider descriptions after an excluded member is %s', async reason => {
+    const entries = [article('1'), article('2'), article('3'), article('4', 'Private description', { feedId: 'excluded' })]
+    db.upsertEntries(entries)
+    db.savePulseBatch([{ id: 'story', entryIds: entries.map(entry => entry.id), headline: 'Private description',
+      scope: 'Private scope copied from a former source.' }], entries.map(entry => entry.id), new Date(now).toISOString())
+    if (reason === 'unrelated') db.createCoverageFeedback({ action: 'not_same', clusterId: 'story', entryId: '4' })
+    else {
+      await db.createMuteFilter('Private description', 'title')
+      await db.backfillMuteFilters()
+    }
+    db.upsertEntries([article('5')])
+    db.aiActivity.savePolicy({ ...db.aiActivity.policy(), feeds: ['excluded'] })
+    const group = vi.fn(async (_prompt: string, _input: unknown) => ({ groups: [] }))
+    const summary = vi.fn(async (_prompt: string, _input: unknown) => ({ collections: [] }))
+    await new PulseService(db, group, true, () => now, summary).refresh()
+    for (const calls of [group.mock.calls, summary.mock.calls]) {
+      expect(calls).toHaveLength(1)
+      expect(JSON.stringify(calls[0][1])).not.toContain('Private')
+    }
+  })
+
+  it('accepts a follow-up when an eligible title exceeds the limit and the model rebuilds the scope', async () => {
+    const prefix = 'Orion release '.repeat(8).trimEnd()
+    save(['1', '2', '3'].map(id => article(id, prefix + ' international coverage ' + id)))
+    db.upsertEntries([article('5')])
+    db.aiActivity.savePolicy({ ...db.aiActivity.policy(), feeds: ['excluded'] })
+    const service = new PulseService(db, async (prompt, raw) => {
+      const { collections: [collection], articles } = raw as { collections: { collectionId: string; title: string; scope: string }[]; articles: Entry[] }
+      expect(collection.title).toBe(prefix)
+      expect(collection.scope).toBe('')
+      const group = proposal(articles.filter(item => item.title === article('5').title), collection.collectionId)
+      if (!prompt.includes('If its scope is empty, write a new one-sentence scope')) group.groups[0].scope = collection.scope
+      return group
+    })
+    await service.refresh()
+    expect(service.list().status.failed).toBe(false)
+    expect(service.list().collections[0].sources.map(source => source.id)).toContain('5')
+  })
+
+  it('refreshes a saved catch-up when its background exclusion set changes', async () => {
+    save(['1', '2', '3'].map(id => article(id)))
+    const summary = vi.fn(async (_prompt: string, input: unknown) => catchUpResponse(input as CatchUpInput))
+    const service = new PulseService(db, vi.fn(), true, () => now, summary)
+    await service.refresh()
+    db.aiActivity.savePolicy({ ...db.aiActivity.policy(), feeds: ['another-feed'] })
+    await service.refresh()
+    await service.refresh()
+    expect(summary).toHaveBeenCalledTimes(2)
+  })
+
+  it('skips grouping when one remaining request cannot cover membership review', async () => {
+    db.upsertEntries([article('1')])
+    db.aiActivity.savePolicy({ ...db.aiActivity.policy(), daily: 1 })
+    const group = vi.fn(async () => ({ groups: [] }))
+    await new PulseService(db, group).refresh()
+    expect(group).not.toHaveBeenCalled()
+    expect(db.aiActivity.view('grouping').items).toMatchObject([{ outcome: 'limited' }])
+    expect(db.aiActivity.view().used).toEqual({})
+  })
+
   it('drops the whole line when any citation is foreign, missing or invalid', () => {
     const articles = new Map([['a1', { id: 'new', isNew: true }], ['a2', { id: 'older', isNew: false }]])
     expect(validatePulseCatchUp({
@@ -438,11 +511,13 @@ describe('continuing Pulse collections', () => {
     save([article('1'), article('2'), article('3')])
     const next = article('4')
     db.upsertEntries([next])
-    let resolve!: (result: unknown) => void
-    const service = new PulseService(db, () => new Promise(done => { resolve = done }), true, () => now)
+    const pending = Promise.withResolvers<unknown>()
+    const model = vi.fn(() => pending.promise)
+    const service = new PulseService(db, model, true, () => now)
     const running = service.refresh()
+    await vi.waitFor(() => expect(model).toHaveBeenCalledOnce())
     service.feedback({ action: 'not_useful', clusterId: 'collection-one' })
-    resolve(proposal([next], 'collection-one'))
+    pending.resolve(proposal([next], 'collection-one'))
     await running
     expect(service.list().collections).toEqual([])
   })
@@ -692,7 +767,7 @@ describe('manual story choices', () => {
     expect(db.greaderDatabase.prepare("SELECT name FROM sqlite_schema WHERE name = 'feed_overrides'").get()).toBeDefined()
     expect(db.greaderDatabase.prepare("SELECT name FROM pragma_table_info('feed_fetch_state') WHERE name = 'redirects_json'").get()).toBeDefined()
     expect(new PulseService(db, vi.fn(), false).list().collections[0].followed).toBe(true)
-    expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(STORY_CHOICES_VERSION)
+    expect(db.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
   })
 
   it('keeps visits and feed state through a mute, a snooze, new arrivals and expiry with grouping paused', () => {

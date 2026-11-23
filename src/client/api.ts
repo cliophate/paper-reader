@@ -4,6 +4,7 @@ import { checkSearchSize, SEARCH_SIZE_HINT } from '../server/search-query'
 import type { Annotation, AnnotationPage, NewAnnotation } from '../shared/annotations'
 import type { ReadingSnapshot, ReadingWrite, ReadingWriteResult } from '../server/reading-preference-values'
 import type { WebhookCreate, WebhookSettings, WebhookSubscription } from '../shared/webhooks'
+import type { AiActivityView, AiPolicy } from '../shared/ai-activity'
 import type { RetentionPolicy, RetentionPreview, RetentionView } from '../shared/retention'
 import type { FeedMaintenance, StaleDays, FeedCheckResult, FeedChecksView, FeedCheckRevision, FeedCheckTarget } from '../shared/feed-checks'
 import type { OrganizationRequest, OrganizationResponse, OrganizationView } from '../shared/organization'
@@ -96,6 +97,8 @@ export const api = {
     request<{ ok: boolean; note?: string }>(`/api/save/${id}`, { method: 'POST', body: JSON.stringify({ url, title, tags }) }),
   testAiConnection: (openai: ConnectionsUpdate['openai']) => request<{ available: boolean; message: string }>('/api/settings/connections/test-ai', { method: 'POST', body: JSON.stringify({ openai }) }),
   testSmtp: (smtp: SmtpUpdate) => request<{ message: string }>('/api/settings/connections/test-smtp', { method: 'POST', body: JSON.stringify({ smtp }) }),
+  aiActivity: (feature: string, outcome: string) => request<AiActivityView>(`/api/settings/ai/activity?${new URLSearchParams({ feature, outcome })}`),
+  saveAiPolicy: (policy: AiPolicy) => request<{ ok: boolean }>('/api/settings/ai/controls', { method: 'PUT', body: JSON.stringify(policy) }),
   briefingDeliveryHistory: () => request<DeliveryHistoryItem[]>('/api/settings/connections/briefing-delivery'),
   connections: () => request<ConnectionsSettings>('/api/settings/connections'),
   updateConnections: (settings: ConnectionsUpdate) => request<ConnectionsSettings>('/api/settings/connections', { method: 'PATCH', body: JSON.stringify(settings) }),

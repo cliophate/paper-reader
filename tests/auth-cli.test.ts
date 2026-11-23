@@ -4,6 +4,7 @@ import { ENCLOSURE_SCHEMA_VERSION } from '../src/server/enclosure-store.js'
 import { READING_PREFERENCES_VERSION } from '../src/server/reading-preference-store'
 import { WEBHOOK_SCHEMA_VERSION } from '../src/server/webhook-store'
 import { STORY_CHOICES_VERSION } from '../src/server/pulse-schema.js'
+import { AI_ACTIVITY_VERSION } from '../src/server/ai-activity.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -68,6 +69,7 @@ it.each([13, 14])('upgrades schema %i through retention v14 to login v15 and pre
   backup.close()
   expect(fs.statSync(loginBackup).mode & 0o777).toBe(0o600)
   expect(fs.readdirSync(directory).filter(name => name.includes('.before-')).sort()).toEqual([
+    `paper.sqlite.before-ai-activity-v${AI_ACTIVITY_VERSION}`,
     `paper.sqlite.before-annotations-v${ANNOTATIONS_VERSION}`,
     'paper.sqlite.before-briefing-delivery-v20', 'paper.sqlite.before-feed-icons-v18', `paper.sqlite.before-feed-maintenance-v${FEED_MAINTENANCE_VERSION}`, `paper.sqlite.before-feed-overrides-v${FEED_OVERRIDE_VERSION}`, 'paper.sqlite.before-greader-v16', 'paper.sqlite.before-miniflux-v17', 'paper.sqlite.before-owner-login-v15',
     `paper.sqlite.before-podcast-enclosures-v${ENCLOSURE_SCHEMA_VERSION}`, 'paper.sqlite.before-pulse-catch-ups-v19', `paper.sqlite.before-reading-preferences-v${READING_PREFERENCES_VERSION}`, ...(version === 13 ? ['paper.sqlite.before-retention-v14'] : []),

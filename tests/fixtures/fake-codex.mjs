@@ -9,6 +9,7 @@ if (argv[0] === 'exec') {
   process.stdin.on('data', chunk => { prompt += chunk })
   process.stdin.on('end', () => {
     const schema = JSON.parse(fs.readFileSync(argv[argv.indexOf('--output-schema') + 1], 'utf8'))
+    process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 37, output_tokens: 8 } }) + '\n')
     fs.writeFileSync(argv[argv.indexOf('--output-last-message') + 1], JSON.stringify({ ...capture, prompt, schema }))
   })
 } else if (argv[0] === 'app-server') {
@@ -23,6 +24,7 @@ if (argv[0] === 'exec') {
     }
     if (event.method === 'turn/start') {
       send({ method: 'item/agentMessage/delta', params: { delta: JSON.stringify({ ...capture, thread }) } })
+      send({ method: 'thread/tokenUsage/updated', params: { tokenUsage: { total: { inputTokens: 42, outputTokens: 7 } } } })
       send({ method: 'turn/completed', params: { turn: { status: 'completed' } } })
     }
   })

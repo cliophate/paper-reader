@@ -41,7 +41,7 @@ const composer = nodemailer.createTransport({ streamTransport: true, buffer: tru
 
 export interface MailContent { subject: string; text: string; html?: string; messageId?: string }
 
-export async function sendSmtp(config: SmtpConfig, content: MailContent, beforeData?: () => void): Promise<number> {
+export async function sendSmtp(config: SmtpConfig, content: MailContent, beforeData?: () => void | Promise<void>): Promise<number> {
   checkSmtp(config)
   const { message } = await composer.sendMail({ ...content, from: config.from, to: config.to })
   const smtp = new SMTPConnection({
@@ -53,8 +53,8 @@ export async function sendSmtp(config: SmtpConfig, content: MailContent, beforeD
   let startedData = false
   // The SMTP client reads this stream only after the relay accepts DATA.
   // Persist that boundary before giving the client any message bytes.
-  const body = Readable.from((function* () {
-    beforeData?.()
+  const body = Readable.from((async function* () {
+    await beforeData?.()
     startedData = true
     yield message as Buffer
   })(), { objectMode: false })

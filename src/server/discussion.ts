@@ -120,12 +120,18 @@ export class DiscussionService {
     return { collection, model: this.collections.model }
   }
 
-  async suggest(id: string, revision: string, refresh: boolean) {
+  suggest(id: string, revision: string, refresh: boolean) {
+    return this.db.aiActivity.withTrigger(refresh ? 'manual' : 'automatic', () => this.suggestQuestions(id, revision, refresh), 'suggestions')
+  }
+
+  private async suggestQuestions(id: string, revision: string, refresh: boolean) {
     const { collection, model } = this.collection(id, revision)
-    const key = JSON.stringify([id, revision])
+    const exclusionKey = this.db.aiActivity.exclusionKey
+    const key = JSON.stringify([id, revision, refresh, exclusionKey])
     const running = this.suggestionRuns.get(key)
     if (running) return running.task
-    const saved = this.suggestions.get(id)
+    const cacheKey = JSON.stringify([id, exclusionKey])
+    const saved = this.suggestions.get(cacheKey)
     const cached = saved?.revision === revision ? saved : undefined
     if (cached && !refresh) return cached.questions
     if (cached?.refreshedAt !== undefined && Date.now() - cached.refreshedAt < 30_000) {
@@ -137,16 +143,18 @@ export class DiscussionService {
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(85_000)])
     const task = Promise.resolve().then(async () => {
       signal.throwIfAborted()
-      const articles = collectionSources(this.db, collection).map(({ article }) => article)
+      const excluded = refresh ? new Set<string>() : this.db.aiActivity.excludedFeeds()
+      const sources = collection.sources.filter(source => !excluded.has(source.feedId))
+      const articles = collectionSources(this.db, { ...collection, sources }).map(({ article }) => article)
       const questions = articles.length ? validateCollectionSuggestions(await model(COLLECTION_SUGGESTIONS_PROMPT, {
-        articles, previousQuestions: cached?.questions || [],
-      }, COLLECTION_SUGGESTIONS_SCHEMA, signal)) : []
+        articles, previousQuestions: refresh ? cached?.questions || [] : [],
+      }, COLLECTION_SUGGESTIONS_SCHEMA, signal, 'suggestions')) : []
       signal.throwIfAborted()
       this.collection(id, revision)
-      this.suggestions.delete(id)
-      // Keep one revision per collection, and bound the cache across collections.
+      this.suggestions.delete(cacheKey)
+      // Keep the latest revision for each collection and exclusion set.
       if (this.suggestions.size >= 128) this.suggestions.delete(this.suggestions.keys().next().value!)
-      this.suggestions.set(id, { revision, questions, refreshedAt: refresh ? Date.now() : undefined })
+      this.suggestions.set(cacheKey, { revision, questions, refreshedAt: refresh ? Date.now() : undefined })
       return questions
     }).finally(() => this.suggestionRuns.delete(key))
     this.suggestionRuns.set(key, { controller, task })
@@ -167,7 +175,7 @@ export class DiscussionService {
       const sources = collectionSources(this.db, collection, question)
       const raw = sources.length ? await model(COLLECTION_ANSWER_PROMPT, {
         articles: sources.map(({ article }) => article), question, previousAnswer,
-      }, COLLECTION_ANSWER_SCHEMA, signal) : { answer: '', sourceIds: [] }
+      }, COLLECTION_ANSWER_SCHEMA, signal, 'questions') : { answer: '', sourceIds: [] }
       signal.throwIfAborted()
       this.collection(id, revision)
       return validateCollectionAnswer(raw, sources, previousAnswer !== undefined)

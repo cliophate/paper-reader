@@ -1,3 +1,4 @@
+import { interruptedAiWork } from './ai-activity.js'
 import { abortable } from './abort.js'
 import type { BriefingSelection, Entry } from './types.js'
 import { plainText } from './text.js'
@@ -48,7 +49,8 @@ export async function checkBriefingSources(selection: BriefingSelection, entries
       if (remaining.length < sources.length) trimmed++
       const backgroundEntryIds = remaining.filter(source => !entryIds.includes(source.id)).map(source => source.id)
       news.push({ ...item, entryIds, ...(backgroundEntryIds.length || item.backgroundEntryIds ? { backgroundEntryIds } : {}), imageEntryId: entryIds.includes(item.imageEntryId || '') ? item.imageEntryId : '' })
-    } catch {
+    } catch (error) {
+      if (interruptedAiWork(error)) throw error
       signal?.throwIfAborted()
       omit('check failed')
     }

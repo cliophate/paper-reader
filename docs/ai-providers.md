@@ -7,6 +7,56 @@ any provider. Changing providers affects new requests. A running batch may finis
 Scheduled briefing email requires both AI and Briefing generation. See the
 [briefing email setup](integrations.md#briefing-email).
 
+## Activity and background controls
+
+Open **Settings > Reading & connections > AI activity and controls** to see the
+latest 100 matching requests. Filter by feature or outcome. Expand **What each
+feature sends** to see which article fields it uses. Paper keeps up to 2,000
+completed attempts for 30 days. Each row records the provider, model, start
+time, duration, trigger, outcome and any reported input and output token counts.
+The log omits article text, prompts, replies, credentials and provider diagnostics.
+
+Set a daily limit for all background requests or for individual features. Blank
+means unlimited. Zero pauses that work. The limits reset at midnight in the
+quota time zone shown in Settings. Paper saves the configured server time zone
+when it initializes the database. The CLI uses the same zone. Each provider attempt counts, including
+errors and format retries. Paper counts each background request just before sending it, even if cancellation stops it from being sent.
+A request blocked by a limit appears as **limited**
+and uses no allowance. Trimming the activity log does not reset the counters.
+
+Headline cleanup and Pulse grouping each need room for two requests per batch,
+one to propose changes and one to review them. Catch-ups and automatic question
+suggestions need one request each. A scheduled briefing needs two requests for
+the shortlist and editor, plus two checks per news story. When news candidates
+are available, Paper checks for at least four requests before starting. It
+includes only as many news stories as the remaining checks can cover.
+Retries also count toward the daily limit.
+
+Headline cleanup and Pulse grouping run after sync or on a timer. Opening a
+collection can request suggested questions automatically. Choosing **New
+suggestions**, asking a question and testing the connection are manual actions.
+Manual requests can still run when a background limit is reached. Scheduled
+mail and the internal briefing generation endpoint use the background limits.
+For an external scheduler that invokes the CLI, run
+`npm run briefing -- morning --scheduled`. Interactive CLI runs default to manual and noninteractive runs default to scheduled.
+Pass `--manual` to identify a manual run without a terminal.
+
+Excluded feeds and current members of excluded folders are skipped for
+background AI requests. Paper checks folder membership through the same
+navigation used in Settings. It skips work if it cannot resolve an excluded
+folder. New suggestions, collection answers, article discussions and manual
+briefings can use excluded articles. Pulse omits mixed collections and builds
+the remaining collection descriptions from eligible article titles. When a scheduled briefing has
+exclusions, it groups eligible articles directly and omits saved coverage and
+feedback that could quote earlier sources. Saved articles and collections remain
+available to read. Exclusions affect future provider requests, so previously saved catch-ups stay visible.
+
+For an OpenAI-compatible API, enter the model's exact name and its input and
+output prices in USD per million tokens. Future activity rows show an estimated
+cost when the provider supplies both counts. Changing a price leaves earlier
+estimates intact. Codex can report token counts, but subscription billing is
+unavailable.
+
 ## OpenAI-compatible API
 
 Select OpenAI-compatible API. Enter the base URL, API key and model names. Paper
@@ -35,7 +85,7 @@ Pulse collection questions use the discussion model and the same feature toggle
 as article discussions. Paper sends a limited set of text excerpts from the open
 collection and checks each citation against the articles it sent. Opening a
 collection can generate suggestions. Paper keeps a small in-memory cache keyed
-by collection revision. Asking for new suggestions replaces the cached set.
+by collection revision and excluded feeds. Asking for new suggestions replaces the cached set.
 
 Test connection uses the form values without saving or enabling AI. It sends
 one short request using the discussion model, without an output limit, so
@@ -136,7 +186,8 @@ JSON and applies the existing feature validators. It does not retry in plain tex
 mode. Servers must support at least JSON mode. Truncated replies and refusals
 fail. Existing feature retry rules still apply.
 
-Article discussion uses SSE text deltas. Paper requires a successful stop and a completed
+Article discussion uses SSE text deltas and requests usage in the final chunk.
+If the server rejects the usage option, Paper retries once without it. Paper requires a successful stop and a completed
 stream. Tool calls, refusals, truncated streams and malformed events fail.
 Requests are at most 2 MiB. Responses are at most 4 MiB; discussion text is limited
 to 24,000 characters. Compressed responses are rejected, and requests ask for

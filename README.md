@@ -199,6 +199,8 @@ Each connection has setup instructions. AI supports an OpenAI-compatible API or 
 with a ChatGPT login. See [AI providers](docs/ai-providers.md) for setup. AI installs
 from before alpha.4 must follow the
 [worker upgrade steps](docs/integrations.md#upgrade-an-existing-ai-installation).
+Open **AI activity and controls** in the same settings to see recent requests,
+set daily background limits or exclude feeds and folders.
 Reading works without any of these connections.
 
 Briefing email starts off. Enter your SMTP details under **Briefing email** and

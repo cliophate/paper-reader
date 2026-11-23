@@ -55,6 +55,25 @@ describe('Pulse collection discussion', () => {
     expect(JSON.stringify(articles)).not.toContain('Ignore the reader')
   })
 
+  it('excludes feeds from automatic suggestions and allows a manual refresh', async () => {
+    save([article('a'), { ...article('b'), feedId: 'excluded' }, article('c')])
+    db.aiActivity.savePolicy({ ...db.aiActivity.policy(), feeds: ['excluded'] })
+    const { service, model } = setup()
+    model.mockResolvedValueOnce({ questions: ['What changed in the public reports?', 'When will the class meet?'] })
+      .mockResolvedValueOnce({ questions: ['What did the excluded report say?', 'When is the next workshop?'] })
+    const suggest = (manual: boolean) => service.suggest(id, collection().questionsRevision!, manual)
+    const automatic = await suggest(false)
+    const manual = await suggest(true)
+    expect(manual).not.toEqual(automatic)
+    expect(await suggest(false)).toEqual(automatic)
+    await expect(suggest(true)).rejects.toMatchObject({ status: 429 })
+    expect(JSON.stringify(model.mock.calls[0][1])).not.toContain('Workshop report b')
+    expect(JSON.stringify(model.mock.calls[1][1])).toContain('Workshop report b')
+    db.aiActivity.savePolicy({ ...db.aiActivity.policy(), feeds: ['excluded', article('a').feedId] })
+    expect(await suggest(false)).toEqual([])
+    expect(model).toHaveBeenCalledTimes(2)
+  })
+
   it('bounds context and picks older articles when their titles match the question', async () => {
     save([article('kiln', 'Kiln repairs'), ...Array.from({ length: 20 }, (_, i) => article(`article-${i}`))])
     const { service, model } = setup()
