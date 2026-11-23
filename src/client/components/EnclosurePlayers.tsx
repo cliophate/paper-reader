@@ -1,23 +1,27 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { Enclosure } from '../../shared/enclosures'
 import { MAX_ENCLOSURES } from '../../server/enclosure-limits'
+import { articleImageSource } from '../articleImages'
 import { playback } from '../api'
 import type { Entry } from '../types'
 
-export function EnclosurePlayers({ entry }: { entry: Entry }) {
+export function EnclosurePlayers({ entry, posters }: { entry: Entry; posters: ReadonlyMap<string, string> }) {
   return entry.enclosures?.slice(0, MAX_ENCLOSURES).map((file, i, files) => {
     const kind = file.type.startsWith('audio') ? 'audio' : 'video'
     const label = `${kind}${files.length > 1 ? ` ${i + 1}` : ''}`
-    return <Player key={JSON.stringify([entry.id, file.url])} file={file} kind={kind} label={label} title={entry.title} id={entry.id} />
+    const poster = posters.get(file.url)
+    return <Player key={JSON.stringify([entry.id, file.url])} file={file} kind={kind} poster={poster && articleImageSource(entry, poster)} label={label} title={entry.title} id={entry.id} />
   })
 }
 
-function Player({ file, kind, label, title, id }: {
-  file: Enclosure; kind: 'audio' | 'video'; label: string; title: string; id: string
+function Player({ file, kind, poster, label, title, id }: {
+  file: Enclosure; kind: 'audio' | 'video'; poster?: string; label: string; title: string; id: string
 }) {
   const media = useRef<HTMLMediaElement | null>(null)
   const [started, setStarted] = useState(false)
   const [failed, setFailed] = useState(false)
+  const [brokenPoster, setBrokenPoster] = useState<string>()
+  const preview = poster !== brokenPoster ? poster : undefined
   const saved = useRef(file.position || 0)
   const lastWrite = useRef(0)
   const ready = useRef(false)
@@ -73,8 +77,11 @@ function Player({ file, kind, label, title, id }: {
     onLoadedMetadata: () => { ready.current = true },
   }
   return <div className="enclosure-player">
-    {(!started || failed) && <button type="button" onClick={play} aria-label={`Play ${label} for ${title}`}>Play {label}</button>}
-    {kind === 'audio' ? <audio {...props} /> : <video {...props} playsInline />}
+    <div className={preview ? 'enclosure-preview' : undefined}>
+      {preview && <img src={preview} alt="" onError={() => setBrokenPoster(preview)} />}
+      {(!started || failed) && <button type="button" onClick={play} aria-label={`Play ${label} for ${title}`}><span>Play {label}</span></button>}
+      {kind === 'audio' ? <audio {...props} /> : <video {...props} poster={preview} playsInline />}
+    </div>
     {failed && <p role="status">This {kind} could not play. <a href={file.url} target="_blank" rel="noopener noreferrer">Open media file</a></p>}
   </div>
 }

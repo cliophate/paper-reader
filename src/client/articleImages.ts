@@ -1,3 +1,12 @@
+import type { Entry } from './types'
+
+export function articleImageSource(entry: Entry, url = entry.thumbnailUrl) {
+  if (!entry.offline && navigator.onLine) return url
+  if (!url || !navigator.serviceWorker?.controller) return undefined
+  try { return '/_offline/image?' + new URLSearchParams({ url: new URL(url, entry.url).href }) }
+  catch { return undefined }
+}
+
 export function removeBrokenArticleImage(image: HTMLImageElement): void {
   const figure = image.closest('figure')
   if (figure && figure.querySelectorAll('img').length === 1) {
