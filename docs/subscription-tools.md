@@ -56,8 +56,9 @@ selected subscription through its existing add operation.
 OPML input is limited to 1 MiB of UTF-8 text, 32 levels, 10,000 XML elements and
 1,000 subscription outlines. Malformed XML, document types, entity declarations
 and unknown entities are rejected. Predefined XML entities and numeric character
-references work. Invalid feed URLs produce individual preview errors. HTTP and
-HTTPS URLs must have no embedded username/password or credential query fields.
+references work. Invalid feed URLs produce individual preview errors. Paper accepts HTTP and
+HTTPS feed URLs with private query parameters. Previews hide those parameters.
+URLs with an embedded username or password are rejected.
 
 The preview shows every subscription, source group path, matching subscriptions,
 chosen action and destination. It must be confirmed before writes. Existing

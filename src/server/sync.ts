@@ -1,3 +1,4 @@
+import { displayFeedTitle, displayFeedUrl } from './feed-url-display.js'
 import { OrganizationError, type OrganizationCommand } from './organization.js'
 import type { PaperDatabase, SyncStatus } from './db.js'
 import type { EntryStateOperation, ReaderBackend } from './backend.js'
@@ -143,7 +144,8 @@ export class BackendSynchronizer {
       await this.backend.addFeed(url, title, folder)
       try {
         if (this.enabled) await this.pullNavigation()
-        this.db.recordActivity({ kind: 'feed', origin: 'settings', summary: `Added ${title || url}`, count: 1, details: { url, title, folder } })
+        const details = { url: displayFeedUrl(url), title: displayFeedTitle(title), folder }
+        this.db.recordActivity({ kind: 'feed', origin: 'settings', summary: `Added ${details.title || details.url}`, count: 1, details })
         return {}
       } catch {
         return { refreshError: `${this.backendName} confirmed the subscription, but Paper could not refresh its local cache. Refresh before making more changes.` }

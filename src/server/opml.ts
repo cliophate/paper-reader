@@ -1,7 +1,7 @@
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { createHash } from 'node:crypto'
 import { SaxesParser } from 'saxes'
-import { feedUrl } from './feed-parser.js'
+import { subscriptionUrl, normalizedSubscriptionUrl, matchesSubscriptionUrl } from './subscription-url.js'
 import type { NavigationPayload, Feed } from './types.js'
 import type { ImportRow } from '../shared/subscription-tools.js'
 
@@ -17,18 +17,10 @@ export function opmlIdentity(backendId: string, id: string): string {
   return createHash('sha256').update(JSON.stringify([backendId, id])).digest('hex')
 }
 
-export function subscriptionUrl(value: string): string {
-  const safe = feedUrl(value)
-  if (!safe) return ''
-  const url = new URL(safe)
-  url.hash = ''
-  return url.href
-}
-
 // Private feed URLs must be transferred separately. Never strip a credential and
 // export a different, apparently working subscription.
 export function portableUrl(value: string): string {
-  const safe = subscriptionUrl(value)
+  const safe = normalizedSubscriptionUrl(value)
   return displayFeedUrl(safe) === safe ? safe : ''
 }
 
@@ -56,16 +48,16 @@ export function parseOpml(xml: string): OpmlDocument {
       const rawUrl = attribute('xmlUrl')
       if (rawUrl || attribute('type').toLowerCase() === 'rss' || attribute('type').toLowerCase() === 'atom') {
         if (++outlines > OPML_LIMITS.subscriptions) throw new SubscriptionInputError('OPML exceeds the 1,000 subscription limit.')
-        const url = portableUrl(rawUrl)
+        const url = subscriptionUrl(rawUrl)
         const identity = attribute('id', PAPER)
-        const problem = !url ? 'A complete HTTP or HTTPS feed URL without embedded credentials or token parameters is required.' : title.length > 240 ? 'The feed title exceeds 240 characters.' : undefined
+        const problem = !url ? 'A complete HTTP or HTTPS feed URL without an embedded username or password is required.' : title.length > 240 ? 'The feed title exceeds 240 characters.' : undefined
         // Only this extension identifies repeated memberships. Equal URLs do not.
         const previous = identity && /^[a-f0-9]{64}$/.test(identity) ? subscriptions.find(row => row.identity === identity) : undefined
         if (previous && previous.url === url && !problem && !previous.problem) {
           if (title && title !== previous.title) warnings.add('Repeated membership outlines disagree on a title. The first title is shown; reused subscriptions keep their current title.')
           if (!previous.paths.some(p => JSON.stringify(p) === JSON.stringify(path))) previous.paths.push(path)
         } else {
-          subscriptions.push({ key: String(outlines), title: title.slice(0, 240) || url || 'Invalid subscription', url, paths: [path], identity: /^[a-f0-9]{64}$/.test(identity) ? identity : '', ...(problem ? { problem } : {}) })
+          subscriptions.push({ key: String(outlines), title: displayFeedTitle(title).slice(0, 240) || displayFeedUrl(url) || 'Invalid subscription', url, paths: [path], identity: /^[a-f0-9]{64}$/.test(identity) ? identity : '', ...(problem ? { problem } : {}) })
           if (previous) warnings.add('Conflicting subscription identity hints remain separate rows. Review them before import.')
         }
       } else {
@@ -98,8 +90,8 @@ export function previewOpml(document: OpmlDocument, navigation: NavigationPayloa
   const current = subscriptionList(navigation)
   return document.subscriptions.map(row => {
     const identified = current.filter(({ feed }) => row.identity && opmlIdentity(backendId, feed.id) === row.identity)
-    const matches = current.filter(({ feed }) => (!feed.urlRef && subscriptionUrl(feed.url) === row.url && row.url) || identified.some(item => item.feed.id === feed.id))
-    const identityConflict = identified.some(({ feed }) => feed.urlRef || subscriptionUrl(feed.url) !== row.url)
+    const matches = current.filter(({ feed }) => matchesSubscriptionUrl(feed, row.url) || identified.some(item => item.feed.id === feed.id))
+    const identityConflict = identified.some(({ feed }) => !matchesSubscriptionUrl(feed, row.url))
     const repeatedUrl = document.subscriptions.some(other => other !== row && other.url && other.url === row.url)
     const folders = [...new Set(row.paths.map(path => path.join(' / ')))]
     const fold = (name: string) => name.trim().normalize('NFKC').toLowerCase()

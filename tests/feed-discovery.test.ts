@@ -31,6 +31,14 @@ describe('feed discovery documents', () => {
     await expect(discoverFeeds('https://user:password@example.test/', transport)).rejects.toThrow()
     expect(transport).toHaveBeenCalledTimes(1)
   })
+  it('keeps the private subscription address when it redirects to a public feed', async () => {
+    const url = 'https://members.test/news?token=synthetic-subscription'
+    const result = await discoverFeeds(url, async () => ({
+      body: '<rss version="2.0"><channel><title>News</title></channel></rss>',
+      responseUrl: 'https://cdn.test/today.xml', contentType: 'application/rss+xml',
+    }))
+    expect(result.candidates[0].url).toBe(url)
+  })
   it('rejects deeply nested HTML before constructing a large tree and ignores inert links', () => {
     expect(() => parse('<div>'.repeat(10000) + '</div>'.repeat(10000))).toThrow(/structure limit/)
     expect(() => parse('<br>'.repeat(100001))).toThrow(/structure limit/)

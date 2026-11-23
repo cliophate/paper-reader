@@ -5,7 +5,7 @@ import type { FeedFetchState } from './feed-fetch-state.js'
 import { createHmac, randomBytes } from 'node:crypto'
 import { BackendValidationError } from './backend.js'
 import { feedUrlKeys } from './feed-url-comparison.js'
-import { subscriptionUrl } from './opml.js'
+import { subscriptionUrl } from './subscription-url.js'
 import { transaction } from './transaction.js'
 import { FEED_MAINTENANCE_VERSION } from './auth-schema.js'
 
@@ -37,10 +37,6 @@ export function validStaleDays(value: unknown): value is StaleDays {
 const referenceKey = randomBytes(32)
 function reference(...parts: string[]) {
   return createHmac('sha256', referenceKey).update(JSON.stringify(parts)).digest('base64url')
-}
-
-export function privateFeedRef(id: string, url: string) {
-  return reference('subscription', id, url)
 }
 
 export function endpointKeys(state: FeedFetchState) {

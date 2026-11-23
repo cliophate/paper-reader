@@ -7,7 +7,7 @@ import { setImmediate, setTimeout as delay } from 'node:timers/promises'
 import type { PaperDatabase } from './db.js'
 import { boundedFetch, FeedHttpError, FEED_HTTP_DEFAULTS, validLastModified, type BoundedFetchOptions } from './feed-http.js'
 import type { FeedLease, FetchCompletion } from './feed-fetch-state.js'
-import { subscriptionUrl } from './opml.js'
+import { subscriptionUrl } from './subscription-url.js'
 import { completeFeed } from './feed-completion.js'
 
 const LEASE_MARGIN_MS = 5000

@@ -15,11 +15,13 @@ await fs.cp(path.resolve('dist'), path.join(working, 'dist'), { recursive: true 
 await fs.writeFile(path.join(working, 'dist/.private-fixture'), 'Synthetic hidden file')
 const executable = path.resolve('dist-server/index.js')
 const iconBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNQSHAAAAFkAMH+ZHNfAAAAAElFTkSuQmCC', 'base64')
+const feedPath = '/feed.xml?token=fixture-subscription'
 let privateRedirect = false, signedRepairRequests = 0
 let slowStarted = false, slowClosed = false, feedRequests = 0
 let slowIcons = false, slowIconStarted = false, slowIconClosed = false
 const fixture = http.createServer((request, response) => {
-  if (request.url === '/feed.xml' && privateRedirect) return response.writeHead(301, { Location: '/current.xml?sig=fixture-redirect' }).end()
+  if (request.url === '/feed.xml') return response.writeHead(403).end()
+  if (request.url === feedPath && privateRedirect) return response.writeHead(301, { Location: '/current.xml?sig=fixture-redirect' }).end()
   if (request.url === '/new.xml?hash=fixture-declared') {
     signedRepairRequests++
     return response.writeHead(302, { Location: '/mirror.xml' }).end()
@@ -89,11 +91,15 @@ try {
   const initial = (await request('/api/status')).data
   assert.equal(initial.backend, 'standalone'); assert(initial.localReadsActive)
   assert(!initial.readwiseConfigured && !initial.kirbyConfigured && !initial.briefingConfigured && !initial.discussionConfigured)
-  const discovery = await request('/api/subscription-tools/discover', { url: feedOrigin + '/feed.xml' })
+  const discovery = await request('/api/subscription-tools/discover', { url: feedOrigin + feedPath })
   assert.equal(discovery.status, 200)
-  const preview = (await request('/api/subscription-tools/preview-feed', { url: feedOrigin + '/feed.xml', title: 'Standalone fixture' })).data
+  const [candidate] = discovery.data.candidates
+  assert.equal(candidate.url, feedOrigin + '/feed.xml')
+  assert.doesNotMatch(JSON.stringify(discovery.data), /fixture-subscription/)
+  const preview = (await request('/api/subscription-tools/preview-feed', { ...candidate, title: 'Standalone fixture' })).data
+  assert.doesNotMatch(JSON.stringify(preview), /fixture-subscription/)
   privateRedirect = true
-  const manualPreview = await request('/api/feeds/preview', { url: feedOrigin + '/feed.xml' })
+  const manualPreview = await request('/api/feeds/preview', { url: feedOrigin + feedPath })
   assert.equal(manualPreview.status, 200)
   assert.equal(manualPreview.data.url, feedOrigin + '/current.xml')
   assert.doesNotMatch(JSON.stringify(manualPreview.data), /fixture-redirect/)
@@ -194,7 +200,10 @@ try {
   assert.equal(move.suggestedUrl, feedOrigin + '/new.xml')
   assert.doesNotMatch(JSON.stringify((await request('/api/feed-checks')).data), /fixture-redirect|fixture-declared/)
   assert.equal(move.redirects[0].url, feedOrigin + '/current.xml')
-  const repair = { id: feedId, expectedUrl: feedOrigin + '/feed.xml' }
+  const managed = (await request('/api/organization')).data.navigation.folders[0].feeds[0]
+  assert.equal(managed.url, feedOrigin + '/feed.xml')
+  assert.doesNotMatch(JSON.stringify(managed), /fixture-subscription/)
+  const repair = { id: feedId, expectedUrl: managed.urlRef }
   assert.equal((await request('/api/feeds/repair', { ...repair, repairRef: 'stale-fixture-reference' })).status, 400)
   assert.equal((await request('/api/feeds/repair', { ...repair, repairRef: move.repairRef })).status, 200)
   assert(signedRepairRequests > 0)
@@ -208,7 +217,7 @@ try {
   assert.equal(navigation.folders[0].feeds[0].url, feedOrigin + '/new.xml')
   assert.doesNotMatch(JSON.stringify(navigation), /fixture-declared/)
   assert.equal((await request('/api/feeds/repair', { ...repair, repairRef: move.repairRef })).status, 400)
-  const checkedInput = feedOrigin + '/feed.xml'
+  const checkedInput = feedOrigin + feedPath
   assert.equal((await request('/api/feeds/repair', {
     id: feedId, url: checkedInput, expectedUrl: current.navigation.folders[0].feeds[0].urlRef,
   })).status, 200)
@@ -225,6 +234,7 @@ try {
   await until(() => slowStarted && slowIconStarted)
   assert.equal((await fetch(base + '/health')).status, 200)
   await stop(); await until(() => slowClosed && slowIconClosed)
+  assert.doesNotMatch(logs, /fixture-subscription|fixture-redirect|fixture-declared/)
   console.log('Standalone built-server smoke passed: hidden-parent root HTML and dotfile protection, no-credential setup, discovery/import/fetch/read, cached feed icons, CAS/undo, optional integrations off, organization, reload without collection, manual cooldown/origin/revision checks, restart intervals/identity/progress/stars, retained unsubscribe history, feed and icon scheduler abort/drain.')
 } catch (error) { console.error(logs.slice(-4000)); throw error }
 finally {

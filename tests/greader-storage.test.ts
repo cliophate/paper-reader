@@ -75,6 +75,17 @@ it('makes quickadd idempotent, rejects duplicate URLs and creates only through d
   await expect(organization.quickadd('https://example.test/feed')).rejects.toMatchObject({ status: 409 })
   const result = await organization.quickadd('https://example.test/new'); expect(result.numResults).toBe(1); expect(requests).toBe(1)
 })
+it('keeps private endpoints out of quickadd and subscription/list', async () => {
+  const url = 'https://example.test/private?token=synthetic-reader'
+  const organization = new GreaderOrganization(db, backend, async responseUrl => ({
+    responseUrl, contentType: 'application/rss+xml', body: `<rss version="2.0"><channel><title>${url}</title></channel></rss>`,
+  }))
+  const result = await organization.quickadd(url)
+  expect(result).toMatchObject({ query: '', streamName: 'https://example.test/private' })
+  const list = metadata(db.greaderDatabase, 'subscription/list', backend)
+  expect(list.subscriptions).toContainEqual(expect.objectContaining({ id: result.streamId, url: '' }))
+  expect(JSON.stringify(list)).not.toContain('synthetic-reader')
+})
 it('clips oversized HTML as escaped text and keeps summary bytes bounded', () => {
   const result = item(db.greaderDatabase, { sequence: 1n, first_seen_at: 1000n, published_at: '', title: '', author: '', feed_id: feed, feed_number: 1n, origin_title: '', site_url: '', url: 'https://example.test/article', content_html: '<script>'.repeat(10000), content_text: '<&'.repeat(10000), read: 0n, starred: 0n })
   expect(Buffer.byteLength(result.summary.content)).toBeLessThanOrEqual(65536)

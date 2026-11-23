@@ -246,12 +246,14 @@ describe('Miniflux state and subscriptions', () => {
   it('supports OPML choices, duplicate policy and existing category moves', async () => {
     const synchronizer = sync()
     const importer = new SubscriptionImporter(minifluxImportStore(client, synchronizer))
-    const xml = '<opml version="2.0"><body><outline text="New" xmlUrl="https://example.test/new.xml" type="rss"/></body></opml>'
+    const xml = '<opml version="2.0"><body><outline text="New" xmlUrl="https://example.test/new.xml?token=synthetic-member" type="rss"/></body></opml>'
     let preview = await importer.preview(xml)
     expect(preview.backend).toBe('miniflux'); expect(preview.warnings.join(' ')).toContain('Miniflux')
     let result = await importer.apply(preview.token, [{ key: '1', action: 'create', folders: [] }])
     expect(result.results[0].status).toBe('created')
+    expect(fixture.feeds[1].feed_url).toBe('https://example.test/new.xml?token=synthetic-member')
     preview = await importer.preview(xml)
+    expect(JSON.stringify(preview)).not.toContain('synthetic-member')
     result = await importer.apply(preview.token, [{ key: '1', action: 'create', folders: [] }])
     expect(result.results[0]).toMatchObject({ status: 'failed', message: expect.stringContaining('Miniflux cannot create') })
     preview = await importer.preview(xml)
@@ -380,6 +382,8 @@ it('exposes the check time and safe parsing errors without inventing a failure t
     lastCheckedAt: '2026-01-01T00:00:00.000Z', lastErrorAt: null })
   Object.assign(fixture.feeds[0], { parsing_error_message: 'Bad response at https://example.test/private?code=synthetic' })
   expect((await getFeed()).parsingErrorMessage).toBe('Bad response at [URL]')
+  Object.assign(fixture.feeds[0], { feed_url: 'https://example.test/private?token=synthetic-member', parsing_error_message: 'Rejected synthetic-member' })
+  expect((await getFeed()).parsingErrorMessage).toBe('')
   Object.assign(fixture.feeds[0], { parsing_error_message: fixture.feeds[0].password })
   expect((await getFeed()).parsingErrorMessage).toBe('')
 })

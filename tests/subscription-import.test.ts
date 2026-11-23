@@ -51,6 +51,24 @@ describe('subscription import application', () => {
     expect(() => db.identities.assertSubscription(store.backendId, id)).toThrow()
   })
 
+  it('imports the private endpoint, redacts its preview and matches only the same token', async () => {
+    const { db, store, importer } = local()
+    const base = 'https://example.test/private.xml'
+    const url = base + '?token=synthetic-first'
+    const outline = (url: string) => `<opml><body><outline xmlUrl="${url}"/></body></opml>`
+    const preview = await importer.preview(outline(url))
+    expect(preview.rows[0]).toMatchObject({ title: base, url: base })
+    expect(JSON.stringify(preview)).not.toContain('synthetic-first')
+    const { results } = await importer.apply(preview.token, choices(['1']))
+    expect(results[0].status).toBe('created')
+    expect(db.feedFetch.get(store.backendId, results[0].id!)?.url).toBe(url)
+    expect((await importer.preview(outline(url))).rows[0].suggestedId).toBe(results[0].id)
+    expect((await importer.preview(outline(base + '?token=synthetic-second'))).rows[0].matches).toEqual([])
+    const exported = exportOpml((await store.snapshot()).navigation, store.backendId)
+    expect(exported.omitted).toBe(1)
+    expect(exported.xml).not.toContain(base)
+  })
+
   it('initializes schedules and preserves them with subscription identity through an OPML round trip', async () => {
     const { db, store, importer } = local()
     const first = await importer.preview(xml)

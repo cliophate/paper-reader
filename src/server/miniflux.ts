@@ -9,8 +9,8 @@ import { minifluxIdentity, type BackendIdentity } from './identity.js'
 import { minifluxBaseUrl } from './miniflux-url.js'
 import { MINIFLUX_ORGANIZATION_CAPABILITIES } from './organization.js'
 import type { OrganizationCommand } from '../shared/organization.js'
-import { privateFeedRef } from './feed-maintenance.js'
-import { portableUrl, subscriptionUrl } from './opml.js'
+import { subscriptionUrl } from './subscription-url.js'
+import { portableUrl } from './opml.js'
 import { cleanArticleHtml, decodeHtmlText, excerpt, firstImage, readingMinutes } from './text.js'
 import { normalizeFeedContent, normalizeFeedThumbnail } from './feed-content.js'
 import { detectKind } from './entry-kind.js'
@@ -159,16 +159,17 @@ export class MinifluxClient implements ReaderBackend {
     const row = object(value), category = object(row.category)
     const checked = date(row.checked_at)
     const errors = row.parsing_error_count == null ? undefined : count(row.parsing_error_count)
+    const url = subscriptionUrl(text(row.feed_url))
     const message = text(row.parsing_error_message)
     // Upstream diagnostics can quote a request URL, custom header or feed credential.
     const privateValues = [this.config.apiKey, row.password, row.username, row.cookie, row.proxy_url, row.webhook_url, row.apprise_service_urls]
+    if (errors && url !== displayFeedUrl(url)) privateValues.push(...new URL(url).searchParams.values())
     const safeMessage = errors && !privateValues.some(value => typeof value === 'string' && value && message.includes(value))
       && !/authorization|bearer |cookie|password|token|api.?key/i.test(message)
       ? message.replace(/https?:\/\/[^\s"<>]+/gi, '[URL]').slice(0, 500) : ''
-    const id = this.id('feed', row.id), rawUrl = text(row.feed_url), url = displayFeedUrl(rawUrl)
     return {
-      id, title: displayFeedTitle(decodeHtmlText(text(row.title))),
-      url, ...(url !== rawUrl && { urlRef: privateFeedRef(id, rawUrl) }), siteUrl: displayFeedUrl(text(row.site_url)), iconUrl: '',
+      id: this.id('feed', row.id), title: displayFeedTitle(decodeHtmlText(text(row.title))),
+      url, siteUrl: displayFeedUrl(text(row.site_url)), iconUrl: '',
       categories: [text(category.title)], unread, lastPublishedAt: null, lastCheckedAt: checked,
       broken: Boolean(errors), parsingErrorCount: errors, parsingErrorMessage: safeMessage,
       lastErrorAt: null,
@@ -208,7 +209,7 @@ export class MinifluxClient implements ReaderBackend {
     const kind = detectKind(feed.title, url, feed.url)
     const contentHtml = normalizeFeedContent({ contentHtml: html, feedTitle: feed.title, url, title })
     return {
-      id: this.id('entry', row.id), feedId: feed.id, feedTitle: feed.title, feedUrl: feed.url,
+      id: this.id('entry', row.id), feedId: feed.id, feedTitle: feed.title, feedUrl: displayFeedUrl(feed.url),
       title, author: decodeHtmlText(text(row.author)), url, contentHtml, excerpt: excerpt(contentHtml, 260),
       publishedAt, timestamp: Date.parse(publishedAt), crawledAt: Date.parse(createdAt),
       enclosures: mediaEnclosures(Array.isArray(row.enclosures) ? row.enclosures : [], file => ({

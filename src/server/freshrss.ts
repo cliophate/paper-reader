@@ -1,4 +1,5 @@
 import { sourceFetch, type SourceRequest } from './source-fetch.js'
+import { subscriptionUrl } from './subscription-url.js'
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { mediaEnclosures } from './enclosures.js'
 import { feedUrl } from './feed-parser.js'
@@ -197,7 +198,7 @@ export class FreshRssClient implements ReaderBackend {
       const feed: Feed = {
         id: subscription.id,
         title: decodeHtmlText(subscription.title),
-        url: subscription.url || subscription.id.replace(/^feed\//, ''),
+        url: subscriptionUrl(subscription.url || subscription.id.replace(/^feed\//, '')),
         siteUrl: subscription.htmlUrl || '',
         iconUrl: preferredIcons[index],
         categories,
@@ -323,7 +324,7 @@ export class FreshRssClient implements ReaderBackend {
     const response = await this.request('/reader/api/0/subscription/quickadd', { method: 'POST', body })
     const payload = await response.json() as { numResults?: number; streamId?: string; streamName?: string; error?: string }
     if (!payload.numResults || !payload.streamId) {
-      throw new Error(payload.error || 'FreshRSS rejected the subscription')
+      throw new Error('FreshRSS rejected the subscription')
     }
     if (title || folder) await this.editFeed(payload.streamId, title || payload.streamName || url, folder, '')
   }

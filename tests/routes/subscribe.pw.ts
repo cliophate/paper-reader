@@ -62,6 +62,21 @@ test('missing and invalid URLs, no feeds and blocked private addresses', async (
   await expect(page.getByRole('radio')).toHaveCount(0)
 })
 
+test('subscribes to a private feed from a share link and shows its redacted URL', async ({ page }) => {
+  const base = `${publisher}/feed/private`
+  const url = base + '?token=synthetic-share'
+  await page.goto(`/subscribe?${new URLSearchParams({ url })}`)
+  await expect(page.getByRole('radio')).toBeChecked()
+  await expect(page.getByLabel('Website or feed URL')).toHaveValue(base)
+  await expect(page.locator('.discovery-choice')).toContainText(base)
+  await expect(page.locator('.discovery-choice')).not.toContainText('synthetic-share')
+  await page.getByRole('button', { name: 'Preview selected feed' }).click()
+  await expect(page.locator('.subscription-url')).toHaveText(base)
+  await page.getByRole('button', { name: 'Confirm subscription', exact: true }).click()
+  await expect(page.getByText(/created\. Subscription added\./)).toBeVisible()
+  expect(await subscriptions(page)).toContainEqual(expect.objectContaining({ url: base, urlRef: expect.any(String) }))
+})
+
 test('Android share payloads use text or title when url is empty', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   for (const field of ['text', 'title']) {

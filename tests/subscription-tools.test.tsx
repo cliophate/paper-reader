@@ -122,7 +122,7 @@ describe('subscription settings', () => {
     expect(radios[0].name).toBe(radios[1].name)
     await act(async () => radios[1].click())
     await act(async () => button('Preview selected feed').click())
-    expect(api.previewFeed).toHaveBeenCalledWith('https://example.test/replies', 'Replies')
+    expect(api.previewFeed).toHaveBeenCalledWith({ url: 'https://example.test/replies', title: 'Replies', format: 'atom' })
     expect(api.apply).not.toHaveBeenCalled()
   })
 
