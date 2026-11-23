@@ -216,6 +216,42 @@ sent cannot be recalled. Article deletion belongs to retention settings.
 Existing mute filters keep matching the same literal phrases and feeds.
 For query examples, see [search syntax](docs/search-index.md#search-syntax).
 
+## Offline reading
+
+In a folder, saved view or search, open **Offline downloads** above the article list.
+**Download folder** includes read articles. **Download search results** uses the
+current query, scope and dates. In a saved view, **Download for offline** saves all
+current matches. You can also start it from the pencil beside the view. Editing
+or deleting a view keeps downloaded articles on this device until you remove them.
+Choose **Select articles** to pick individual
+stories. For one open article, use **Article options > Save offline**.
+
+Open **Offline articles** to browse or search your copies. Each row shows
+whether it has full text or feed text and how many images are cached. If an
+image fails or you cancel, you can still read articles already saved. Open
+**Offline downloads** for download failures, storage use, or a size limit in
+MiB. Paper checks the browser's usage estimate for the whole site. If an image
+has no reported size, Paper checks again after saving it and removes it if the
+site exceeds your limit.
+The browser can reach its own quota sooner. Remove one copy in Article options
+or clear all copies in Offline downloads. Audio and video need a connection.
+
+Read status, stars and reading positions stay on this device until Paper can
+sync them. Paper checks each read or star edit against the live article. If the
+server already has your choice, Paper clears the edit. If the field still has
+the value you saw, Paper sends your change. Otherwise it keeps the server value
+and tells you. FreshRSS and Miniflux have no conditional writes, so an upstream
+change landing between Paper's check and its write can still be overwritten.
+In standalone mode, Paper applies an offline edit if the field changed and then
+changed back, because checking the article revision would also discard valid
+edits whenever another field changed.
+In browsers without Web Locks, two tabs can send the same write twice, with
+the same result because both set the same value.
+
+With owner login enabled, opening Paper after a restart requires a connection.
+Signing out clears this browser's downloads, offline search data and pending
+edits before Paper contacts the server. They stay cleared if server logout fails.
+
 ## Reading preferences
 
 In source builds after 0.2.0-alpha.3, open **Settings > Reading & connections**

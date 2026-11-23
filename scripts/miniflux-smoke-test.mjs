@@ -112,6 +112,7 @@ try {
   assert.equal(api.entries.find(row => row.id === rawId).starred, true)
   assert.equal((await request('/api/reading', { id, position: .42 })).status, 200)
   api.entries.find(row => row.id === rawId).status = 'unread'
+  assert.deepEqual((await request('/api/entries/offline-state', { id })).data.state, { read: false, starred: true })
   assert.equal((await request('/api/sync', {})).status, 200)
   assert.equal((await request('/api/entries?kind=all&id=all&unread=1')).data.items.some(row => row.id === id), true)
 

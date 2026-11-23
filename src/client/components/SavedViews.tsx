@@ -10,8 +10,9 @@ import { Modal } from './Modal'
 
 function countLabel(value: ViewCount) { return String(value.count) + (value.capped ? '+' : '') }
 
-export function SavedViews({ navigation, active, online, onOpen, onChanged, initialQuery }: {
+export function SavedViews({ navigation, active, online, onOpen, onChanged, initialQuery, downloadAction }: {
   navigation: NavigationPayload | null; active: string; online: boolean; onOpen: (stream: StreamRef) => void
+  downloadAction: (id: string) => React.ReactNode
   onChanged: () => Promise<unknown>; initialQuery: string
 }) {
   const views = navigation?.savedViews
@@ -37,11 +38,12 @@ export function SavedViews({ navigation, active, online, onOpen, onChanged, init
       </button><button className="icon-button" aria-label={'Edit ' + view.title} disabled={!online} onClick={() => setEditor(view)}><Icon name="edit" /></button>
     </div>)}
     {editor && createPortal(<ViewEditor view={editor === 'new' ? undefined : editor} navigation={navigation} initialQuery={editor === 'new' ? initialQuery : editor.query}
-      onClose={() => setEditor(null)} onChanged={onChanged} />, document.body)}
+      downloadAction={editor === 'new' ? null : downloadAction(editor.id)} onClose={() => setEditor(null)} onChanged={onChanged} />, document.body)}
   </>
 }
 
-function ViewEditor({ view, initialQuery, navigation, onClose, onChanged }: {
+function ViewEditor({ view, initialQuery, navigation, onClose, onChanged, downloadAction }: {
+  downloadAction: React.ReactNode
   view?: SavedView; initialQuery: string; navigation: NavigationPayload | null; onClose: () => void; onChanged: () => Promise<unknown>
 }) {
   const [title, setTitle] = useState(view?.title || '')
@@ -112,11 +114,13 @@ function ViewEditor({ view, initialQuery, navigation, onClose, onChanged }: {
         {error && <p role="alert">{error}</p>}
         <div className="view-editor-actions"><button disabled={!title.trim() || !text.trim() || Boolean(hint)}>Save view</button>
           {view && <>
+            {downloadAction}
             <button type="button" disabled={index <= 0} onClick={() => void change(() => api.moveView(view.id, 'up', orderRevision), false)}>Move up</button>
             <button type="button" disabled={index < 0 || index === views.length - 1} onClick={() => void change(() => api.moveView(view.id, 'down', orderRevision), false)}>Move down</button>
             <button type="button" onClick={() => { if (window.confirm('Delete "' + view.title + '"?')) void change(() => api.deleteView(view), true) }}>Delete view</button>
           </>}
         </div>
+        {view && <p>If you edit or delete this view, downloaded articles stay on this device until you remove them.</p>}
       </fieldset>
     </form>
   </Modal>

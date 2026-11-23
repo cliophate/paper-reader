@@ -46,6 +46,7 @@ export interface Entry {
   [indexedSearchText]?: { title: string; author: string; feedTitle: string; contentText: string; fullContentText: string }
   searchSnapshot?: string
   linkNumber?: number
+  modifiedAtMs?: number
   stateRevision?: number
   searchExcerpt?: string
   enclosures?: Enclosure[]

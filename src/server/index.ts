@@ -612,6 +612,23 @@ app.post('/api/reading', (request, response) => {
   response.json({ ok: true })
 })
 
+app.post('/api/reading/offline', (request, response) => {
+  const { id, kind, position, base } = request.body || {}
+  if (typeof id !== 'string' || !id || kind !== 'progress' || !Number.isFinite(position) || position < 0 || position > 1
+    || !(base === null || typeof base === 'string')) {
+    return response.status(400).json({ error: 'Invalid offline reading position.' })
+  }
+  response.json(database.saveReadingProgress(id, position, base))
+})
+
+app.post('/api/entries/offline-state', asyncRoute(async (request, response) => {
+  const id = request.body?.id
+  if (typeof id !== 'string' || !id) return response.status(400).json({ error: 'Missing article ID.' })
+  if (standalone) return response.json({ state: database.offlineState(id) ?? null })
+  const entry = await withRequestSignal(request, response, signal => backend.entry(id, signal))
+  response.json({ state: entry && { read: entry.read, starred: entry.starred } })
+}))
+
 app.get('/api/reports', (request, response) => {
   response.json(database.articleReports(Number(request.query.limit) || 100))
 })
@@ -858,8 +875,10 @@ app.post('/api/entries/state', asyncRoute(async (request, response) => {
   if (standalone) {
     const expectedRevisions = parseRevisions(request.body?.expectedRevisions)
     const undo = request.body?.undo === true ? { token: crypto.randomBytes(24).toString('base64url'), expiresAt: new Date(Date.now() + UNDO_LIFETIME_MS).toISOString() } : undefined
-    const change = standalone.state.editEntries(ids, operation as EntryStateOperation, { expectedRevisions, origin, undo })
-    return response.json({ ok: true, ...change })
+    return response.json(database.transaction(() => {
+      const change = standalone.state.editEntries(ids, operation as EntryStateOperation, { expectedRevisions, origin, undo })
+      return { ok: true, ...change, modifiedAtMs: ids.length === 1 ? database.offlineState(ids[0])?.modifiedAtMs : undefined }
+    }))
   }
   await synchronizer.editEntries(ids, operation as EntryStateOperation, origin)
   response.json({ ok: true })

@@ -15,7 +15,10 @@ const state = path.join(temporary, 'data')
 // still go through the production transport's address checks.
 const publisher = http.createServer((request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1:4319')
-  if (url.pathname === '/webhook-test') {
+  if (url.pathname === '/offline-image.svg') {
+    response.writeHead(200, { 'Content-Type': 'image/svg+xml' })
+    response.end('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle r="8"/></svg>')
+  } else if (url.pathname === '/webhook-test') {
     response.writeHead(503)
     response.end('Synthetic private response')
   } else if (url.pathname.startsWith('/feed/')) {

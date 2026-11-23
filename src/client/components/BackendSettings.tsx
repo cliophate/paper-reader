@@ -11,7 +11,7 @@ export function BackendSettings({ backend }: { backend: 'standalone' | 'freshrss
     <p className="settings-intro">{backend === 'standalone'
       ? 'Paper fetches feeds and saves articles, feed icons, reading state and folders in its data directory.'
       : `${name} manages subscriptions and reading state. Paper keeps local history, discussions, briefings and collections.`}</p>
-    <p>Paper saves playback positions for audio and video. Offline copies include article text and images.</p>
+    <p>Open Offline downloads above the article list to save a folder, search results or selected articles. Check storage use and set a download limit there. Audio and video need a connection.</p>
     {backend !== 'standalone' && <p>With local reads enabled, Paper searches its index after import. Until then it searches articles as it pages through {name}.</p>}
     {backend !== 'standalone' && <>
       <button disabled={testing} onClick={async () => {

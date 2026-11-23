@@ -1,3 +1,6 @@
+import { queueArticleEdit, replayArticleEdits } from './offlineQueue'
+import { searchCopies } from './offlineSearch'
+import { OfflineDownloads, useOfflineDownload } from './components/OfflineDownloads'
 import { EnclosurePlayers } from './components/EnclosurePlayers'
 import { MAX_DISPLAYED_SEARCH_IDS, searchHint as getSearchHint } from '../server/search-query'
 import { ArticleNotes, Highlights, useAnnotations, usePassageRanges } from './components/Annotations'
@@ -9,14 +12,14 @@ import { OrganizationSidebar } from './components/OrganizationSidebar'
 import { FeedMark } from './components/FeedMark'
 import type { SaveDestination } from '../shared/connections'
 import type { OrganizationView } from '../shared/organization'
-import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { forwardRef, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createArticleBoundaryStore, type ArticleBoundaryStore } from './articleBoundaryStore'
 import { createArticleNavigation } from './articleNavigation'
 import { api, ApiError, playback } from './api'
 import { useDialogFocus, useMenuFocus } from './dialogFocus'
-import { useReadingProgress } from './readingProgress'
+import { rememberPosition, useReadingProgress } from './readingProgress'
 import { MAX_ENCLOSURES } from '../server/enclosure-limits'
-import { clearOffline, offlineArticles, removeOffline, saveOffline } from './offline'
+import { clearOffline, downloadPages, inOfflineStream, offlineArticles, offlineNavigation, patchOffline, removeOffline } from './offline'
 import { FeedOverrides } from './components/FeedOverrides'
 import type { FullTextMode } from '../server/reading-preference-values'
 import { PreferenceNotice, ReadingPreferencesProvider, ReadingSettings, useReadingPreferences } from './components/ReadingPreferences'
@@ -149,7 +152,9 @@ function Reader() {
   const [chooseSaveFor, setChooseSaveFor] = useState<Entry | null>(null)
   const [bulkPreview, setBulkPreview] = useState<{ token: string; count: number; label: string } | null>(null)
   const [bulkBusy, setBulkBusy] = useState(false)
-  const [offlineBusy, setOfflineBusy] = useState(false)
+  const download = useOfflineDownload(navigation)
+  const [picks, setPicks] = useState<Map<string, Entry> | null>(null)
+  useEffect(() => setPicks(null), [stream.id, query, libraryMode])
 
   const [loading, setLoading] = useState(true)
   const [entryOrder, setEntryOrder] = useState<'newest' | 'oldest'>('newest')
@@ -340,8 +345,15 @@ function Reader() {
     if (!background) setLoading(true)
     try {
       setListError('')
-      if (libraryMode !== 'stream') {
-        const items = libraryMode === 'recent' ? await api.recentReading() : await offlineArticles()
+      if (libraryMode !== 'stream' || !navigator.onLine) {
+        let items = navigator.onLine && libraryMode === 'recent' ? await api.recentReading() : await offlineArticles()
+        if (libraryMode === 'offline' || !navigator.onLine) {
+          if (libraryMode === 'stream') items = source.kind === 'view' && viewQuery ? searchCopies(items, viewQuery) : items.filter(entry => inOfflineStream(entry, source))
+          if (query) items = searchCopies(items, query)
+          if (libraryMode === 'stream' && (query ? searchUnread : unreadOnly && source.kind !== 'starred')) items = items.filter(entry => !entry.read || entry.id === selectedIdRef.current)
+          if (libraryMode === 'stream' && query && dates.after) items = items.filter(entry => entry.timestamp >= Date.parse(dates.after))
+          if (libraryMode === 'stream' && query && dates.before) items = items.filter(entry => entry.timestamp < Date.parse(dates.before))
+        }
         if (serial !== requestSerial.current) return
         setEntries(items); setContinuation(''); setPreviousContinuation(''); return
       }
@@ -472,7 +484,7 @@ function Reader() {
   }, [filtersMatching, overlays.settings, reloadFilteredLibrary])
 
   const loadMore = useCallback(async (): Promise<Entry[]> => {
-    if (!continuation || loadingMore) return []
+    if (!navigator.onLine || !continuation || loadingMore) return []
     const serial = requestSerial.current
     setLoadingMore(true)
     try {
@@ -558,7 +570,7 @@ function Reader() {
     setReaderChromeHidden(false)
   }, [])
 
-  useReadingProgress(selected, articleRef, view === 'reader' && mobilePane === 'article', revealReaderChrome)
+  useReadingProgress(selected, articleRef, view === 'reader' && mobilePane === 'article', revealReaderChrome, notify)
 
   const handleArticleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
     if (!window.matchMedia('(max-width: 1040px)').matches || view !== 'reader' || mobilePane !== 'article') return
@@ -612,27 +624,29 @@ function Reader() {
     reload()
     window.addEventListener('pagehide', abort)
     window.addEventListener('pageshow', restored)
-    return () => { abort(); window.removeEventListener('pagehide', abort); window.removeEventListener('pageshow', restored) }
+    window.addEventListener('online', reload)
+    return () => { abort(); window.removeEventListener('pagehide', abort); window.removeEventListener('pageshow', restored); window.removeEventListener('online', reload) }
   }, [loadNavigation, loadStatus])
 
+  const synced = useEffectEvent(() => {
+    void loadNavigation().catch(() => {})
+    void loadStatus().catch(() => {})
+    if (view === 'reader') void loadEntries(stream, 'keep', stream.kind === 'view' ? 'replace-in-place' : true)
+    setTopicsRefreshKey(current => current + 1)
+  })
+  const stateChanged = useEffectEvent((event: MessageEvent) => {
+    const change = JSON.parse(event.data) as { ids: string[]; operation: 'read' | 'unread' | 'star' | 'unstar'; revisions?: Record<string, number> } | null
+    if (!change) { synced(); return }
+    const ids = new Set(change.ids)
+    const patch = change.operation === 'read' ? { read: true } : change.operation === 'unread' ? { read: false } : change.operation === 'star' ? { starred: true } : { starred: false }
+    setEntries(current => current.map(entry => ids.has(entry.id) ? { ...entry, ...patch, stateRevision: change.revisions?.[entry.id] ?? entry.stateRevision } : entry))
+    void loadNavigation().catch(() => {})
+    if (view === 'reader' && stream.kind === 'view') void loadEntries(stream, 'keep', 'replace-in-place')
+    setTopicsRefreshKey(value => value + 1)
+  })
   useEffect(() => {
+    if (!online) return
     const events = new EventSource('/api/events')
-    const synced = () => {
-      void loadNavigation().catch(() => {})
-      void loadStatus().catch(() => {})
-      if (view === 'reader') void loadEntries(stream, 'keep', stream.kind === 'view' ? 'replace-in-place' : true)
-      setTopicsRefreshKey(current => current + 1)
-    }
-    const stateChanged = (event: MessageEvent) => {
-      const change = JSON.parse(event.data) as { ids: string[]; operation: 'read' | 'unread' | 'star' | 'unstar'; revisions?: Record<string, number> } | null
-      if (!change) { synced(); return }
-      const ids = new Set(change.ids)
-      const patch = change.operation === 'read' ? { read: true } : change.operation === 'unread' ? { read: false } : change.operation === 'star' ? { starred: true } : { starred: false }
-      setEntries(current => current.map(entry => ids.has(entry.id) ? { ...entry, ...patch, stateRevision: change.revisions?.[entry.id] ?? entry.stateRevision } : entry))
-      void loadNavigation().catch(() => {})
-      if (view === 'reader' && stream.kind === 'view') void loadEntries(stream, 'keep', 'replace-in-place')
-      setTopicsRefreshKey(value => value + 1)
-    }
     const navigationUpdated = () => { void loadNavigation().catch(() => {}) }
     const pulseUpdated = () => setTopicsRefreshKey(current => current + 1)
     events.addEventListener('pulse', pulseUpdated)
@@ -650,7 +664,7 @@ function Reader() {
       events.removeEventListener('state', stateChanged as EventListener)
       events.close()
     }
-  }, [loadEntries, loadNavigation, loadStatus, stream, view])
+  }, [loadNavigation, online])
 
   // Label changes keep pagination and the mounted article intact.
   useEffect(() => {
@@ -710,12 +724,13 @@ function Reader() {
   useEffect(() => {
     if (!pendingLocation) return
     const needsNavigation = [pendingLocation.stream, pendingLocation.searchStream].some(source => source?.kind === 'feed' || source?.kind === 'category' || source?.kind === 'view')
-    if (needsNavigation && !navigation) return
+    if (online && needsNavigation && !navigation) return
     const generation = readerGeneration.current
     let cancelled = false
     const resolve = async () => {
       const offline = pendingLocation.library === 'offline' || !online ? await offlineArticles() : []
-      const pulse = pendingLocation.collection || pendingLocation.collectionNumber ? await api.pulse() : undefined
+      const sources = !online && !navigation ? offlineNavigation(offline) : navigation
+      const pulse = online && (pendingLocation.collection || pendingLocation.collectionNumber) ? await api.pulse() : undefined
       const collections = pulse?.collections || routeCollections.current
       let removalNotice = ''
       let fetchedId = ''
@@ -730,7 +745,7 @@ function Reader() {
           throw error
         }
       }
-      const result = await resolveReaderLocation(pendingLocation, { navigation, entries: [...routeEntries.current.values(), ...offline], collections, collectionAliases: pulse?.collectionAliases },
+      const result = await resolveReaderLocation(pendingLocation, { navigation: sources, entries: [...routeEntries.current.values(), ...offline], collections, collectionAliases: pulse?.collectionAliases },
         value => online ? missing(() => api.entryByNumber(value)) : Promise.resolve(null),
         id => online ? missing(() => api.entry(id)) : Promise.resolve(null))
       if (cancelled || generation !== readerGeneration.current) return
@@ -738,10 +753,11 @@ function Reader() {
       if (fetchedId) checkedOnOpen.current = fetchedId
       routeCollections.current = collections
       if (entry) { routeEntries.current.set(entry.id, entry); setEntries(current => [entry, ...current.filter(item => item.id !== entry.id)]) }
+      if (!online && !navigation) setNavigation(sources)
       setView(location.view)
       setLinkedCollection(location.view === 'pulse' ? location.collection : undefined)
       setCollectionFilter(location.collectionFilter)
-      setLibraryMode(location.library || 'stream')
+      setLibraryMode(!online && location.view === 'reader' && location.stream.kind === 'all' && !location.library ? 'offline' : location.library || 'stream')
       setPulseContext(location.view === 'reader' && collection ? { id: collection.id, title: collection.headline, ids: collection.sources.map(item => item.id) } : null)
       setStream(location.stream)
       setSelectedId(location.selectedId)
@@ -842,6 +858,12 @@ function Reader() {
       openStream(allStream)
     }
   }, [navigation, pendingLocation, stream.kind, viewQuery, notify, openStream])
+
+  function viewDownloadAction(id: string) {
+    return <button type="button" disabled={!online || download.busy} onClick={() => {
+      void download.start(signal => downloadPages({ stream: { kind: 'view', id, title: '' }, unread: false, query: '' }, signal), notify)
+    }}>Download for offline</button>
+  }
 
   const openLibrary = useCallback((mode: 'recent' | 'offline') => {
     setLibraryMode(mode)
@@ -1059,26 +1081,59 @@ function Reader() {
     setEntries(current => current.map(entry => entry.id === id ? { ...entry, ...patch } : entry))
   }, [])
 
+  useEffect(() => {
+    const replay = () => { void replayArticleEdits(patchOffline, ({ id, patch, queued, notice }) => {
+      if (notice && !queued && patch.read === false && selectedIdRef.current === id) manuallyUnreadId.current = id
+      updateEntry(id, { ...patch, ...queued })
+      if (!queued && patch.lastReadAt && patch.readingPosition !== undefined) rememberPosition(id, patch.readingPosition, patch.lastReadAt)
+      if (notice) notify(notice)
+    })?.catch(() => { /* The pending edit remains in IndexedDB. */ }) }
+    replay()
+    const timer = setInterval(replay, 15000)
+    window.addEventListener('online', replay)
+    window.addEventListener('focus', replay)
+    window.addEventListener('paper-offline-edits', replay)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('online', replay)
+      window.removeEventListener('focus', replay)
+      window.removeEventListener('paper-offline-edits', replay)
+    }
+  }, [notify, updateEntry])
+
   const setEntryState = useCallback(async (entry: Entry, operation: 'read' | 'unread' | 'star' | 'unstar', quiet = false, origin: 'reader' | 'pulse' | 'automatic' = 'reader') => {
-    if (!online) { notify('Connect to change reading state.'); return }
     if (operation === 'unread') manuallyUnreadId.current = entry.id
     else if (operation === 'read' && manuallyUnreadId.current === entry.id) manuallyUnreadId.current = ''
-    const patch = operation === 'read' ? { read: true }
-      : operation === 'unread' ? { read: false }
-      : operation === 'star' ? { starred: true }
-      : { starred: false }
+    const field = operation === 'read' || operation === 'unread' ? 'read' : 'starred'
+    const to = operation === 'read' || operation === 'star'
+    const patch = { [field]: to }
+    const queue = () => queueArticleEdit({ kind: 'state', id: entry.id, field, from: entry[field], to })
     setActionError(null)
     updateEntry(entry.id, patch)
     let undoToken: string | string[] = ''
     let revision = entry.stateRevision
     try {
+      if (!online || entry.offline) {
+        await queue()
+        if (!quiet) notify('Saved on this device.')
+        return
+      }
       const result = await api.editState([entry.id], operation, origin, {
         expectedRevisions: status.backend === 'standalone' && revision !== undefined ? { [entry.id]: revision } : undefined, undo: !quiet,
       })
       undoToken = result.undoToken || ''
       revision = result.revisions?.[entry.id] ?? revision
-      updateEntry(entry.id, { ...patch, stateRevision: revision })
+      const confirmed = { ...patch, stateRevision: revision, modifiedAtMs: result.modifiedAtMs }
+      updateEntry(entry.id, confirmed)
+      void patchOffline(entry.id, confirmed).catch(() => notify('State saved. Download the article again to update its offline copy.'))
     } catch (error) {
+      if (online && (error instanceof TypeError || (error as Error).name === 'TimeoutError')) {
+        try {
+          await queue()
+          notify('Change saved on this device. Paper will retry.')
+          return
+        } catch (storageError) { error = storageError }
+      }
       if (origin === 'automatic') manuallyUnreadId.current = entry.id
       setActionError({ id: entry.id, message: error instanceof Error ? error.message : 'Paper could not save the change', operation })
       const current = error instanceof ApiError ? error.states?.[entry.id] : undefined
@@ -1094,7 +1149,11 @@ function Reader() {
           if (!undoToken) { void setEntryState({ ...entry, ...patch, stateRevision: revision }, inverse, true, origin); return }
           void api.undo(undoToken).then(async () => {
             const current = await api.entry(entry.id)
-            if (current.entry) updateEntry(entry.id, current.entry)
+            if (current.entry) {
+              updateEntry(entry.id, current.entry)
+              const { read, starred, stateRevision, modifiedAtMs } = current.entry
+              await patchOffline(entry.id, { read, starred, stateRevision, modifiedAtMs })
+            }
             await loadNavigation()
           }).catch(error => notify(error instanceof Error ? error.message : 'Could not undo this change'))
         },
@@ -1180,7 +1239,7 @@ function Reader() {
   }, [learnedFullText, preferencesReady, fetchFullText, mobilePane, selected, fullMode, online])
 
   useEffect(() => {
-    if (view !== 'reader' || !online || !autoRead || !selected || !shouldAutoMarkRead(selected, mobilePane, manuallyUnreadId.current)) return
+    if (view !== 'reader' || !autoRead || !selected || !shouldAutoMarkRead(selected, mobilePane, manuallyUnreadId.current)) return
     let timer: number | undefined
     const schedule = () => {
       window.clearTimeout(timer)
@@ -1223,7 +1282,7 @@ function Reader() {
     // commits a result if the user is still here and the request has not expired.
     let cursor = direction > 0 ? continuation : previousContinuation
     const seen = new Set<string>()
-    while (cursor && !seen.has(cursor)) {
+    while (navigator.onLine && cursor && !seen.has(cursor)) {
       seen.add(cursor)
       const result = await api.entries(query ? searchStream : stream, streamUnreadOnly, query, cursor, signal, query ? dates : {}, direction < 0)
       if (signal.aborted) return null
@@ -1245,12 +1304,15 @@ function Reader() {
     const sources = stream.kind === 'category' ? navigation.folders : navigationFeeds(navigation)
     const sourceIndex = sources.findIndex(source => source.id === stream.id)
     if (sourceIndex < 0) return null
+    const copies = navigator.onLine ? undefined : await offlineArticles()
     let candidateIndex = sourceIndex + direction
     while (candidateIndex >= 0 && candidateIndex < sources.length) {
       const source = sources[candidateIndex]
       if (!unreadOnly || source.unread > 0) {
         const target: StreamRef = { kind: stream.kind, id: source.id, title: source.title }
-        const result = await api.entries(target, unreadOnly, '', '', signal, {}, direction < 0)
+        const result = copies
+          ? { items: copies.filter(entry => inOfflineStream(entry, target) && (!unreadOnly || !entry.read)), continuation: '', previousContinuation: '', order: 'newest' as const }
+          : await api.entries(target, unreadOnly, '', '', signal, {}, direction < 0)
         if (signal.aborted) return null
         if (result.items.length) return () => {
           const destination = direction > 0 ? result.items[0] : result.items.at(-1)!
@@ -1598,7 +1660,7 @@ function Reader() {
         </button>
         <div className="search-box">
           <Icon name="search" />
-          <input ref={searchRef} value={query} onChange={event => { setView('reader'); setLibraryMode('stream'); setPulseContext(null); setSelectedId(''); setMobilePane('stories'); setQuery(event.target.value) }} aria-label="Search articles" aria-describedby={searchHint ? 'search-hint' : undefined} placeholder="Search articles" />
+          <input ref={searchRef} value={query} onChange={event => { setView('reader'); setLibraryMode(current => current === 'offline' || !online ? 'offline' : 'stream'); setPulseContext(null); setSelectedId(''); setMobilePane('stories'); setQuery(event.target.value) }} aria-label="Search articles" aria-describedby={searchHint ? 'search-hint' : undefined} placeholder="Search articles" />
           <kbd>/</kbd>
           <button aria-label="Search syntax" title="Search syntax" onClick={() => setOverlays({ ...closedOverlays, help: 'search' })}><Icon name="info" /></button>
         </div>
@@ -1638,7 +1700,7 @@ function Reader() {
             <p>All caught up</p>
             <button onClick={() => changeUnreadOnly(false)}>Show all feeds</button>
           </div>}
-          <SavedViews navigation={navigation} active={view === 'reader' && libraryMode === 'stream' && stream.kind === 'view' ? stream.id : ''} online={online} onOpen={openStream} onChanged={loadNavigation} initialQuery={currentSearchQuery(query, searchStream, searchUnread, dates.after, dates.before)} />
+          <SavedViews downloadAction={viewDownloadAction} navigation={navigation} active={view === 'reader' && libraryMode === 'stream' && stream.kind === 'view' ? stream.id : ''} online={online} onOpen={openStream} onChanged={loadNavigation} initialQuery={currentSearchQuery(query, searchStream, searchUnread, dates.after, dates.before)} />
           <OrganizationSidebar snapshot={organization} navigation={navigation} active={!query ? stream : null} unreadOnly={unreadOnly} online={online} onSnapshot={applyOrganizationSnapshot} onOpen={openStream} onMarkFeed={feed => void markFeedRead(feed)} onMarkFolder={folder => void markFolderRead(folder)} onManage={manageFeed} onAddFeed={() => { setSettingsFeedId(''); setSettingsFeedView('discover'); setSettingsSection('feeds'); setOverlays({ ...closedOverlays, settings: true }) }} />
           </div>
         </nav>
@@ -1656,7 +1718,7 @@ function Reader() {
           <button className="icon-button" disabled={!online || libraryMode !== 'stream'} onClick={() => void markAllRead()} aria-label={query ? "Mark search results read" : "Mark stream read"}><Icon name="check" /></button>
         </div>
         <div className="reader-status" role="status">{!online ? 'Offline. Saved articles are available below.' : (navigationError || statusError || syncError) ? `Sync needs attention: ${navigationError || statusError || syncError}` : lastSync ? `Last synced ${relativeDate(lastSync)}` : status.backend === 'standalone' ? 'Ready to fetch feeds' : 'Waiting for synchronization'}{(navigationError || statusError || syncError) && online && <button onClick={() => void refresh()}>Retry</button>}</div>
-        {query && <div className="search-controls">
+        {query && online && libraryMode === 'stream' && <div className="search-controls">
           {searchHint && <span id="search-hint" role="status">{searchHint}</span>}
           {stream.kind === 'view' ? <span>Search in {stream.title}</span> : <label>Search in<select aria-label="Search scope" value={searchStream.id} onChange={event => {
             const id = event.target.value
@@ -1668,7 +1730,20 @@ function Reader() {
           <label>From<input type="date" value={after} onChange={event => setAfter(event.target.value)} /></label><label>Through<input type="date" value={before} onChange={event => setBefore(event.target.value)} /></label>
           <button onClick={() => { setQuery(''); setAfter(''); setBefore('') }}>Clear search</button>
         </div>}
-        {libraryMode === 'offline' && <div className="reader-status">Copies stay on this device. Audio and video need a connection. <button onClick={() => { if (window.confirm('Remove all offline articles and their saved images from this device?')) void clearOffline().then(() => loadEntries()) }}>Clear offline copies</button></div>}
+        <OfflineDownloads download={download}>
+          {libraryMode === 'stream' && online && <>
+            {stream.kind === 'view' && !query && viewDownloadAction(stream.id)}
+            {(stream.kind === 'category' || query) && <button disabled={download.busy} onClick={() => void download.start(signal => downloadPages({
+              stream: query ? searchStream : stream, query, unread: !!query && searchUnread, dates: query ? dates : {},
+            }, signal))}>{query ? 'Download search results' : 'Download folder'}</button>}
+            <button disabled={download.busy} onClick={() => setPicks(picks ? null : new Map())}>{picks ? 'End selection' : 'Select articles'}</button>
+            {picks && <button disabled={!picks.size || download.busy} onClick={() => { void download.start(() => picks.values()); setPicks(null) }}>Download selected ({picks.size})</button>}
+          </>}
+          {libraryMode === 'offline' && <button disabled={download.busy} onClick={() => {
+            if (window.confirm('Remove all offline articles and their saved images from this device?')) void clearOffline().then(() => { download.measure(); void loadEntries() }).catch(error => notify(error.message))
+          }}>Clear offline copies</button>}
+        </OfflineDownloads>
+        {download.message && <div className="reader-status" role="status">{download.message} {download.busy && <button onClick={download.cancel}>Cancel download</button>}</div>}
         <div className="filter-row">
           {mobileLayout || starredView || libraryMode !== 'stream'
             ? <span className="story-filter-label">{libraryMode === 'stream' && streamUnreadOnly ? 'Unread' : 'All'}</span>
@@ -1696,6 +1771,13 @@ function Reader() {
                 if (element) storyRowRefs.current.set(entry.id, element)
                 else storyRowRefs.current.delete(entry.id)
               }}
+              checked={picks ? picks.has(entry.id) : undefined}
+              onCheck={() => setPicks(old => {
+                const next = new Map(old)
+                if (next.has(entry.id)) next.delete(entry.id)
+                else next.set(entry.id, entry)
+                return next
+              })}
               entry={entry}
               active={entry.id === selectedId}
               onOpen={() => openEntry(entry)}
@@ -1733,9 +1815,10 @@ function Reader() {
           onFullMode={mode => { preferences.set(`fullText:${selected.feedId}`, mode); automaticFullTextAttempts.current.delete(selected.id) }}
           onFeedText={() => { const feed = feedVersions.current.get(selected.id); if (feed) { automaticFullTextAttempts.current.add(selected.id); updateEntry(selected.id, articleContent(feed)) } else void api.entry(selected.id).then(result => { if (result.entry) { automaticFullTextAttempts.current.add(selected.id); updateEntry(selected.id, articleContent(result.entry)) } }).catch(error => notify(error.message)) }}
           onRefreshText={() => void fetchFullText(selected, false, true)}
-          onOffline={() => { setOfflineBusy(true); void saveOffline(selected).then(() => notify('Saved for offline reading on this device')).catch(error => notify(error.message)).finally(() => setOfflineBusy(false)) }}
-          offlineBusy={offlineBusy}
+          onOffline={() => download.busy ? download.cancel() : void download.start(() => [selected], notify)}
+          offlineBusy={download.busy}
           onRemoveOffline={libraryMode === 'offline' ? () => void removeOffline(selected.id).then(() => {
+            download.measure()
             if (currentReader.current.libraryMode !== 'offline') return
             setSelectedId(current => current === selected.id ? '' : current)
             void loadEntries()
@@ -1918,7 +2001,15 @@ function SelectionContextMenu({ state, onClose, onCreate, onDiscuss, kirbyConfig
   </div>
 }
 
-const StoryRow = forwardRef<HTMLElement, { entry: Entry; active: boolean; onOpen: () => void; onContext: (left: number, top: number) => void }>(function StoryRow({ entry, active, onOpen, onContext }, ref) {
+function thumbnailSource(entry: Entry) {
+  if (!entry.offline && navigator.onLine) return entry.thumbnailUrl
+  if (!entry.thumbnailUrl || !navigator.serviceWorker?.controller) return undefined
+  try { return '/_offline/image?' + new URLSearchParams({ url: new URL(entry.thumbnailUrl, entry.url).href }) }
+  catch { return undefined }
+}
+
+const StoryRow = forwardRef<HTMLElement, { checked?: boolean; onCheck?: () => void; entry: Entry; active: boolean; onOpen: () => void; onContext: (left: number, top: number) => void }>(function StoryRow({ checked, onCheck, entry, active, onOpen, onContext }, ref) {
+  const thumbnail = thumbnailSource(entry)
   const [thumbnailReady, setThumbnailReady] = useState(false)
   const pressTimer = useRef<number | undefined>(undefined)
   const pressOrigin = useRef({ x: 0, y: 0 })
@@ -1932,15 +2023,15 @@ const StoryRow = forwardRef<HTMLElement, { entry: Entry; active: boolean; onOpen
   useEffect(() => cancelPress, [])
   useEffect(() => {
     setThumbnailReady(false)
-    if (!entry.thumbnailUrl) return
+    if (!thumbnail) return
     let cancelled = false
     const image = new Image()
     image.onload = () => { if (!cancelled) setThumbnailReady(true) }
     image.onerror = () => { if (!cancelled) setThumbnailReady(false) }
-    image.src = entry.thumbnailUrl
+    image.src = thumbnail
     return () => { cancelled = true }
-  }, [entry.thumbnailUrl])
-  const showThumbnail = Boolean(entry.thumbnailUrl && thumbnailReady)
+  }, [thumbnail])
+  const showThumbnail = Boolean(thumbnail && thumbnailReady)
   return <article
     ref={ref}
     onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') event.stopPropagation() }}
@@ -1978,14 +2069,15 @@ const StoryRow = forwardRef<HTMLElement, { entry: Entry; active: boolean; onOpen
       onOpen()
     }}
   >
+    {checked !== undefined && <input className="download-check" type="checkbox" checked={checked} aria-label={`Select ${entry.title}`} onClick={event => event.stopPropagation()} onChange={onCheck} />}
     <button className="story-open" aria-label={entry.displayTitle || entry.title} title={entry.displayTitle ? `Original: ${entry.title}` : undefined} />
-    {showThumbnail && <img className="story-thumb" src={entry.thumbnailUrl} alt="" onError={() => setThumbnailReady(false)} />}
+    {showThumbnail && <img className="story-thumb" src={thumbnail} alt="" onError={() => setThumbnailReady(false)} />}
     <button className="row-options" aria-label={`Options for ${entry.title}`} onClick={event => { event.stopPropagation(); const box = event.currentTarget.getBoundingClientRect(); onContext(box.left, box.bottom) }}>⋯</button>
     <div className="story-copy">
       <div className="story-source"><span>{entry.feedTitle}</span><time>{relativeTime(entry.timestamp)}</time></div>
       <h2 title={entry.displayTitle ? `Original: ${entry.title}` : undefined}>{entry.displayTitle || entry.title}</h2>
       {(entry.searchExcerpt || entry.excerpt) && <p>{entry.searchExcerpt || entry.excerpt}</p>}
-      <div className="story-meta"><span>{entry.readingMinutes} min</span>{entry.readingPosition !== undefined && <span>{Math.round(entry.readingPosition * 100)}% read</span>}{entry.readwiseSavedAt && <span>Readwise</span>}{entry.starred && <Icon name="star" className="filled" />}</div>
+      <div className="story-meta"><span>{entry.readingMinutes} min</span>{entry.offline && <span>{entry.fullText ? 'Full text' : 'Feed text'} · {entry.offline.cached}/{entry.offline.images} images cached{entry.offline.skippedForStorage ? ` · ${entry.offline.skippedForStorage} skipped for storage` : ''}{entry.offline.unverified ? ` (${entry.offline.unverified} unverified)` : ''}</span>}{entry.readingPosition !== undefined && <span>{Math.round(entry.readingPosition * 100)}% read</span>}{entry.readwiseSavedAt && <span>Readwise</span>}{entry.starred && <Icon name="star" className="filled" />}</div>
     </div>
   </article>
 })
@@ -2111,8 +2203,8 @@ const ArticleView = forwardRef<HTMLElement, {
       <div className="reader-toolbar">
         <button className="reader-back-button" onClick={onBack} aria-label={backLabel} title={backLabel}><Icon name="back" /></button>
         <div className="reader-actions">
-          <button className={entry.starred ? 'active' : ''} onClick={onToggleStar} disabled={!online} aria-label={entry.starred ? 'Remove star' : 'Star article'} title={entry.starred ? 'Remove star' : 'Star article'}><Icon name="star" className={entry.starred ? 'filled' : ''} /><span>{entry.starred ? 'Starred' : 'Star'}</span></button>
-          <button onClick={onToggleRead} disabled={!online} aria-label={entry.read ? 'Mark unread' : 'Mark read'} title={entry.read ? 'Mark unread' : 'Mark read'}><Icon name={entry.read ? 'archive' : 'check'} /><span>{entry.read ? 'Mark unread' : 'Mark read'}</span></button>
+          <button className={entry.starred ? 'active' : ''} onClick={onToggleStar} aria-label={entry.starred ? 'Remove star' : 'Star article'} title={entry.starred ? 'Remove star' : 'Star article'}><Icon name="star" className={entry.starred ? 'filled' : ''} /><span>{entry.starred ? 'Starred' : 'Star'}</span></button>
+          <button onClick={onToggleRead} aria-label={entry.read ? 'Mark unread' : 'Mark read'} title={entry.read ? 'Mark unread' : 'Mark read'}><Icon name={entry.read ? 'archive' : 'check'} /><span>{entry.read ? 'Mark unread' : 'Mark read'}</span></button>
           {saveLabel && <button onClick={onSave} disabled={saveDisabled} aria-label={saveLabel} title={saveLabel}><Icon name="bookmark" /><span>{saveCaption}</span></button>}
           {entry.kind === 'article' && <button className={entry.fullText ? 'active' : ''} onClick={onFullText} disabled={fullTextBusy || !online} aria-label={fullTextBusy ? 'Fetching full article' : entry.fullText ? 'Showing full article' : 'Fetch full article'} title={entry.fullText ? 'Showing full article' : 'Fetch full article'}><Icon name="reader" /><span>{fullTextBusy ? 'Fetching...' : entry.fullText ? 'Full text' : 'Full article'}</span></button>}
           <a href={entry.url} target="_blank" rel="noopener noreferrer" aria-label="Open original" title="Open original"><Icon name="external" /><span>Original</span></a>
@@ -2122,7 +2214,7 @@ const ArticleView = forwardRef<HTMLElement, {
         </div>
         <button className="type-button" onClick={onAppearance} aria-label="Appearance">Aa</button>
       </div>
-      {!online && <div className="offline-banner" role="status">Offline. Read and star changes need a connection.</div>}
+      {!online && <div className="offline-banner" role="status">Offline. Changes stay on this device until Paper reconnects.</div>}
       {actionError && <div className="article-error" role="alert">{actionError} <button disabled={!online} onClick={onRetryAction}>Retry change</button></div>}
       {fullTextError && <div className="article-error" role="alert">{fullTextError} <button disabled={fullTextBusy || !online} onClick={onRefreshText}>Retry full article</button></div>}
       <div className="article-options">
@@ -2138,7 +2230,7 @@ const ArticleView = forwardRef<HTMLElement, {
             setNotesFor(entry.id)
           }}>Article notes</button>
           {onSendWebhook && <button disabled={!online || webhookBusy} onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); onSendWebhook() }}>Send to webhook</button>}
-          <button disabled={offlineBusy} onClick={onOffline}>{offlineBusy ? 'Saving offline...' : 'Save offline'}</button>
+          <button onClick={onOffline}>{offlineBusy ? 'Cancel download' : 'Save offline'}</button>
           {onRemoveOffline && <button onClick={async () => {
             let needsConfirmation = true
             if (online && navigator.onLine) {
@@ -2200,8 +2292,8 @@ function StandardArticle({ entry, feedIconUrl, children }: { entry: Entry; feedI
 function ArticleLeadImage({ entry }: { entry: Entry }) {
   const [failed, setFailed] = useState(false)
   useEffect(() => setFailed(false), [entry.id, entry.thumbnailUrl])
-  if (failed || !shouldShowArticleLeadImage(entry.thumbnailUrl, entry.contentHtml)) return null
-  return <figure className="article-lead-image"><img src={entry.thumbnailUrl} alt="" onError={() => setFailed(true)} /></figure>
+  if (failed || !thumbnailSource(entry) || !shouldShowArticleLeadImage(entry.thumbnailUrl, entry.contentHtml)) return null
+  return <figure className="article-lead-image"><img src={thumbnailSource(entry)} alt="" onError={() => setFailed(true)} /></figure>
 }
 
 function SocialArticle({ entry, feedIconUrl, children }: { entry: Entry; feedIconUrl: string; children: React.ReactNode }) {

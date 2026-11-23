@@ -48,6 +48,7 @@ export interface NavigationPayload {
 
 export interface Entry {
   linkNumber?: number
+  modifiedAtMs?: number
   stateRevision?: number
   searchSnapshot?: string
   searchExcerpt?: string
@@ -74,6 +75,7 @@ export interface Entry {
   readingMinutes: number
   thumbnailUrl: string
   kind: 'article' | 'x' | 'instagram' | 'threads' | 'bluesky' | 'mastodon' | 'youtube'
+  offline?: { folders: Pick<Folder, 'id' | 'title' | 'linkNumber'>[]; feedNumber?: number; images: number; cached: number; unverified?: number; skippedForStorage?: number; verified?: string[] }
   fullText?: boolean
 }
 

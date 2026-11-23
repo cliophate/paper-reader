@@ -105,6 +105,8 @@
   "POST /api/pulse/choice": "session",
   "POST /api/pulse/feedback": "session",
   "POST /api/pulse/visit": "session",
+  "POST /api/entries/offline-state": "session",
+  "POST /api/reading/offline": "session",
   "POST /api/reading": "session",
   "POST /api/readwise": "session",
   "POST /api/reload": "session",
