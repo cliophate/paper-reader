@@ -49,13 +49,15 @@ const cases: Array<[string, string]> = [
   ['cafe OR night is:read', 'ab'], ['(cafe OR night) is:read', 'b'],
   ['(is:starred OR title:night) -author:ada', 'b'], ['folder:room OR feed:garden', 'abc'],
   ['before:2024-03-31', 'ac'], ['after:2024-03-31', 'b'], ['before:7d', 'c'], ['after:7d', 'ab'],
+  ['feedid:one minminutes:2 maxminutes:2', 'ab'], ['maxminutes:1', ''], ['minminutes:3', ''],
+  ['folderid:"Reading room"', 'ab'], ['title:"quiet""sky"', 'a'],
   ['after:2w', 'ab'], ['after:3m', 'ab'], ['after:1y', 'abc'], ['NOT (telescope OR after:7d)', 'c'],
 ]
 it.each(cases)('agrees on %s for single articles, search pages, bulk preview and relative actions', (query, ids) => {
   const { root, hint } = parseSearch(query)
   expect(hint).toBeUndefined()
   const memory = entries.filter(entry => evaluator.matches(root, entry, {
-    now, folders: entry.feedId === 'one' ? folders : [], fullContentText: entry.id === 'a' ? fullContentText : '',
+    now, folders: entry.feedId === 'one' ? folders : [], folderIds: entry.feedId === 'one' ? folders : [], fullContentText: entry.id === 'a' ? fullContentText : '',
   })).map(entry => entry.id)
   expect(memory).toEqual([...ids])
   expect(db.matchingEntryIds(all, { query }).sort()).toEqual(memory)
@@ -89,7 +91,7 @@ it('clamps calendar months and years at the end of the month in UTC', () => {
   expect(searchDate('1y', Date.parse('2024-02-29T12:00:00Z'))).toBe(Date.parse('2023-02-28T12:00:00Z'))
 })
 
-it('preserves bare queries from the archive and remote page scan', () => {
+it('matches bare terms at the same token boundaries in the archive and remote page scan', () => {
   const sample = [
     { ...base, id: 'linux', feedId: 'compat', title: 'Bazzite', author: 'Alice', contentHtml: 'ქართული café' },
     { ...base, id: 'os', feedId: 'compat', title: 'Bazzite news', contentHtml: 'Updates' },
@@ -97,22 +99,22 @@ it('preserves bare queries from the archive and remote page scan', () => {
   db.upsertEntries(sample)
   const stream = { kind: 'feed' as const, id: 'compat', title: 'Compatibility' }
   const cases = [
-    ['BaZz', ['linux', 'os'], ['linux', 'os']],
-    ['azzit', [], ['linux', 'os']],
-    ['azzit lic', [], ['linux']],
-    ['ALICE baz', ['linux'], ['linux']],
-    ['ᲥᲐᲠ', ['linux'], ['linux']],
-    ['cafe', ['linux'], []],
-    ['Bazzite missing', [], []],
+    ['BaZz', ['linux', 'os']],
+    ['azzit', []],
+    ['azzit lic', []],
+    ['ALICE baz', ['linux']],
+    ['ᲥᲐᲠ', ['linux']],
+    ['cafe', ['linux']],
+    ['Bazzite missing', []],
   ] as const
-  for (const [query, archive, remote] of cases) {
-    expect(db.localEntriesPage(stream, { query }).items.map(entry => entry.id).sort(), query).toEqual(archive)
+  for (const [query, expected] of cases) {
+    expect(db.localEntriesPage(stream, { query }).items.map(entry => entry.id).sort(), query).toEqual(expected)
     const matches = evaluator.remoteMatcher(parseSearch(query), now)
-    expect(sample.filter(entry => matches(entry)).map(entry => entry.id), query).toEqual(remote)
+    expect(sample.filter(entry => matches(entry)).map(entry => entry.id), query).toEqual(expected)
   }
 })
 
-it('uses Turkish case folding for remote bare terms and article titles', () => {
+it('uses SQLite tokenization for remote bare terms even in a Turkish locale', () => {
   const result = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
     import { ArticleSearchEvaluator } from './src/server/search.ts'
     import { parseSearch } from './src/server/search-query.ts'
@@ -120,7 +122,7 @@ it('uses Turkish case folding for remote bare terms and article titles', () => {
     const entry = { title: 'IŞIK', feedTitle: '', author: '', contentHtml: '' }
     console.log(JSON.stringify([matches(entry), matches({ ...entry, title: 'işik' })]))
   `], { env: { ...process.env, LANG: 'tr_TR.UTF-8', LC_ALL: 'tr_TR.UTF-8' }, encoding: 'utf8' })
-  expect(JSON.parse(result)).toEqual([true, false])
+  expect(JSON.parse(result)).toEqual([true, true])
 })
 
 it.each([

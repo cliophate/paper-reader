@@ -12,6 +12,11 @@ title, author, feed name and article text. Quotes match consecutive whole words.
 - `title:"night sky" author:ada feed:science` limits each term to its field.
   `folder:"reading room"` and `url:example.test` match literal parts of folder names
   and article URLs. Quote fragments with parentheses, as in `url:"example.org/wiki/Paper_(reader)"`. Both ignore ASCII letter case.
+- `feedid:` and `folderid:` match the exact source ID. The saved view editor
+  fills these in when you select feeds or folders. Double a quote inside a
+  quoted source ID to match a literal quote.
+- `minminutes:10` and `maxminutes:20` include articles with estimated reading
+  times of at least 10 and at most 20 minutes.
 - `is:unread`, `is:read` and `is:starred` filter reading state and stars.
 - `after:2026-01-31 before:2026-02-10` includes January 31 and ends at the
   start of February 10, UTC. Relative dates count back from the time of search.
@@ -25,7 +30,7 @@ and **Keyboard shortcuts** both open the syntax guide.
 FreshRSS and Miniflux use Paper's index when local reads are active. Otherwise
 Paper applies the same operators to pages from the backend, in the backend's
 order. Each request scans up to ten pages. This path searches feed content only.
-Bare words on remote pages match substrings across the title, author, feed name and body.
+Bare words on remote pages match token prefixes across the title, author, feed name and body.
 Saved full text, date-picker filters and bulk actions on search results need
 the local index.
 

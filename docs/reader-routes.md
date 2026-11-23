@@ -11,6 +11,7 @@ its links. A number copied from another installation can identify a different it
 | Starred | `/starred` |
 | Feed | `/feed/<number>/<slug>` |
 | Folder | `/folder/<number>/<slug>` |
+| Saved view | `/view/<id>` |
 | Article in All articles | `/a/<number>` |
 | Article in a stream | Append `/a/<number>` to the stream path |
 | Collection | `/collection/<number>` |
@@ -26,6 +27,8 @@ Feed and folder slugs use the current title, lowercase ASCII and hyphens, capped
 at 60 characters. Empty slugs are omitted. Resolution uses the number, ignoring
 the slug, then corrects the URL with `replaceState`. Parsing uses segment count,
 so a folder named `A` works as `/folder/3/a`, with articles at `/folder/3/a/a/42`.
+Saved view links keep working after a rename. Searches under a saved view path
+apply both the saved query and the terms in `q`.
 Articles and collections have no slug. Headings come from loaded navigation.
 
 The query retains `unread=0`, `q`, `after`, `before` and `pane`. With a search,

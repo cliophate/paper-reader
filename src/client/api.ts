@@ -1,3 +1,4 @@
+import type { SavedView, ViewCount } from '../shared/saved-views'
 import type { FeedOverrideView, FeedOverrideUpdate } from '../shared/feed-overrides'
 import { PlaybackQueue, type PlaybackPosition } from './playback'
 import { checkSearchSize, SEARCH_SIZE_HINT } from '../server/search-query'
@@ -51,6 +52,13 @@ function annotationPage({ entryId, before, limit, signal }: {
 }
 
 export const api = {
+  viewCounts: (signal: AbortSignal) => request<Record<string, ViewCount>>('/api/views/counts', { signal }),
+  viewCount: (query: string, unreadOnly: boolean, signal: AbortSignal) => request<ViewCount>('/api/views/count', { method: 'POST', body: JSON.stringify({ query, unreadOnly }), signal }),
+  saveView: (title: string, query: string, view?: SavedView) => request(view ? '/api/views/' + view.id : '/api/views', {
+    method: view ? 'PATCH' : 'POST', body: JSON.stringify({ title, query, revision: view?.revision }),
+  }),
+  deleteView: (view: SavedView) => request('/api/views/' + view.id, { method: 'DELETE', body: JSON.stringify({ revision: view.revision }) }),
+  moveView: (id: string, direction: 'up' | 'down', expectedOrderRevision: string) => request('/api/views/' + id + '/move', { method: 'POST', body: JSON.stringify({ direction, expectedOrderRevision }) }),
   annotationPage,
   annotationArticleIds: (after: string) => request<string[]>('/api/annotations/articles?' + new URLSearchParams({ after })),
   async annotations(entryId: string, signal?: AbortSignal) {

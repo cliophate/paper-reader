@@ -1,3 +1,4 @@
+import { ViewConflict } from './saved-views.js'
 import { ruleQuery } from './article-rules.js'
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { ReadingPreferenceConflict } from './reading-preference-store.js'
@@ -420,7 +421,7 @@ app.get('/api/events', (request, response) => {
   const connectionsChanged = () => writeEvent(response, 'event: connections\ndata: {}\n\n')
   connectionListeners.add(connectionsChanged)
   const navigationChanged = () => writeEvent(response, 'event: navigation\ndata: {}\n\n')
-  if (feedIcons) navigationListeners.add(navigationChanged)
+  navigationListeners.add(navigationChanged)
   const keepAlive = setInterval(() => writeEvent(response, ': keep-alive\n\n'), 25_000)
   keepAlive.unref()
   request.on('close', () => {
@@ -465,7 +466,7 @@ app.use('/api/feed-checks', feedCheckRouter(database, backend.identity, synchron
 app.use('/api/organization', organizationRouter({ database, backend, synchronizer, navigation: () => entriesSource.navigation() }))
 
 app.get('/api/navigation', asyncRoute(async (_request, response) => {
-  response.json(database.numberNavigation(await entriesSource.navigation()))
+  response.json({ ...database.numberNavigation(await entriesSource.navigation()), savedViews: database.savedViews.list() })
 }))
 
 app.post('/api/reload', asyncRoute(async (_request, response) => {
@@ -497,6 +498,46 @@ function runRuleBackfill() {
     else standalone?.state.invalidate()
   }).catch(() => console.error('Paper could not finish applying article rules. Pending work will resume after restart.'))
 }
+
+function viewsChanged() {
+  for (const listener of navigationListeners) listener()
+}
+
+app.post('/api/views', (request, response) => {
+  const id = database.savedViews.save(request.body)
+  viewsChanged()
+  response.status(201).json({ id })
+})
+
+app.patch('/api/views/:id', (request, response) => {
+  database.savedViews.save(request.body, request.params.id)
+  viewsChanged()
+  response.json({ ok: true })
+})
+
+app.delete('/api/views/:id', (request, response) => {
+  database.savedViews.remove(request.params.id, request.body?.revision)
+  viewsChanged()
+  response.json({ ok: true })
+})
+
+app.post('/api/views/:id/move', (request, response) => {
+  const conflict = database.savedViews.move(request.params.id, request.body?.direction, request.body?.expectedOrderRevision)
+  if (conflict) return response.status(409).json({ error: 'The saved view order changed. Check the new order and try again.', ...conflict })
+  viewsChanged()
+  response.json({ ok: true })
+})
+
+app.get('/api/views/counts', asyncRoute(async (request, response) => {
+  response.json(await withRequestSignal(request, response, signal => search.savedViewCounts(signal)))
+}))
+
+app.post('/api/views/count', asyncRoute(async (request, response) => {
+  const query = ruleQuery(request.body?.query)
+  const result = await withRequestSignal(request, response, signal => search.select(
+    { kind: 'all', id: 'all', title: 'All articles' }, { query, unreadOnly: request.body.unreadOnly === true }, { kind: 'view-count' }, signal))
+  response.json({ count: result.count, capped: result.capped })
+}))
 
 app.post('/api/rules/preview', asyncRoute(async (request, response) => {
   const query = ruleQuery(request.body?.query)
@@ -680,16 +721,17 @@ app.post('/api/briefings/:id/feedback', (request, response) => {
 
 app.post('/api/streams/order', (request, response) => {
   const input = request.body?.stream
-  if (!input || !['all', 'starred', 'feed', 'category'].includes(input.kind) || typeof input.id !== 'string' || !input.id || input.id.length > 512) return response.status(400).json({ error: 'Choose a feed or folder' })
+  if (!input || !['all', 'starred', 'feed', 'category', 'view'].includes(input.kind) || typeof input.id !== 'string' || !input.id || input.id.length > 512) return response.status(400).json({ error: 'Choose a feed or folder' })
   const order = request.body?.order
   if (!['newest', 'oldest'].includes(order)) return response.status(400).json({ error: 'Unknown article order' })
-  if (!localReadsActive) return response.status(409).json({ error: 'Article ordering needs the local Paper index' })
+  if (!localReadsActive && input.kind !== 'view') return response.status(409).json({ error: 'Article ordering needs the local Paper index' })
   database.setStreamOrder(parseStreamBody(input), order)
   response.json({ ok: true, order })
 })
 
 app.get('/api/entries', asyncRoute(async (request, response) => {
   const stream = parseStream(request)
+  const useIndex = localReadsActive || stream.kind === 'view'
   const unreadOnly = (stream.kind !== 'starred' || Boolean(request.query.q)) && request.query.unread !== '0'
   const rawQuery = String(request.query.q || '')
   checkSearchSize(rawQuery)
@@ -697,8 +739,8 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
   let continuation = String(request.query.continuation || '')
   const reverse = request.query.reverse === '1'
   if (reverse && query) return response.status(400).json({ error: 'Backward paging is only available outside search.' })
-  if (!localReadsActive && (request.query.after || request.query.before)) return response.status(409).json({ error: 'Date filters need the local Paper index.' })
-  if (localReadsActive) {
+  if (!useIndex && (request.query.after || request.query.before)) return response.status(409).json({ error: 'Date filters need the local Paper index.' })
+  if (useIndex) {
     const order = database.streamOrder(stream)
     // Scope continuation tokens to their order, including changes from another device.
     if (continuation) {
@@ -708,7 +750,8 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
     }
     const controller = new AbortController()
     const disconnected = () => { if (!response.writableEnded) controller.abort() }
-    if (query) {
+    const useWorker = Boolean(query) || stream.kind === 'view'
+    if (useWorker) {
       response.once('close', disconnected)
       if (response.destroyed) controller.abort()
     }
@@ -722,7 +765,7 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
         after: String(request.query.after || ''),
         before: String(request.query.before || ''),
       }
-      const page = query ? await search.search(stream, options, controller.signal) : await repository.entriesPage(stream, options)
+      const page = useWorker ? await search.search(stream, options, controller.signal) : await repository.entriesPage(stream, options)
       if (response.destroyed) return
       if (database.streamOrder(stream) !== order) return response.status(409).json({ error: 'Article order changed. Refresh this list to continue.' })
       const cursor = page.continuation ? `${order}|${page.continuation}` : ''
@@ -737,14 +780,23 @@ app.get('/api/entries', asyncRoute(async (request, response) => {
 
   const items: Entry[] = []
   const parsed = parseSearch(query)
-  const feeds = usesFolder(parsed.root) ? uniqueFeeds(await backend.navigation()) : undefined
+  const folders = usesFolder(parsed.root) ? await backend.navigation() : undefined
+  const feeds = folders && uniqueFeeds(folders)
+  const folderIds = new Map<string, string[]>()
+  for (const folder of folders?.folders || []) {
+    for (const feed of folder.feeds) {
+      const ids = folderIds.get(feed.id) || []
+      ids.push(folder.id)
+      folderIds.set(feed.id, ids)
+    }
+  }
   const evaluator = new ArticleSearchEvaluator()
   const matches = evaluator.remoteMatcher(parsed, Date.now())
   try {
     const seenContinuations = new Set<string>()
     for (let pages = 0; pages < 10 && items.length < ENTRY_PAGE_SIZE; pages += 1) {
       const page = await backend.entriesPage(stream, { unreadOnly, limit: SEARCH_SCAN_SIZE, continuation })
-      items.push(...page.items.filter(entry => matches(entry, feeds?.get(entry.feedId)?.categories)))
+      items.push(...page.items.filter(entry => matches(entry, feeds?.get(entry.feedId)?.categories, folderIds.get(entry.feedId))))
       if (!page.continuation || page.continuation === continuation || seenContinuations.has(page.continuation)) {
         continuation = ''
         break
@@ -813,88 +865,103 @@ app.post('/api/entries/state', asyncRoute(async (request, response) => {
   response.json({ ok: true })
 }))
 
-const bulkPreviews = new Map<string, { ids: string[]; expires: number; revisions?: Record<string, number> }>()
+interface BulkPreview {
+  ids: string[]
+  expires: number
+  revisions?: Record<string, number>
+  view?: { stream: StreamRef; revision: number; options: { query: string; after: string; before: string } }
+}
+const bulkPreviews = new Map<string, BulkPreview>()
 app.post('/api/streams/preview-read', asyncRoute(async (request, response) => {
   const input = request.body || {}
   const stream = parseStreamBody(input.stream)
-  if (!localReadsActive && (input.query || input.after || input.before)) return response.status(409).json({ error: 'Search actions need the local Paper index.' })
+  if (!localReadsActive && stream.kind !== 'view' && (input.query || input.after || input.before)) return response.status(409).json({ error: 'Search actions need the local Paper index.' })
   const query = String(input.query || '')
   checkSearchSize(query)
   const options = { query, after: String(input.after || ''), before: String(input.before || '') }
-  const selection = localReadsActive
+  const view = stream.kind === 'view' ? { stream, revision: stream.revision, options } : undefined
+  const selection = localReadsActive || stream.kind === 'view'
     ? await withRequestSignal(request, response, signal => search.select(stream, options, { kind: 'preview', withRevisions: Boolean(standalone) }, signal))
     : { ids: await backend.entryIds(stream, true) }
   for (const [key, preview] of bulkPreviews) if (preview.expires < Date.now()) bulkPreviews.delete(key)
   const token = crypto.randomUUID()
-  bulkPreviews.set(token, { ...selection, expires: Date.now() + 60000 })
+  bulkPreviews.set(token, { ...selection, view, expires: Date.now() + 60000 })
   response.json({ token, count: selection.ids.length })
 }))
 app.post('/api/streams/confirm-read', asyncRoute(async (request, response) => {
   const token = String(request.body?.token || '')
   const preview = bulkPreviews.get(token)
   if (!preview || preview.expires < Date.now()) return response.status(409).json({ error: 'The preview expired. Check the count again.' })
-  const ids = localReadsActive && !standalone
-    ? (await withRequestSignal(request, response, signal => search.select({ kind: 'all', id: 'all', title: 'All' }, {}, { kind: 'unread', ids: preview.ids }, signal))).ids
-    : preview.ids
-  // Selection only reads. Claim the token once, immediately before the write.
-  if (!bulkPreviews.delete(token) || preview.expires < Date.now()) return response.status(409).json({ error: 'The preview expired. Check the count again.' })
-  const result = await markReadWithUndo(ids, preview.revisions)
-  response.json(result)
+  const { count, undoToken } = await markReadWithUndo(async () => {
+    const view = preview.view
+    let ids = preview.ids
+    if (view) database.savedViews.get(view.stream.id, view.revision)
+    if (view || (localReadsActive && !standalone)) {
+      const stream = view?.stream ?? { kind: 'all', id: 'all', title: 'All' }
+      const options = view?.options ?? { includeMuted: true }
+      ids = (await withRequestSignal(request, response, signal => search.select(stream, options,
+        { kind: 'preview', withRevisions: false, ids }, signal))).ids
+    }
+    if (view) database.savedViews.get(view.stream.id, view.revision)
+    if (!bulkPreviews.delete(token) || preview.expires < Date.now())
+      throw new SearchSnapshotError('The preview expired. Check the count again.')
+    return { ids, revisions: preview.revisions }
+  })
+  response.json({ count, undoToken })
 }))
 
 app.post('/api/streams/mark-read', asyncRoute(async (request, response) => {
-  const stream = parseStreamBody(request.body)
-  const remoteIds = standalone ? [] : await backend.entryIds(stream, true)
-  const localIds = localReadsActive
-    ? (await withRequestSignal(request, response, signal => search.select(stream, {}, { kind: 'preview', withRevisions: false }, signal))).ids
-    : []
-  const ids = [...new Set([...remoteIds, ...localIds])]
-  const result = await markReadWithUndo(ids)
-  response.json({ ok: true, ...result })
+  const { count, undoToken } = await markReadWithUndo(async () => {
+    const stream = parseStreamBody(request.body)
+    const remoteIds = standalone || stream.kind === 'view' ? [] : await backend.entryIds(stream, true)
+    const localIds = localReadsActive || stream.kind === 'view'
+      ? (await withRequestSignal(request, response, signal => search.select(stream, {}, { kind: 'preview', withRevisions: false }, signal))).ids
+      : []
+    return { ids: [...new Set([...remoteIds, ...localIds])] }
+  })
+  response.json({ ok: true, count, undoToken })
 }))
 
 app.post('/api/streams/mark-relative-read', asyncRoute(async (request, response) => {
-  const stream = parseStreamBody(request.body?.stream)
-  const anchorId = String(request.body?.anchorId || '')
-  const direction = String(request.body?.direction || '')
-  const unreadOnly = (stream.kind !== 'starred' || Boolean(request.body?.query)) && request.body?.unreadOnly !== false
-  const rawQuery = String(request.body?.query || '')
+  const input = request.body || {}
+  const anchorId = String(input.anchorId || '')
+  const direction = String(input.direction || '')
+  const rawQuery = String(input.query || '')
   checkSearchSize(rawQuery)
   const query = rawQuery.trim()
-  if (request.body?.order && request.body.order !== database.streamOrder(stream)) return response.status(409).json({ error: 'Article order changed. Refresh before marking above or below.' })
   if (!anchorId) return response.status(400).json({ error: 'An article is required' })
   if (direction !== 'above' && direction !== 'below') return response.status(400).json({ error: 'Unknown relative direction' })
 
-  let ids: string[]
-  let revisions: Record<string, number> | undefined
-  if (localReadsActive) {
-    const options = { unreadOnly, query, after: String(request.body?.after || ''), before: String(request.body?.before || '') }
-    const snapshot = String(request.body?.snapshot || '')
-    const displayedIds: unknown = request.body?.displayedIds
-    if (displayedIds !== undefined && (!Array.isArray(displayedIds) || displayedIds.length > MAX_DISPLAYED_SEARCH_IDS ||
-      !displayedIds.every(id => typeof id === 'string') || !displayedIds.includes(anchorId))) {
-      return response.status(400).json({ error: 'Invalid displayed search results. Refresh the search.' })
+  const result = await markReadWithUndo(async () => {
+    const stream = parseStreamBody(input.stream)
+    const checkOrder = () => {
+      if (input.order && input.order !== database.streamOrder(stream))
+        throw new SearchSnapshotError('Article order changed. Refresh before marking above or below.')
     }
-    if (displayedIds && !snapshot) return response.status(409).json({ error: 'The search results changed. Refresh the search.' })
-    const selection = await withRequestSignal(request, response, signal => search.select(stream, options,
-      { kind: 'relative', anchorId, direction, snapshot, displayedIds, withRevisions: Boolean(standalone) }, signal))
-    ids = selection.ids
-    revisions = selection.revisions
-    if (request.body?.order && request.body.order !== database.streamOrder(stream)) return response.status(409).json({ error: 'Article order changed. Refresh before marking above or below.' })
-  } else {
-    if (query) return response.status(409).json({ error: 'Relative read actions need the local Paper index while searching' })
-    const [orderedIds, unreadIds] = await Promise.all([
-      backend.entryIds(stream, false),
-      backend.entryIds(stream, true),
-    ])
+    checkOrder()
+    if (localReadsActive || stream.kind === 'view') {
+      const unreadOnly = (stream.kind !== 'starred' || Boolean(query)) && input.unreadOnly !== false
+      const options = { unreadOnly, query, after: String(input.after || ''), before: String(input.before || '') }
+      const snapshot = String(input.snapshot || '')
+      const displayedIds: unknown = input.displayedIds
+      if (displayedIds !== undefined && (!Array.isArray(displayedIds) || displayedIds.length > MAX_DISPLAYED_SEARCH_IDS ||
+        !displayedIds.every(id => typeof id === 'string') || !displayedIds.includes(anchorId)))
+        throw new BackendValidationError('Invalid displayed search results. Refresh the search.')
+      if (displayedIds && !snapshot) throw new SearchSnapshotError('The search results changed. Refresh the search.')
+      const selection = await withRequestSignal(request, response, signal => search.select(stream, options,
+        { kind: 'relative', anchorId, direction, snapshot, displayedIds, withRevisions: Boolean(standalone) }, signal))
+      if (stream.kind === 'view') database.savedViews.get(stream.id, stream.revision)
+      checkOrder()
+      return selection
+    }
+    if (query) throw new SearchSnapshotError('Relative read actions need the local Paper index while searching')
+    const [orderedIds, unreadIds] = await Promise.all([backend.entryIds(stream, false), backend.entryIds(stream, true)])
     const anchorIndex = orderedIds.indexOf(anchorId)
     const candidates = anchorIndex < 0 ? [] : direction === 'above' ? orderedIds.slice(0, anchorIndex) : orderedIds.slice(anchorIndex + 1)
     const unreadSet = new Set(unreadIds)
-    ids = candidates.filter(id => unreadSet.has(id))
-  }
-
-  const result = await markReadWithUndo(ids, revisions)
-  response.json({ ok: true, ...result, ids })
+    return { ids: candidates.filter(id => unreadSet.has(id)) }
+  })
+  response.json({ ok: true, ...result })
 }))
 
 app.post('/api/undo', asyncRoute(async (request, response) => {
@@ -1109,6 +1176,7 @@ app.use((error: Error, request: Request, response: Response, _next: NextFunction
   if (response.destroyed) return
   if ([5, 6].includes((error as Error & { errcode?: number }).errcode || 0)) return response.status(503).set('Retry-After', '1').json({ error: 'The library is busy. Try again.' })
   if (error instanceof SearchSnapshotError) return response.status(409).json({ error: error.message })
+  if (error instanceof ViewConflict) return response.status(409).json({ error: error.message })
   if (error instanceof SearchLimitError) return response.status(400).json({ error: error.message })
   if (error instanceof AnnotationError) return response.status(error.status).json({ error: error.message })
   if (error instanceof AiLimitError) return response.status(429).json({ error: error.message })
@@ -1141,16 +1209,17 @@ function parseRevisions(value: unknown): Record<string, number> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.values(value).some(revision => !Number.isSafeInteger(revision) || Number(revision) < 0)) throw new BackendValidationError('Send valid article revisions.')
   return value as Record<string, number>
 }
-async function markReadWithUndo(ids: string[], expectedRevisions?: Record<string, number>) {
+async function markReadWithUndo(select: () => Promise<{ ids: string[]; revisions?: Record<string, number> }>) {
   const token = crypto.randomBytes(24).toString('base64url')
   const expiresAt = new Date(Date.now() + UNDO_LIFETIME_MS).toISOString()
-  if (standalone) {
-    const change = standalone.state.editEntries(ids, 'read', { origin: 'stream', expectedRevisions, undo: { token, expiresAt } })
-    return { count: change.ids.length, undoToken: change.undoToken }
+  if (synchronizer instanceof BackendSynchronizer) {
+    const ids = await synchronizer.editSelectedEntries(async () => (await select()).ids, 'read', 'stream')
+    if (ids.length) database.createUndo({ token, operation: 'unread', entryIds: ids, expiresAt })
+    return { ids, count: ids.length, undoToken: ids.length ? token : '' }
   }
-  await synchronizer.editEntries(ids, 'read', 'stream')
-  if (ids.length) database.createUndo({ token, operation: 'unread', entryIds: ids, expiresAt })
-  return { count: ids.length, undoToken: ids.length ? token : '' }
+  const { ids, revisions } = await select()
+  const change = standalone!.state.editEntries(ids, 'read', { origin: 'stream', expectedRevisions: revisions, undo: { token, expiresAt } })
+  return { ids, count: change.ids.length, undoToken: change.undoToken }
 }
 
 async function shutdown() {
@@ -1205,10 +1274,17 @@ function parseStream(request: Request): StreamRef {
   return parseStreamBody({ kind: request.query.kind, id: request.query.id, title: request.query.title })
 }
 
-function parseStreamBody(input: Record<string, unknown> | undefined): StreamRef {
+function parseStreamBody(input: Record<string, unknown> | undefined) {
   const kind = String(input?.kind || 'all') as StreamKind
-  if (!['all', 'starred', 'category', 'feed'].includes(kind)) throw new BackendValidationError('Unknown stream')
-  return { kind, id: String(input?.id || kind), title: String(input?.title || '') }
+  if (!['all', 'starred', 'category', 'feed', 'view'].includes(kind)) throw new BackendValidationError('Unknown stream')
+  const id = String(input?.id || kind)
+  const title = String(input?.title || '')
+  if (kind === 'view') {
+    const { query: viewQuery, revision } = database.savedViews.get(id)
+    if (input?.viewQuery !== undefined && input.viewQuery !== viewQuery) throw new ViewConflict('This view changed. Refresh before continuing.')
+    return { kind: 'view' as const, id, title, viewQuery, revision }
+  }
+  return { kind, id, title }
 }
 
 function stringArray(input: unknown): string[] {

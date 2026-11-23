@@ -1,4 +1,10 @@
 {
+  "POST /api/views": "session",
+  "GET /api/views/counts": "session",
+  "POST /api/views/count": "session",
+  "POST /api/views/:id/move": "session",
+  "PATCH /api/views/:id": "session",
+  "DELETE /api/views/:id": "session",
   "DELETE /api/annotations/:id": "session",
   "DELETE /api/auth/apps": "session",
   "DELETE /api/auth/apps/:id": "session",

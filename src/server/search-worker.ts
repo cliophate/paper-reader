@@ -16,22 +16,26 @@ port.on('message', async (message: { type: string; id: number; stream: StreamRef
     if (selection) {
       let result
       switch (selection.kind) {
+        case 'view-count':
+          result = { ids: [], ...database.viewMatchCount(stream, options) }
+          break
         case 'rule': {
           const ids = database.matchingEntryIds(stream, { ...options, includeMuted: true })
           result = { ids: ids.slice(0, 8), count: ids.length }
           break
         }
         case 'preview':
-          result = database.previewUnread(stream, options, selection.withRevisions)
+          result = database.previewUnread(stream, options, selection.withRevisions, selection.ids)
           break
         case 'relative':
           result = database.relativeUnreadSelection(stream, selection.anchorId, selection.direction, { ...options, snapshot: selection.snapshot, displayedIds: selection.displayedIds }, selection.withRevisions)
           break
-        case 'unread':
-          result = database.previewUnread(stream, { includeMuted: true }, false, selection.ids)
-          break
       }
       port.postMessage({ type: 'result', id: message.id, value: result })
+      return
+    }
+    if (stream.kind === 'view' && !options.query) {
+      port.postMessage({ type: 'result', id: message.id, value: database.localEntriesPage(stream, options) })
       return
     }
     const page = database.searchEntriesPage(message.stream, message.options)

@@ -1371,3 +1371,14 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--ink); out
 .rule-row > div:first-child { flex: 1 1 180px; }
 .rule-row .hidden-articles { flex-basis: 100%; align-items: flex-start; }
 .hidden-articles button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+
+.saved-views-heading, .saved-view-row, .view-editor-actions { display: flex; align-items: center; gap: 6px; }
+.saved-views-heading { justify-content: space-between; padding-left: 9px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.saved-view-row .source-row { min-width: 0; flex: 1; }
+.saved-view-row > .icon-button, .saved-views-heading .icon-button { flex-shrink: 0; }
+.view-editor fieldset { border: 0; margin: 0; padding: 12px; display: grid; gap: 12px; min-width: 0; }
+.view-editor label { display: grid; gap: 4px; font-size: 13px; }
+.view-editor input, .view-editor select, .view-editor textarea { min-width: 0; width: 100%; padding: 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); }
+.view-filter-pair { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.view-editor-actions { flex-wrap: wrap; }
+.view-editor output { color: var(--muted); }

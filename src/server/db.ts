@@ -1,3 +1,4 @@
+import { SavedViews, migrateSavedViews, SAVED_VIEWS_VERSION } from './saved-views.js'
 import type { ArticleRule, RuleAction } from '../shared/article-rules.js'
 import { ArticleRules, migrateRules, RULE_BATCH_SIZE, RULES_VERSION } from './article-rules.js'
 import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
@@ -198,6 +199,7 @@ const BACKEND_CHECKPOINTS = new Set(['backfill_complete', 'backfill_continuation
 export class PaperDatabase {
   private readonly db: DatabaseSync
   private readonly databasePath: string
+  readonly savedViews: SavedViews
   readonly rules: ArticleRules
   readonly annotations: AnnotationStore
   readonly retention: RetentionStore
@@ -312,7 +314,12 @@ export class PaperDatabase {
           if (version > 0 && version < RULES_VERSION) this.backupBeforeMigration(RULES_VERSION, 'article-rules')
           migrateRules(this.db)
         }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < SAVED_VIEWS_VERSION) {
+          if (version > 0) this.backupBeforeMigration(SAVED_VIEWS_VERSION, 'saved-views')
+          migrateSavedViews(this.db)
+        }
       }
+      this.savedViews = new SavedViews(this.db)
       this.rules = new ArticleRules(this)
       this.db.function('checked_url_match', { directOnly: true }, matched => {
         const now = performance.now()
@@ -1525,7 +1532,10 @@ export class PaperDatabase {
     }
     const excludeMuted = !options.includeMuted && stream.kind !== 'starred'
     let search: ReturnType<typeof compileSearch> | undefined
-    if (options.query?.trim()) {
+    if (options.query?.trim() || stream.kind === 'view') {
+      const roots = [stream.kind === 'view' ? (stream.viewQuery ?? this.savedViews.get(stream.id).query) : '', options.query]
+        .filter((value): value is string => Boolean(value)).map(value => parseSearch(value).root)
+      const root = { kind: 'and' as const, children: roots.flatMap(term => term.kind === 'and' ? term.children : [term]) }
       const index = stream.kind === 'feed' || stream.kind === 'category' ? 'entries_feed_published_idx'
         : options.after || options.before ? 'entries_published_idx' : 'entries_url_idx'
       const urlSource = filterState ? `entries ${stateJoin}` : `entries INDEXED BY ${index}`
@@ -1539,7 +1549,7 @@ export class PaperDatabase {
       const where = urlClauses.length ? ' WHERE ' + urlClauses.join(' AND ') : ''
       // Keep SQLite from flattening the subquery and testing URLs before scope filters.
       const sql = `SELECT entries.rowid, entries.url FROM ${urlSource}${where} LIMIT -1 OFFSET 0`
-      search = compileSearch(parseSearch(options.query).root, ranked, now, { sql, parameters })
+      search = compileSearch(root, ranked, now, { sql, parameters })
     }
     if (excludeMuted) clauses.push(visibleEntryClause('entries.id'))
     if (search) {
@@ -1560,6 +1570,20 @@ export class PaperDatabase {
     const revision = withRevisions ? ', entry_state.state_revision' : ''
     const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''
     return this.db.prepare(`SELECT entries.id${revision} FROM entries ${join} ${where}`).all(...parameters)
+  }
+
+  dataChangeClock() {
+    const external = this.db.prepare('PRAGMA data_version').get()!.data_version
+    const local = this.db.prepare('SELECT total_changes() AS n').get()!.n
+    return external + ':' + local
+  }
+
+  viewMatchCount(stream: StreamRef, options: PageOptions) {
+    const { clauses, parameters, join } = this.pageScope(stream, options)
+    const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''
+    const row = this.db.prepare(`SELECT count(*) AS count FROM (SELECT 1 FROM entries ${join} ${where} LIMIT 1001)`).get(...parameters)!
+    const count = Number(row.count)
+    return { count: Math.min(count, 1000), capped: count > 1000 }
   }
 
   matchingEntryIds(stream: StreamRef, options: PageOptions = {}, now = Date.now()): string[] {
@@ -1586,7 +1610,8 @@ export class PaperDatabase {
   private pageCursor(stream: StreamRef, options: PageOptions) {
     const ascending = (this.streamOrder(stream) === 'oldest') !== Boolean(options.reverse)
     const direction = ascending ? 'ASC' : 'DESC'
-    const scope = crypto.createHash('sha256').update(JSON.stringify([stream.kind, stream.id, Boolean(options.unreadOnly), options.query || '', options.after || '', options.before || '', Boolean(options.includeMuted), direction])).digest('hex')
+    const source = stream.kind === 'view' ? [stream.id, stream.viewQuery ?? this.savedViews.get(stream.id).query] : stream.id
+    const scope = crypto.createHash('sha256').update(JSON.stringify([stream.kind, source, Boolean(options.unreadOnly), options.query || '', options.after || '', options.before || '', Boolean(options.includeMuted), direction])).digest('hex')
     let cursor: { scope?: string; boundary?: [number, number, string]; snapshot?: string; offset?: number } = {}
     if (options.continuation) {
       try { cursor = JSON.parse(Buffer.from(options.continuation, 'base64url').toString()) } catch { throw new Error('This list changed. Refresh to continue.') }
@@ -1662,7 +1687,7 @@ export class PaperDatabase {
       while (!step.done) { this.saveSearchSnapshot(step.value); step = page.next() }
       return step.value
     }
-    const { clauses, parameters, scopeTable, join } = this.pageScope(stream, options)
+    const { clauses, parameters, scopeTable, search, join } = this.pageScope(stream, options)
     const { ascending, direction, cursor, encode } = this.pageCursor(stream, options)
     if (cursor.boundary) {
       if (!Array.isArray(cursor.boundary) || cursor.boundary.length !== 3 || !Number.isFinite(cursor.boundary[0]) || !Number.isFinite(cursor.boundary[1]) || typeof cursor.boundary[2] !== 'string') throw new Error('Invalid article cursor')
@@ -1671,7 +1696,7 @@ export class PaperDatabase {
     }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
     // A publication time can tie across a whole feed. Sort the keys before loading bodies.
-    const source = scopeTable === 'entry_state' ? 'entries INDEXED BY entries_search_scope_idx' : 'entries'
+    const source = scopeTable === 'entry_state' && !search ? 'entries INDEXED BY entries_search_scope_idx' : 'entries'
     const rows = this.db.prepare(`WITH page AS MATERIALIZED (
         SELECT entries.id, ${scopeTable}.timestamp, entries.crawled_at FROM ${source} ${join} ${where}
         ORDER BY ${scopeTable}.timestamp ${direction}, entries.crawled_at ${direction}, entries.id ${direction} LIMIT ?
@@ -1945,6 +1970,20 @@ export class PaperDatabase {
           : [...displayed.slice(anchor + 1), ...candidates.filter(id => !visible.has(id))]
       }
       return this.previewUnread(stream, options, withRevisions, candidates, now)
+    }
+    if (stream.kind === 'view' && !options.query) {
+      // The open article may have left an is:unread view through automatic marking.
+      const anchor = this.db.prepare('SELECT timestamp,crawled_at,id FROM entries WHERE id=?').get(anchorId)
+      if (!anchor) return { ids: [] }
+      const { clauses, parameters, join } = this.pageScope(stream, { ...options, unreadOnly: true })
+      const oldest = this.streamOrder(stream) === 'oldest'
+      const comparison = (direction === 'above') === oldest ? '<' : '>'
+      clauses.push(`(entries.timestamp,entries.crawled_at,entries.id) ${comparison} (?,?,?)`)
+      const order = oldest ? 'ASC' : 'DESC'
+      const rows = this.db.prepare(`SELECT entries.id, entry_state.state_revision FROM entries ${join} WHERE ${clauses.join(' AND ')}
+        ORDER BY entries.timestamp ${order}, entries.crawled_at ${order}, entries.id ${order}`)
+        .all(...parameters, anchor.timestamp, anchor.crawled_at, anchor.id)
+      return { ids: rows.map(row => String(row.id)), revisions: withRevisions ? Object.fromEntries(rows.map(row => [row.id, Number(row.state_revision)])) : undefined }
     }
     const { clauses, parameters, search, join } = this.pageScope(stream, { ...options, unreadOnly: false }, true, Date.now(), true)
     // A reader may already have opened the anchor in an unread-only list.

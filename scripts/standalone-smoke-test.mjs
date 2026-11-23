@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
@@ -100,6 +101,23 @@ try {
   assert.equal(applied.results[0].status, 'created')
   const feedId = applied.results[0].id
   const page = await until(async () => { const value = (await request('/api/entries?kind=all&id=all&unread=0')).data; return value?.items.length === 2 && value })
+  // Cross a relative-date boundary between preview and confirmation without any state edit.
+  const clockDb = new DatabaseSync(path.join(state, 'paper.sqlite'))
+  const expiring = page.items[0]
+  const deadline = Date.now() + 2500
+  try {
+    clockDb.prepare('UPDATE entries SET timestamp=? WHERE id=?').run(deadline - 86400_000, expiring.id)
+    const { data: { id } } = await request('/api/views', { title: 'Last day', query: 'after:1d' })
+    const preview = await request('/api/streams/preview-read', { stream: { kind: 'view', id }, query: 'url:"' + expiring.url + '"' })
+    assert.equal(preview.data.count, 1)
+    await delay(Math.max(0, deadline - Date.now() + 1))
+    const confirmed = await request('/api/streams/confirm-read', { token: preview.data.token })
+    assert.equal(confirmed.data.count, 0)
+    assert.equal((await request('/api/entries/item', { id: expiring.id })).data.entry.read, false)
+  } finally {
+    clockDb.prepare('UPDATE entries SET timestamp=? WHERE id=?').run(expiring.timestamp, expiring.id)
+    clockDb.close()
+  }
   const icon = await until(async () => {
     const navigation = (await request('/api/navigation')).data
     return navigation?.folders[0]?.feeds[0]?.iconUrl

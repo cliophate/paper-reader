@@ -178,6 +178,18 @@ See [Miniflux setup and behavior](docs/miniflux.md).
 To use a different local port, change `PAPER_PORT` and `PUBLIC_URL` in `.env`.
 For access from other devices, follow the [remote access guide](docs/access.md).
 
+## Saved views
+
+Choose **+** beside **Saved views** in the sidebar. Give the view a name and
+choose filters, or edit the search query directly. Selecting multiple feeds
+and folders includes articles from any of them. Paper shows a match count
+before you save. A range such as the last seven days moves with the calendar.
+
+Open a saved view to read, search within it or mark matching articles read.
+Its sidebar count shows **1000+** when more than 1,000 unread articles match. The pencil beside a
+view lets you rename, edit, move or delete it. All three backends store views
+in Paper. With FreshRSS or Miniflux, views cover the articles imported so far.
+
 ## Article rules
 
 Open **Settings > Article rules** and enter a search such as

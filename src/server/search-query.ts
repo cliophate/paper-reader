@@ -2,9 +2,10 @@
 type TextField = 'title' | 'author' | 'feed'
 export type SearchNode =
   | { kind: 'text'; field?: TextField; value: string; phrase: boolean }
-  | { kind: 'folder' | 'url'; value: string }
+  | { kind: 'folder' | 'url' | 'feedid' | 'folderid'; value: string }
   | { kind: 'state'; value: 'unread' | 'read' | 'starred' }
   | { kind: 'before' | 'after'; value: string }
+  | { kind: 'minminutes' | 'maxminutes'; value: number }
   | { kind: 'not'; child: SearchNode }
   | { kind: 'and' | 'or'; children: SearchNode[] }
 
@@ -57,18 +58,17 @@ export function searchHint(input: string) {
   }
 }
 
-export function parseSearch(input: string): { root: SearchNode; hint?: string; bareTerms?: string[] } {
+export function parseSearch(input: string): { root: SearchNode; hint?: string } {
   checkSearchSize(input)
   const source = input.replaceAll('\0', '\ufffd').trim()
   const words = source ? source.split(/\s+/, 257) : []
   if (words.length > 256) throw new SearchLimitError('Use at most 256 search terms.')
   const plain = () => ({
     root: group('and', words.map(value => ({ kind: 'text', value, phrase: false }))),
-    bareTerms: words,
   })
   if (!source) return plain()
 
-  const lex = /\s+|[()]|-|(?:[a-zA-Z]+:)?"[^"]*"|(?:[a-zA-Z]+:)?"|[^\s()"]+/gy
+  const lex = /\s+|[()]|-|(?:feedid|folderid):"(?:[^"]|"")*"|(?:[a-zA-Z]+:)?"[^"]*"|(?:[a-zA-Z]+:)?"|[^\s()"]+/giy
   const tokens: string[] = []
   for (const match of source.matchAll(lex)) {
     if (match[0].trim()) tokens.push(match[0])
@@ -96,9 +96,13 @@ export function parseSearch(input: string): { root: SearchNode; hint?: string; b
       case '': return { kind: 'text', value, phrase }
       case 'title': case 'author': case 'feed': return { kind: 'text', field, value, phrase }
       case 'url': case 'folder': return { kind: field, value }
+      case 'feedid': case 'folderid': return { kind: field, value: value.replaceAll('""', '"') }
       case 'is':
         if (value === 'unread' || value === 'read' || value === 'starred') return { kind: 'state', value }
         throw new SearchSyntaxError('Use is:unread, is:read or is:starred.')
+      case 'minminutes': case 'maxminutes':
+        if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new SearchSyntaxError('Enter whole minutes for reading time.')
+        return { kind: field, value: Number(value) }
       case 'before': case 'after':
         if (!Number.isFinite(searchDate(value, 0))) throw new SearchSyntaxError('Use a date like 2026-01-31 or 7d.')
         return { kind: field, value }
@@ -118,9 +122,7 @@ export function parseSearch(input: string): { root: SearchNode; hint?: string; b
   try {
     const root = alternatives(0)
     if (index !== tokens.length) throw new SearchSyntaxError('Unexpected closing parenthesis.')
-    const terms = root.kind === 'and' ? root.children : [root]
-    const bare = terms.length === words.length && terms.every((term, i) => term.kind === 'text' && !term.field && !term.phrase && term.value === words[i])
-    return { root, bareTerms: bare ? words : undefined }
+    return { root }
   } catch (error) {
     if (!(error instanceof SearchSyntaxError)) throw error
     return { ...plain(), hint: error.message + ' Searching as plain terms.' }

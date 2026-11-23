@@ -51,13 +51,13 @@ export function organizationRouter({ database, backend, synchronizer, navigation
   synchronizer?: Pick<BackendSynchronizer, 'applyOrganizationCommand' | 'refreshNavigation'>
 }) {
   const router = Router()
-  const snapshot = async (cached = false): Promise<OrganizationView> => ({
-    backend: backend.identity.kind,
-    capabilities: backend.organizationCapabilities,
-    ...(backend.identity.kind === 'standalone'
+  const snapshot = async (cached = false): Promise<OrganizationView> => {
+    const data = backend.identity.kind === 'standalone'
       ? database.organization.snapshot(backend.identity.id)
-      : { revision: null, navigation: database.numberNavigation(await (cached && navigation ? navigation() : backend.navigation())) }),
-  })
+      : { revision: null, navigation: database.numberNavigation(await (cached && navigation ? navigation() : backend.navigation())) }
+    return { backend: backend.identity.kind, capabilities: backend.organizationCapabilities, ...data,
+      navigation: { ...data.navigation, savedViews: database.savedViews.list() } }
+  }
   router.use((_request, response, next) => { response.set('Cache-Control', 'no-store'); next() })
   router.get('/', asyncRoute(async (request, response) => {
     try {

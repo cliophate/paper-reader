@@ -1,9 +1,11 @@
+import type { SavedView } from '../shared/saved-views.js'
 import type { Enclosure } from '../shared/enclosures.js'
 export type { BriefingSelection } from '../shared/briefings.js'
 
-export type StreamKind = 'all' | 'starred' | 'category' | 'feed'
+export type StreamKind = 'all' | 'starred' | 'category' | 'feed' | 'view'
 
 export interface StreamRef {
+  viewQuery?: string
   linkNumber?: number
   kind: StreamKind
   id: string
@@ -74,6 +76,7 @@ export interface Entry {
 }
 
 export interface NavigationPayload {
+  savedViews?: SavedView[]
   unread: number
   starred: number
   folders: Folder[]

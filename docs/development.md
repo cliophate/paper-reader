@@ -179,6 +179,16 @@ copy, restore the pre-upgrade backup as `paper.sqlite` and remove the newer
 WAL and SHM files before starting the previous build. Restoring SQLite leaves
 changes already sent to a remote reader or notification target in place.
 
+Schema v32 adds named, ordered queries in `saved_views`. Paper saves
+`paper.sqlite.before-saved-views-v32` before upgrading an existing database.
+To roll back, stop Paper and restore this backup as `paper.sqlite` in a
+separate data directory without the newer WAL and SHM files.
+The organization snapshot includes each view's query. The sidebar requests
+unread counts in one request. The search worker counts one view at a time after
+waiting searches and bulk previews. Paper caches each count until the view or
+database changes, or the minute changes for a relative date. The sidebar displays `1000+`
+when the worker finds a 1001st match.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh
