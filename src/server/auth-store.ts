@@ -41,7 +41,7 @@ export function authText(value: unknown, kind: 'name' | 'username' | 'password')
 interface Owner { username: string; password_hash: string; password_enabled: number; user_id: string }
 // id is an independent display identifier, never the cookie or its hash.
 export interface Session { id: string; created: number; seen: number; agent: string }
-export interface AppCredential { id: string; name: string; scope: 'reader-sync'; generation: number; globalGeneration: number; created: number; used: number | null }
+export interface AppCredential { id: string; name: string; scope: 'reader-sync'; articleLabels: boolean; generation: number; globalGeneration: number; created: number; used: number | null }
 export interface Passkey { id: string; name: string; public_key: Uint8Array; counter: number; transports: string; created: number; used: number | null }
 
 export class AuthStore {
@@ -206,8 +206,8 @@ export class AuthStore {
     if (purpose === 'register') this.requireSession(token)
     return { challenge: String(row.challenge), revision: Number(row.revision) }
   }
-  apps(): AppCredential[] { return this.db.prepare('SELECT id, name, scope, generation, created, used FROM auth_apps WHERE revoked IS NULL ORDER BY created').all().map(row => ({ ...row, globalGeneration: this.generation() })) as unknown as AppCredential[] }
-  async createApp(name: string, token: string | null) {
+  apps(): AppCredential[] { return this.db.prepare('SELECT id, name, scope, generation, created, used, article_labels AS articleLabels FROM auth_apps WHERE revoked IS NULL ORDER BY created').all().map(row => ({ ...row, articleLabels: Boolean(row.articleLabels), globalGeneration: this.generation() })) as unknown as AppCredential[] }
+  async createApp(name: string, token: string | null, articleLabels = false) {
     name = authText(name, 'name'); if (token !== null) this.requireSession(token)
     const revision = this.revision(), generation = this.generation()
     const id = randomUUID(), password = `${id}.${secret()}`, hash = await hashPassword(password)
@@ -215,7 +215,7 @@ export class AuthStore {
       this.assertRevision(revision); if (token !== null) this.requireSession(token)
       if (generation !== this.generation()) throw new AuthError('Access settings changed. Try again.', 409)
       if (this.apps().length >= 100) throw new AuthError('Revoke an app password before adding another.')
-      this.db.prepare("INSERT INTO auth_apps VALUES(?, ?, 'reader-sync', ?, 0, ?, NULL, NULL)").run(id, name, hash, this.now())
+      this.db.prepare("INSERT INTO auth_apps(id, name, scope, hash, created, article_labels) VALUES(?, ?, 'reader-sync', ?, ?, ?)").run(id, name, hash, this.now(), Number(articleLabels))
     })
     return { id, password }
   }

@@ -101,14 +101,14 @@ it('serves encoded folder contents and keeps continuation identity through renam
   db.organization.apply(backend,db.organization.snapshot(backend).revision,[{type:'remove-folder',folderId}])
   expect((await call('stream/contents',[...fields,['c',first.continuation]])).status).toBe(404)
 })
-it('commits read and star once, preserves no-ops and rejects labels atomically', async () => {
+it('commits read and star once, preserves no-ops and rejects invalid labels atomically', async () => {
   const sql = db.greaderDatabase, id = String(sql.prepare('SELECT entry_id FROM article_arrivals WHERE sequence = 1').get()!.entry_id)
   expect((await call('edit-tag', [['i', '1'], ['a', `${STATE}read`], ['a', `${STATE}starred`], ['T', token]], 'POST')).status).toBe(200)
   expect(db.entryState(id)).toEqual({ read: true, starred: true, revision: 1 })
   const modified = sql.prepare('SELECT greader_modified_ms FROM entries WHERE id = ?').get(id)!.greader_modified_ms
   expect((await call('edit-tag', [['i', '1'], ['a', `${STATE}read`], ['T', token]], 'POST')).status).toBe(200)
   expect(sql.prepare('SELECT greader_modified_ms FROM entries WHERE id = ?').get(id)!.greader_modified_ms).toBe(modified)
-  expect((await call('edit-tag', [['i', '1'], ['r', `${STATE}read`], ['a', `${LABEL}Bad`], ['T', token]], 'POST')).status).toBe(400)
+  expect((await call('edit-tag', [['i', '1'], ['r', `${STATE}read`], ['a', LABEL], ['T', token]], 'POST')).status).toBe(400)
   expect(db.entryState(id)!.revision).toBe(1)
   expect(() => db.commitLocalEntryState(backend, [id], 'unread', { expectedRevisions: { [id]: 0 } })).toThrow()
 })
@@ -119,7 +119,7 @@ it('enforces Auth, T, origin, host, methods and body bounds', async () => {
   expect((await call('edit-tag', [], 'GET')).status).toBe(404)
   expect((await call('edit-tag', [['T', token]], 'POST', { Origin: 'https://evil.test' })).status).toBe(403)
   expect(await new Promise(resolve => { const req = httpRequest(base + '/reader/api/0/token', { headers: { Host: 'evil.test' } }, res => { res.resume(); resolve(res.statusCode) }); req.end() })).toBe(421)
-  expect((await call('subscription/import', [], 'POST')).status).toBe(404)
+  expect((await call('subscription/import', [], 'POST')).status).toBe(403)
   expect((await call('stream/items/contents', [['i', '1'], ['T', 'x']], 'POST')).status).toBe(403)
   expect((await call('edit-tag', [['i', '1'], ['a', `${STATE}read`], ['T', token.trim()]], 'POST')).status).toBe(200)
   expect((await call('edit-tag', [['i', '1'], ['a', `${STATE}read`], ['T', `${token}\n`]], 'POST')).status).toBe(403)
@@ -277,6 +277,115 @@ it('invalidates web navigation after organization commits despite a failed liste
     expect(transactionStates).toEqual(Array(6).fill(false))
   } finally { removeBroken(); removeGood(); warning.mockRestore() }
 })
+async function labelClient() {
+  const { id } = await db.auth.createApp('Label-aware app', null, true)
+  const app = db.auth.apps().find(app => app.id === id)!
+  const headers = { Authorization: `GoogleLogin auth=${auth.token(app, 'auth')}` }
+  const request = (endpoint: string, fields: [string, string][] = [], method = 'GET') => call(endpoint, fields, method, headers)
+  const write = (endpoint: string, fields: [string, string][]) => request(endpoint, [...fields, ['T', auth.token(app, 'T')]], 'POST')
+  return { request, write }
+}
+
+it('edits article labels, pages their streams and preserves their identity through a rename', async () => {
+  const { request: labelCall, write } = await labelClient()
+  const name = 'Keep / + Café', stream = LABEL + name, moved = LABEL + 'Later'
+  const edit = (fields: [string, string][]) => write('edit-tag', fields)
+  const clock = () => db.greaderDatabase.prepare('SELECT greader_modified_ms FROM article_arrivals a JOIN entries e ON e.id = a.entry_id WHERE sequence = 3').get()!.greader_modified_ms
+  expect((await edit([['i', '3'], ['i', longId(4n)], ['a', `user/paper/label/${name}`], ['r', STATE + 'read']])).status).toBe(200)
+  const modified = clock()
+  expect((await edit([['i', '3'], ['a', stream]])).status).toBe(200)
+  expect(clock()).toBe(modified)
+  const tags = await (await labelCall('tag/list')).json()
+  expect(tags.tags).toContainEqual({ id: stream, type: 'tag', unread_count: 2 })
+  const counts = await (await labelCall('unread-count')).json()
+  expect(counts.unreadcounts).toContainEqual({ id: stream, count: 2, newestItemTimestampUsec: expect.any(String) })
+  const subscriptions = await (await labelCall('subscription/list')).json()
+  expect(subscriptions.subscriptions.flatMap(feed => feed.categories).map(category => category.id)).not.toContain(stream)
+  const contents = await (await labelCall('stream/contents/' + encodeURIComponent(stream))).json()
+  expect(contents.items.map(item => item.id)).toEqual([longId(4n), longId(3n)])
+  expect(contents.items[0].categories).toContain(stream)
+  const page = await (await labelCall('stream/items/ids', [['s', stream], ['n', '1']])).json()
+  expect(page.itemRefs).toEqual([{ id: '4' }])
+  expect((await write('rename-tag', [['s', stream], ['dest', moved]])).status).toBe(200)
+  expect(clock()).toBeGreaterThan(Number(modified))
+  expect((await labelCall('stream/items/ids', [['s', stream]])).status).toBe(404)
+  const next = await (await labelCall('stream/items/ids', [['s', stream], ['c', page.continuation]])).json()
+  expect(next.itemRefs).toEqual([{ id: '3' }])
+  expect((await edit([['i', '4'], ['r', moved]])).status).toBe(200)
+  const filtered = await (await labelCall('stream/items/ids', [['s', READING], ['it', moved]])).json()
+  expect(filtered.itemRefs).toEqual([{ id: '3' }])
+  const before = clock()
+  expect((await edit([['i', '3'], ['r', moved], ['a', LABEL + 'Uncategorized']])).status).toBe(409)
+  expect(clock()).toBe(before)
+  expect(db.organization.apply(backend, db.organization.revision(backend), [{ type: 'create-folder', title: 'later' }]).results[0]).toMatchObject({ status: 'failed', code: 'collision' })
+  expect((await write('disable-tag', [['s', moved]])).status).toBe(200)
+  expect(clock()).toBeGreaterThan(Number(before))
+  expect((await labelCall('stream/items/ids', [['s', stream], ['c', page.continuation]])).status).toBe(404)
+  expect((await (await labelCall('stream/items/contents', [['i', '3']], 'POST')).json()).items[0].categories).not.toContain(moved)
+}, 30000)
+
+it('hides article labels and rejects label changes for default app passwords', async () => {
+  const { request, write } = await labelClient()
+  const stream = LABEL + 'Hidden', moved = LABEL + 'Moved'
+  expect((await write('edit-tag', [['i', '3'], ['i', '4'], ['a', stream], ['r', STATE + 'read']])).status).toBe(200)
+  const page = await (await request('stream/items/ids', [['s', stream], ['n', '1']])).json()
+  const counts = await (await request('unread-count')).json()
+  expect(counts.unreadcounts.map(tag => tag.id)).toContain(stream)
+  expect((await (await call('tag/list')).json()).tags.map(tag => tag.id)).not.toContain(stream)
+  expect((await (await call('unread-count')).json()).unreadcounts.map(tag => tag.id)).not.toContain(stream)
+  expect((await (await call('stream/items/contents', [['i', '3']], 'POST')).json()).items[0].categories).not.toContain(stream)
+  expect((await call('stream/contents/' + encodeURIComponent(stream))).status).toBe(404)
+  expect((await call('stream/items/ids', [['s', READING], ['xt', stream]])).status).toBe(404)
+  expect((await call('stream/items/ids', [['s', stream], ['c', page.continuation]])).status).toBe(404)
+  expect((await call('edit-tag', [['i', '3'], ['a', STATE + 'read'], ['r', stream], ['T', token]], 'POST')).status).toBe(400)
+  expect((await call('disable-tag', [['s', stream], ['T', token]], 'POST')).status).toBe(404)
+  expect((await call('rename-tag', [['s', stream], ['dest', moved], ['T', token]], 'POST')).status).toBe(404)
+  const items = await (await request('stream/contents/' + encodeURIComponent(stream))).json()
+  expect(items.items.map(item => item.id)).toEqual([longId(4n), longId(3n)])
+  expect(items.items.find(item => item.id === longId(3n)).categories).not.toContain(STATE + 'read')
+}, 30000)
+
+it('rejects stale label renames and deletes after a folder takes the name', async () => {
+  const { write } = await labelClient()
+  const stream = LABEL + 'Later'
+  expect((await write('edit-tag', [['i', '3'], ['a', stream]])).status).toBe(200)
+  expect((await write('disable-tag', [['s', stream]])).status).toBe(200)
+  expect(db.organization.apply(backend, db.organization.revision(backend), [{ type: 'create-folder', title: 'Later' }]).results[0].status).toBe('applied')
+  expect((await write('disable-tag', [['s', stream]])).status).toBe(404)
+  expect((await write('rename-tag', [['s', stream], ['dest', LABEL + 'Other']])).status).toBe(404)
+  expect(db.organization.metadata(backend).folders.map(folder => folder.title)).toContain('Later')
+}, 30000)
+
+it('imports raw OPML with app credentials, rolls back invalid files and keeps existing subscriptions on retry', async () => {
+  const post = (xml: string, t?: string, authorization = `GoogleLogin auth=${bearer}`, origin = 'http://localhost') => fetch(
+    base + '/reader/api/0/subscription/import?' + new URLSearchParams(t === undefined ? {} : { T: t }),
+    { method: 'POST', headers: { 'Content-Type': 'text/xml', Authorization: authorization, Origin: origin }, body: xml })
+  const wrap = (body: string) => `<opml version="2.0" xmlns:paper="https://paper-reader.app/ns/opml"><body>${body}</body></opml>`
+  const outline = '<outline text="Imported feed" xmlUrl="https://example.test/imported"/>'
+  const count = () => db.greaderDatabase.prepare("SELECT count(*) n FROM feeds WHERE url = 'https://example.test/imported'").get()!.n
+  expect((await post(wrap(outline), undefined, '')).status).toBe(401)
+  expect((await post(wrap(outline), undefined, undefined, 'https://other.test')).status).toBe(403)
+  expect((await post(wrap(outline), '')).status).toBe(403)
+  expect((await post('x'.repeat(1024 * 1024 + 1))).status).toBe(413)
+  expect((await post('<opml>')).status).toBe(400)
+  expect((await post(wrap(outline.repeat(1001)))).status).toBe(400)
+  expect((await post(wrap(outline.repeat(2)))).status).toBe(409)
+  expect((await post(wrap(outline + '<outline type="rss" xmlUrl="file:///invalid"/>'))).status).toBe(400)
+  const hinted = (url: string) => `<outline paper:id="${'a'.repeat(64)}" xmlUrl="https://example.test/${url}"/>`
+  const before = db.organization.snapshot(backend)
+  expect((await post(wrap(outline + hinted('first') + hinted('second')))).status).toBe(409)
+  expect(db.organization.snapshot(backend)).toEqual(before)
+  expect(count()).toBe(0)
+  const xml = wrap(`<outline text="From OPML"><outline text="News">${outline}</outline></outline>`)
+  const response = await post(xml)
+  expect(await response.text()).toBe('OK')
+  expect((await post(wrap(outline), token)).status).toBe(200)
+  expect(count()).toBe(1)
+  const { subscriptions } = await (await call('subscription/list')).json()
+  expect(subscriptions.find(feed => feed.url === 'https://example.test/imported').categories)
+    .toEqual([{ id: LABEL + 'From OPML / News', label: 'From OPML / News' }])
+}, 30000)
+
 it('limits authenticated traffic and rejects the owner password as an app password', async () => {
   await db.auth.setup(db.auth.setupCode(), 'reader', 'synthetic owner password')
   const rejected = await call('/accounts/ClientLogin', [['Email', 'reader'], ['Passwd', 'synthetic owner password']], 'POST')

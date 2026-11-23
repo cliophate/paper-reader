@@ -1,3 +1,4 @@
+import { editArticleLabels } from './greader-labels.js'
 import type { RetentionRun } from '../shared/retention.js'
 import type { EntryStateOperation } from './backend.js'
 import type { PaperDatabase } from './db.js'
@@ -26,13 +27,16 @@ export class LocalStateService {
     return change
   }
 
-  editReaderNumbers(numbers: bigint[], fields: { read?: boolean; starred?: boolean }, authorize: () => void = () => {}) {
+  editReaderNumbers(numbers: bigint[], fields: { read?: boolean; starred?: boolean }, authorize: () => void = () => {}, labels: ReadonlyMap<string, boolean> = new Map()) {
     const change = this.db.transaction(() => {
       authorize()
       // Resolve the bounded arrival IDs first; a backend-first join can probe
       // every article once per supplied ID.
-      const rows = this.db.greaderDatabase.prepare(`SELECT a.entry_id FROM article_arrivals a CROSS JOIN article_identities ai ON ai.id = a.entry_id WHERE ai.backend_id = ? AND a.sequence IN (${numbers.map(() => '?').join(',')})`).all(this.backendId, ...numbers)
-      return this.db.commitLocalEntryState(this.backendId, rows.map(row => String(row.entry_id)), 'read', { fields, origin: 'greader' })
+      const rows = this.db.greaderDatabase.prepare(`SELECT a.entry_id, CAST(a.sequence AS TEXT) AS number FROM article_arrivals a CROSS JOIN article_identities ai ON ai.id = a.entry_id WHERE ai.backend_id = ? AND a.sequence IN (${numbers.map(() => '?').join(',')})`).all(this.backendId, ...numbers)
+      const ids = rows.map(row => String(row.entry_id))
+      const change = this.db.commitLocalEntryState(this.backendId, ids, 'read', { fields, origin: 'greader' })
+      if (labels.size) editArticleLabels(this.db.greaderDatabase, rows.map(row => BigInt(String(row.number))), labels)
+      return change
     })
     this.emitFields(change, fields)
     return change

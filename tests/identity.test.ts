@@ -312,6 +312,8 @@ function downgradeFixtureToV6() {
     DROP TRIGGER entry_url_insert;
     DROP TRIGGER entry_url_update;
     DROP TABLE article_urls;
+    DROP TABLE entry_labels;
+    DROP TABLE article_labels;
     DROP TABLE article_arrivals;
     DROP TABLE identity_conflicts;
     DROP TABLE article_fingerprints;

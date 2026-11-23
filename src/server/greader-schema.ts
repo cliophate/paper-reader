@@ -49,3 +49,35 @@ export function migrateGreader(db: DatabaseSync) {
     }
   })
 }
+
+export const ARTICLE_LABELS_VERSION = 29
+
+export function migrateArticleLabels(db: DatabaseSync) {
+  transaction(db, () => {
+    if (!db.prepare("SELECT 1 FROM pragma_table_info('auth_apps') WHERE name = 'article_labels'").get()) {
+      db.exec('ALTER TABLE auth_apps ADD COLUMN article_labels INTEGER NOT NULL DEFAULT 0')
+    }
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS article_labels (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL UNIQUE, title_key TEXT NOT NULL UNIQUE
+      );
+      CREATE TABLE IF NOT EXISTS entry_labels (
+        label_id INTEGER NOT NULL REFERENCES article_labels(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL REFERENCES article_arrivals(sequence) ON DELETE CASCADE,
+        PRIMARY KEY(label_id, sequence)
+      ) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS entry_labels_by_arrival ON entry_labels(sequence, label_id);
+      CREATE TRIGGER IF NOT EXISTS greader_label_add AFTER INSERT ON entry_labels BEGIN
+        UPDATE entries SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE id = (SELECT entry_id FROM article_arrivals WHERE sequence = new.sequence);
+      END;
+      CREATE TRIGGER IF NOT EXISTS greader_label_remove AFTER DELETE ON entry_labels BEGIN
+        UPDATE entries SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE id = (SELECT entry_id FROM article_arrivals WHERE sequence = old.sequence);
+      END;
+      CREATE TRIGGER IF NOT EXISTS greader_label_rename AFTER UPDATE OF title ON article_labels WHEN old.title != new.title BEGIN
+        UPDATE entries SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER))
+          WHERE id IN (SELECT a.entry_id FROM entry_labels m JOIN article_arrivals a USING(sequence) WHERE m.label_id = new.id);
+      END;
+      PRAGMA user_version = ${ARTICLE_LABELS_VERSION};
+    `)
+  })
+}

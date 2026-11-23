@@ -4,7 +4,7 @@
 
 - Connect FreshRSS or Miniflux on first start, or choose standalone. Test the
   connection during setup or later in Settings > Backend & data.
-
+- Standalone Reader apps can label articles and import subscriptions from OPML.
 - Queued webhooks honor feed and folder changes, and briefings apply feed exclusions before filling their article lists.
 - Manage feeds can set a user agent and cookie per feed, select the article
   body, remove elements, fix lazy images and strip tracking parameters. Preview

@@ -139,7 +139,7 @@ it('backs up schema v27 before creating the v28 activity tables', () => {
     try {
       expect(upgraded.aiActivity.view().items).toEqual([])
       expect(upgraded.getSyncValue('fixture')).toBe('preserved')
-      expect(upgraded.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(AI_ACTIVITY_VERSION)
+      expect(upgraded.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
     } finally { upgraded.close() }
     const name = file + '.before-ai-activity-v' + AI_ACTIVITY_VERSION
     expect(fs.statSync(name).mode & 0o777).toBe(0o600)
@@ -312,7 +312,7 @@ it('restores the current schema version after rebuilding the search index', () =
     original.setSyncValue('fulltext_search_v1', '')
     original.close()
     const repaired = new PaperDatabase(file)
-    expect(repaired.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(AI_ACTIVITY_VERSION)
+    expect(repaired.greaderDatabase.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
     repaired.close()
     new PaperDatabase(file, { readOnly: true }).close()
   } finally { fs.rmSync(directory, { recursive: true }) }

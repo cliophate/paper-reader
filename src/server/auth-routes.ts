@@ -157,7 +157,7 @@ export function authRoutes(store: AuthStore, publicUrl: string, reader?: Greader
   router.delete('/passkeys/:id', (req, res) => { store.removePasskey(String(req.params.id)); res.json({ ok: true }) })
   router.post('/apps', async (req, res) => {
     if (req.body?.scope !== 'reader-sync') throw new AuthError('Choose the reader-sync scope.')
-    res.json(await store.createApp(req.body?.name, cookie(req)))
+    res.json(await store.createApp(req.body?.name, cookie(req), req.body?.articleLabels === true))
   })
   router.delete('/apps', (_req, res) => { store.revokeAllApps(); res.json({ ok: true }) })
   router.delete('/apps/:id', (req, res) => { store.revokeApp(String(req.params.id)); res.json({ ok: true }) })

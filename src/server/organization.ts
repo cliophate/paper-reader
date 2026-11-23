@@ -23,6 +23,8 @@ export const MINIFLUX_ORGANIZATION_CAPABILITIES: Readonly<OrganizationCapabiliti
   ...FRESHRSS_ORGANIZATION_CAPABILITIES, stableFolderIds: true,
 })
 
+export const folderNameKey = (name: string) => name.normalize('NFKC').toLowerCase()
+
 export class OrganizationError extends Error {
   constructor(readonly code: OrganizationErrorCode, message: string, readonly currentRevision?: number) {
     super(message)
@@ -154,9 +156,12 @@ export class LocalOrganizationService {
     const title = value.trim().normalize('NFC')
     if (!title) throw new OrganizationError('invalid', 'A nonempty title is required')
     if (folderId !== undefined) {
-      const key = (text: string) => text.normalize('NFKC').toLowerCase()
-      if (key(title) === 'uncategorized' || this.db.prepare('SELECT id, title FROM folders').all()
-        .some(row => row.id !== folderId && key(String(row.title)) === key(title))) {
+      const key = folderNameKey(title)
+      if (this.db.prepare('SELECT 1 FROM article_labels WHERE title_key = ?').get(key)) {
+        throw new OrganizationError('collision', 'An article label already uses this name.')
+      }
+      if (key === 'uncategorized' || this.db.prepare('SELECT id, title FROM folders').all()
+        .some(row => row.id !== folderId && folderNameKey(String(row.title)) === key)) {
         throw new OrganizationError('collision', 'A folder with this name already exists, or the name is reserved for Uncategorized')
       }
     }
@@ -187,6 +192,16 @@ export class LocalOrganizationService {
   private orderFolders(ids: string[]) {
     const statement = this.db.prepare('UPDATE folders SET position = ? WHERE id = ?')
     ids.forEach((id, index) => statement.run(index, id))
+  }
+
+  // Called in the transaction that creates the feed and advances its revision.
+  addImportFolders(backendId: string, feedId: string, names: string[]) {
+    this.assertLocal(backendId)
+    for (const title of names) {
+      const existing = this.db.prepare('SELECT id FROM folders WHERE title = ?').get(title)
+      const id = existing ? String(existing.id) : this.execute({ type: 'create-folder', title })!
+      this.addMembership(feedId, id)
+    }
   }
 
   private addMembership(feedId: string, folderId: string) {

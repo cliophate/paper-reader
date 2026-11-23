@@ -36,6 +36,10 @@ try {
   })
   const password = (await db.auth.createApp('Synthetic scale', null)).password
   const auth = new GreaderAuth(sql, db.auth, true, 'http://localhost'); auth.configure(true, 'synthetic')
+  const labelAppId = (await db.auth.createApp('Synthetic labels', null, true)).id
+  const labelApp = db.auth.apps().find(app => app.id === labelAppId)
+  const labelHeaders = { Authorization: `GoogleLogin auth=${auth.token(labelApp, 'auth')}` }
+  const labelToken = auth.token(labelApp, 'T')
   sql.exec('PRAGMA wal_checkpoint(TRUNCATE)'); db.close()
   child = spawn(process.execPath, ['dist-server/index.js'], { env: { PATH: process.env.PATH, HOME: temporary, STATE_DIR: temporary, PAPER_BACKEND: 'standalone', PORT: '0', HOST: '127.0.0.1', PUBLIC_URL: 'http://localhost', PAPER_SYNC_ENABLED: 'false', PAPER_AI_PROVIDER: 'none' }, stdio: ['ignore', 'pipe', 'pipe'] })
   let logs = ''; child.stdout.on('data', data => { logs = (logs + data).slice(-5000) }); child.stderr.on('data', () => {})
@@ -59,9 +63,9 @@ try {
   const login = await fetch(root + '/accounts/ClientLogin', { method: 'POST', body: new URLSearchParams({ Email: 'synthetic', Passwd: password }) })
   assert.equal(login.status, 200); const bearer = /Auth=(.+)/.exec(await login.text())[1]
   const headers = { Authorization: `GoogleLogin auth=${bearer}` }
-  async function call(endpoint, fields = [], method = 'GET') {
+  async function call(endpoint, fields = [], method = 'GET', requestHeaders = headers) {
     const p = new URLSearchParams(fields), start = performance.now()
-    const response = await fetch(root + '/reader/api/0/' + endpoint + (method === 'GET' ? '?' + p : ''), { method, headers, body: method === 'POST' ? p : undefined, signal: AbortSignal.timeout(17000) })
+    const response = await fetch(root + '/reader/api/0/' + endpoint + (method === 'GET' ? '?' + p : ''), { method, headers: requestHeaders, body: method === 'POST' ? p : undefined, signal: AbortSignal.timeout(17000) })
     const text = await response.text()
     assert.equal(response.status, 200, `${endpoint}: ${text}`)
     if (failure) throw failure
@@ -89,6 +93,13 @@ try {
   assert(writes > 0)
   const explicitWrite = await call('edit-tag', [...Array.from({ length: 1000 }, (_, i) => ['i', String(i + 1)]), ['a', 'user/-/state/com.google/starred'], ['T', token]], 'POST')
   console.log(`Explicit state write: ${Math.round(explicitWrite.ms)}ms`)
+  const label = 'user/-/label/Scale fixture'
+  await call('edit-tag', [['i', '1'], ['i', String(count)], ['a', label], ['T', labelToken]], 'POST', labelHeaders)
+  const firstLabelPage = JSON.parse((await call('stream/items/ids', [['s', label], ['n', '1']], 'GET', labelHeaders)).text)
+  assert.deepEqual(firstLabelPage.itemRefs, [{ id: String(count) }])
+  const lastLabelPage = JSON.parse((await call('stream/items/ids', [['s', label], ['n', '1'], ['c', firstLabelPage.continuation]], 'GET', labelHeaders)).text)
+  assert.deepEqual(lastLabelPage.itemRefs, [{ id: '1' }])
+  assert.equal(lastLabelPage.continuation, undefined)
   const subscriptions = JSON.parse((await call('subscription/list')).text).subscriptions
   const stream = subscriptions.find(feed => feed.url === 'https://example.test/0').id
   const orgTimings = []

@@ -3,7 +3,8 @@ import { portableUrl } from './opml.js'
 import type { PaperDatabase } from './db.js'
 import type { OrganizationCommand } from './organization.js'
 import { ReaderError } from './greader-auth.js'
-import { LABEL, itemNumber } from './greader-query.js'
+import { labelName, renameLabel } from './greader-labels.js'
+import { LABEL, itemNumber, resolveStream } from './greader-query.js'
 import { discoverFeeds, type DiscoveryTransport } from './feed-discovery.js'
 
 type Metadata = ReturnType<PaperDatabase['organization']['metadata']>
@@ -15,14 +16,39 @@ export function organizationSources(p: URLSearchParams) {
   return [...new Set(sources)]
 }
 
+function applyCommands(db: PaperDatabase, backend: string, commands: OrganizationCommand[]) {
+  const result = db.organization.apply(backend, db.organization.revision(backend), commands)
+  const failure = result.results.find(item => item.status === 'failed')
+  if (failure?.status === 'failed') throw new ReaderError(failure.message, failure.code === 'not-found' ? 404 : failure.code === 'invalid' ? 400 : 409)
+  return result
+}
+
+export function editReaderTags(db: PaperDatabase, backend: string, kind: 'rename-tag' | 'disable-tag', target: 'label' | 'folder', p: URLSearchParams, authorize: () => void) {
+  const sources = organizationSources(p)
+  db.transaction(() => {
+    authorize()
+    db.assertLocalBackend(backend)
+    const sql = db.greaderDatabase
+    const commands: OrganizationCommand[] = []
+    if (kind === 'rename-tag' && sources.length !== 1) throw new ReaderError('Supply one folder or label.')
+    const names = new Set(sources.map(labelName))
+    for (const name of names) {
+      const stream = resolveStream(sql, LABEL + name)
+      if (stream.kind !== target) throw new ReaderError('Unknown stream.', 404)
+      if (!stream.id) throw new ReaderError('Expected a folder or article label.')
+      if (kind === 'rename-tag') {
+        const title = labelName(p.get('dest') || '')
+        if (stream.kind === 'label') renameLabel(sql, stream.id, title)
+        else commands.push({ type: 'rename-folder', folderId: stream.id, title })
+      } else if (stream.kind === 'label') sql.prepare('DELETE FROM article_labels WHERE id = ?').run(stream.id)
+      else commands.push({ type: 'remove-folder', folderId: stream.id })
+    }
+    if (commands.length) applyCommands(db, backend, commands)
+  })
+}
+
 export class GreaderOrganization {
   constructor(private db: PaperDatabase, private backend: string, private transport: DiscoveryTransport) {}
-  private apply(commands: OrganizationCommand[]) {
-    const result = this.db.organization.apply(this.backend, this.db.organization.revision(this.backend), commands)
-    const failure = result.results.find(item => item.status === 'failed')
-    if (failure?.status === 'failed') throw new ReaderError(failure.message, failure.code === 'not-found' ? 404 : failure.code === 'invalid' ? 400 : 409)
-    return result
-  }
   private folder(snapshot: Metadata, value: string, create = false): string | null {
     value = value.replace(/^user\/paper\//, 'user/-/')
     if (!value.startsWith(LABEL)) throw new ReaderError('Expected a folder.')
@@ -31,7 +57,7 @@ export class GreaderOrganization {
     const folder = snapshot.folders.find(folder => folder.title === name)
     if (folder) return String(folder.id)
     if (!create) throw new ReaderError('Unknown stream.', 404)
-    const result = this.apply([{ type: 'create-folder', title: name }])
+    const result = applyCommands(this.db, this.backend, [{ type: 'create-folder', title: name }])
     const created = result.results[0]
     if (created.status !== 'applied' || !created.id) throw new ReaderError('Could not create folder.')
     snapshot.folders.push({ id: created.id, title: name.trim() })
@@ -97,28 +123,19 @@ export class GreaderOrganization {
       }
       const parameters = new URLSearchParams(p)
       parameters.delete('s'); for (const source of sources) parameters.append('s', mapped.get(source) || source)
-      this.editSnapshot('subscription/edit', parameters, snapshot)
+      this.editSnapshot(parameters, snapshot)
     })
   }
   edit(kind: string, p: URLSearchParams, authorize: () => void = () => {}) {
+    if (kind === 'rename-tag' || kind === 'disable-tag') return editReaderTags(this.db, this.backend, kind, 'folder', p, authorize)
     organizationSources(p)
     return this.db.transaction(() => {
       authorize()
-      return this.editSnapshot(kind, p, this.db.organization.metadata(this.backend))
+      return this.editSnapshot(p, this.db.organization.metadata(this.backend))
     })
   }
-  private editSnapshot(kind: string, p: URLSearchParams, snapshot: Metadata) {
+  private editSnapshot(p: URLSearchParams, snapshot: Metadata) {
     const sources = organizationSources(p)
-    if (kind === 'rename-tag') {
-      if (sources.length !== 1) throw new ReaderError('Supply one folder.')
-      const id = this.folder(snapshot, sources[0]), dest = p.get('dest') || ''
-      if (!id || !dest.replace(/^user\/paper\//, 'user/-/').startsWith(LABEL)) throw new ReaderError('Invalid folder rename.')
-      this.apply([{ type: 'rename-folder', folderId: id, title: dest.replace(/^user\/paper\//, 'user/-/').slice(LABEL.length) }]); return
-    }
-    if (kind === 'disable-tag') {
-      const folders = new Set(sources.map(value => { const id = this.folder(snapshot, value); if (!id) throw new ReaderError('Cannot remove Uncategorized.'); return id }))
-      this.apply([...folders].map(folderId => ({ type: 'remove-folder', folderId }))); return
-    }
     const action = p.get('ac')
     if (!['subscribe', 'edit', 'unsubscribe'].includes(action || '')) throw new ReaderError('Invalid subscription action.')
     const feeds = new Map(sources.map(source => { const feed = this.feed(snapshot, source, action === 'subscribe'); return [String(feed.id), feed] }))
@@ -139,6 +156,6 @@ export class GreaderOrganization {
       for (const folderId of remove) if (!add.includes(folderId)) commands.push({ type: 'remove-membership', feedId, folderId })
       for (const folderId of add) commands.push({ type: 'add-membership', feedId, folderId })
     }
-    if (commands.length) this.apply(commands)
+    if (commands.length) applyCommands(this.db, this.backend, commands)
   }
 }
