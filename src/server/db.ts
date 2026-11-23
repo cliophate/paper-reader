@@ -1524,6 +1524,7 @@ export class PaperDatabase {
     const clauses: string[] = []
     const parameters: Array<string | number> = []
     const filterState = Boolean(options.unreadOnly) || stream.kind === 'starred'
+    const joinedState = filterState || withState
     const scopeTable = filterState ? 'entry_state' : 'entries'
     if (stream.kind === 'starred') clauses.push('entry_state.starred = 1')
     if (stream.kind === 'feed') { clauses.push(`${scopeTable}.feed_id = ?`); parameters.push(stream.id) }
@@ -1558,7 +1559,7 @@ export class PaperDatabase {
       const where = urlClauses.length ? ' WHERE ' + urlClauses.join(' AND ') : ''
       // Keep SQLite from flattening the subquery and testing URLs before scope filters.
       const sql = `SELECT entries.rowid, entries.url FROM ${urlSource}${where} LIMIT -1 OFFSET 0`
-      search = compileSearch(root, ranked, now, { sql, parameters })
+      search = compileSearch(root, ranked, now, { sql, parameters, joinedState })
     }
     if (excludeMuted) clauses.push(visibleEntryClause('entries.id'))
     if (search) {
@@ -1566,7 +1567,7 @@ export class PaperDatabase {
       parameters.unshift(...search.joinParameters)
       parameters.push(...search.parameters)
     }
-    const join = [search?.join, (filterState || withState) && stateJoin].filter(Boolean).join(' ')
+    const join = [search?.join, joinedState && stateJoin].filter(Boolean).join(' ')
     return { clauses, parameters, search, join, scopeTable }
   }
 
@@ -1609,7 +1610,7 @@ export class PaperDatabase {
   }
 
   syncEntryIds(stream: StreamRef, unreadOnly = false, limit = 80): string[] {
-    const { clauses, parameters } = this.pageScope(stream, { unreadOnly, includeMuted: true })
+    const { clauses, parameters } = this.pageScope(stream, { unreadOnly, includeMuted: true }, false, Date.now(), true)
     // Adapters supply source_order; local articles use their durable arrival sequence.
     // Neither order depends on the Paper article ID or publication date.
     return this.db.prepare(`SELECT entries.id FROM entries ${stateJoin} ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY entries.source_order DESC, entry_state.arrival_sequence DESC LIMIT ?`)
@@ -1893,7 +1894,7 @@ export class PaperDatabase {
 
   localEntries(stream: StreamRef, options: { unreadOnly?: boolean; limit?: number; after?: Date; before?: Date } = {}): Entry[] {
     const { clauses, parameters, scopeTable } = this.pageScope(stream, { unreadOnly: options.unreadOnly,
-      after: options.after?.toISOString(), before: options.before?.toISOString() })
+      after: options.after?.toISOString(), before: options.before?.toISOString() }, false, Date.now(), true)
     const limit = Math.min(Math.max(options.limit || 200, 1), 5000)
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
     const id = scopeTable === 'entry_state' ? 'entry_state.entry_id' : 'entries.id'

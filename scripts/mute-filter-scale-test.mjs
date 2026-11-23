@@ -67,6 +67,31 @@ async function measureRuleArrivals(db) {
   } finally { await new Promise(resolve => server.close(resolve)) }
 }
 
+async function measureHiddenViewCount(db) {
+  const { SearchService } = await import('../dist-server/search-service.js')
+  const rule = await db.createMuteFilter('rare', 'title')
+  await db.backfillMuteFilters()
+  assert.equal(db.muteFilters(rule.id)[0].matchCount, 200)
+  const id = db.savedViews.save({ title: 'Rare unread', query: 'title:rare is:unread' })
+  const search = new SearchService(db)
+  try {
+    const all = { kind: 'all', id: 'all', title: 'All' }
+    const options = { query: 'title:unrelated' }
+    await search.search(all, options)
+    const start = performance.now()
+    const counts = search.savedViewCounts()
+    const queued = search.search(all, options)
+    assert.deepEqual((await counts)[id], { count: 0, capped: false })
+    const countMs = performance.now() - start
+    assert.equal((await queued).items.length, 1)
+    const searchMs = performance.now() - start
+    const report = { operation: 'hidden-view-count', countMs, searchMs }
+    console.log(JSON.stringify(report))
+    assert.ok(searchMs < 2000, 'A saved view count stalled the queued search')
+    return report
+  } finally { await search.close() }
+}
+
 if (mode === 'worker') {
   const { PaperDatabase } = await import(pathToFileURL(modulePath))
   const db = new PaperDatabase(file)
@@ -116,12 +141,16 @@ if (mode === 'worker') {
   const body = 'Synthetic article body. '.repeat(441) + 'ÉCOLE'
   const insert = sql.prepare(`INSERT INTO entries(id, feed_id, feed_title, feed_url, title, author, url, canonical_url,
     source_domain, content_html, content_text, excerpt, published_at, timestamp, reading_minutes, thumbnail_url, kind, synced_at)
-    VALUES (?, 'synthetic', 'Synthetic', 'https://example.test', 'Article', 'Writer', ?, ?, 'example.test',
+    VALUES (?, 'synthetic', 'Synthetic', 'https://example.test', ?, 'Writer', ?, ?, 'example.test',
       ?, ?, '', '2026-01-01', ?, 1, '', 'article', '2026-01-01')`)
   console.log(JSON.stringify({ temporary, entries: 200_000, contentBytes: Buffer.byteLength(body) }))
   for (let start = 0; start < 200_000; start += 1000) {
     sql.exec('BEGIN')
-    for (let i = start; i < start + 1000; i++) insert.run(String(i), `https://example.test/${i}`, `https://example.test/${i}`, `<p>${body}</p>`, body, i)
+    for (let i = start; i < start + 1000; i++) {
+      const title = i % 1000 === 0 ? 'Rare article' : i === 1 ? 'Unrelated' : 'Article'
+      const url = `https://example.test/${i}`
+      insert.run(String(i), title, url, url, `<p>${body}</p>`, body, i)
+    }
     sql.exec('COMMIT')
   }
   sql.exec('PRAGMA wal_checkpoint(TRUNCATE)')
@@ -170,7 +199,10 @@ if (mode === 'worker') {
   }
   sql.exec('PRAGMA foreign_keys=ON; DELETE FROM muted_entries; DELETE FROM mute_filters')
   const rulesDb = new PaperDatabase(databasePath)
-  try { reports.push(...await measureRuleArrivals(rulesDb)) } finally { rulesDb.close() }
+  try {
+    reports.push(...await measureRuleArrivals(rulesDb))
+    reports.push(await measureHiddenViewCount(rulesDb))
+  } finally { rulesDb.close() }
   sql.close()
   fs.writeFileSync(path.join(temporary, 'results.json'), JSON.stringify(reports, null, 2))
   console.log(`Synthetic fixture and results retained in ${temporary}`)

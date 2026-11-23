@@ -6,6 +6,7 @@ export function textMatch(node: Extract<SearchNode, { kind: 'text' }>): string {
 }
 
 type SqlPredicate = { sql: string; parameters: Array<string | number> }
+type SearchScope = SqlPredicate & { joinedState?: boolean }
 type Expression = { match: string } | SqlPredicate
 
 function predicate(expression: Expression, batch = false) {
@@ -20,7 +21,7 @@ function predicate(expression: Expression, batch = false) {
   }
 }
 
-function compile(node: SearchNode, now: number, positive: string[], urlRows?: SqlPredicate, negated = false): Expression {
+function compile(node: SearchNode, now: number, positive: string[], urlRows?: SearchScope, negated = false): Expression {
   switch (node.kind) {
     case 'text': {
       const match = textMatch(node)
@@ -29,7 +30,7 @@ function compile(node: SearchNode, now: number, positive: string[], urlRows?: Sq
     }
     case 'state': {
       const state = node.value === 'starred' ? 'starred = 1' : 'read = ' + (node.value === 'read' ? '1' : '0')
-      if (!urlRows) return { sql: `entry_state.${state}`, parameters: [] }
+      if (!urlRows || urlRows.joinedState) return { sql: `entry_state.${state}`, parameters: [] }
       return { sql: `entries.id IN (SELECT entry_id FROM entry_state WHERE ${state})`, parameters: [] }
     }
     case 'minminutes': case 'maxminutes':
@@ -75,7 +76,7 @@ export function compileRuleSearch(root: SearchNode, now = Date.now()) {
 }
 
 export function compileSearch(root: SearchNode, ranked: boolean, now = Date.now(),
-  urlRows: SqlPredicate = { sql: 'SELECT rowid, url FROM entries INDEXED BY entries_url_idx', parameters: [] }) {
+  urlRows: SearchScope = { sql: 'SELECT rowid, url FROM entries INDEXED BY entries_url_idx', parameters: [] }) {
   // Keep mandatory full-text terms in one indexed MATCH for BM25 and snippets.
   const positive: string[] = []
   const conjuncts = root.kind === 'and' ? root.children : [root]

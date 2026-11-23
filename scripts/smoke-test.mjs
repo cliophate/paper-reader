@@ -129,7 +129,9 @@ try {
   const page = (await request('/api/entries?kind=all&id=all&unread=0&q=compositor')).data
   assert.equal(page.items.length, 2)
   const id = page.items[0].id
-  await viewWrites.check(request, id, page.items[1].id)
+  await viewWrites.check(request, id, page.items[1].id, () => {
+    rows.find(row => row.id === id).categories.push(readTag)
+  })
   const viewQuery = 'url:"' + page.items[0].url + '"'
   const savedView = await request('/api/views', { title: 'One synthetic article', query: viewQuery })
   assert.equal(savedView.status, 201)

@@ -11,7 +11,7 @@ export function savedViewWriteFixture() {
         await hold.release.promise
       }
     },
-    async check(request, anchorId, targetId) {
+    async check(request, anchorId, targetId, markReadUpstream) {
       const state = (ids, operation) => request('/api/entries/state', { ids, operation })
       const { data: { id } } = await request('/api/views', { title: 'Starred fixture', query: 'is:starred' })
       const stream = { kind: 'view', id }
@@ -40,6 +40,20 @@ export function savedViewWriteFixture() {
         hold = undefined
         await state([anchorId], 'unstar')
       }
+
+      await state([anchorId, targetId], 'star')
+      const both = await request('/api/streams/preview-read', { stream })
+      assert.equal(both.data.count, 2)
+      markReadUpstream()
+      const { data: confirmed } = await request('/api/streams/confirm-read', { token: both.data.token })
+      assert.equal(confirmed.count, 1)
+      const liveRead = async id => (await request('/api/entries/offline-state', { id })).data.state.read
+      assert.equal(await liveRead(targetId), true)
+      assert.equal((await request('/api/undo', { token: confirmed.undoToken })).data.count, 1)
+      assert.equal(await liveRead(anchorId), true)
+      assert.equal(await liveRead(targetId), false)
+      await state([anchorId], 'unread')
+      await state([anchorId, targetId], 'unstar')
     },
   }
 }
