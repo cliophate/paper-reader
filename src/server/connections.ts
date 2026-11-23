@@ -119,6 +119,15 @@ function validate(input: unknown): ConnectionsUpdate {
   return result
 }
 
+export function writePrivateSettings(filename: string, contents: string) {
+  fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 })
+  const temporary = `${filename}.${crypto.randomUUID()}.tmp`
+  try {
+    fs.writeFileSync(temporary, contents, { mode: 0o600, flag: 'wx' })
+    fs.renameSync(temporary, filename)
+  } finally { fs.rmSync(temporary, { force: true }) }
+}
+
 export class ConnectionSettings {
   private saved: ConnectionsUpdate = {}
   private readonly defaults: Omit<ConnectionsSettings, 'briefingDelivery' | 'saveDestinations'> & { readwiseToken: string; kirbyToken: string; openaiToken: string }
@@ -283,12 +292,7 @@ export class ConnectionSettings {
     }
     const contents = JSON.stringify(next, null, 2) + '\n'
     if (Buffer.byteLength(contents) > maxSettingsBytes) throw new SettingsValidationError('Connection settings are too large.')
-    fs.mkdirSync(this.config.stateDir, { recursive: true, mode: 0o700 })
-    const temporary = `${this.filename}.${crypto.randomUUID()}.tmp`
-    try {
-      fs.writeFileSync(temporary, contents, { mode: 0o600, flag: 'wx' })
-      fs.renameSync(temporary, this.filename)
-    } finally { fs.rmSync(temporary, { force: true }) }
+    writePrivateSettings(this.filename, contents)
     for (const id of destinationIds) if (patch[id]) this.destinationClients.delete(id)
     this.saved = next
     this.apply()

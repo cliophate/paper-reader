@@ -21,6 +21,7 @@ import { PreferenceNotice, ReadingPreferencesProvider, ReadingSettings, useReadi
 import { FeedRepair } from './components/FeedRepair'
 import { ArticleDiscussion } from './components/ArticleDiscussion'
 import { BackendSettings } from './components/BackendSettings'
+import { WebhookSettingsPanel } from './components/WebhookSettingsPanel'
 import { ConnectionSettings } from './components/ConnectionSettings'
 import { FeedSettings } from './components/FeedSettings'
 import { isDarkTheme, toggledTheme } from './appearance'
@@ -185,7 +186,7 @@ function Reader() {
   const [articleBoundaryStore] = useState(createArticleBoundaryStore)
   const [articleNavigation] = useState(createArticleNavigation)
   const [articleNavigationBusy, setArticleNavigationBusy] = useState(false)
-  const [status, setStatus] = useState({ backend: 'freshrss' as 'freshrss' | 'standalone' | 'miniflux', discussionConfigured: false, readwiseConfigured: false, saveDestinations: [] as SaveDestination[], kirbyConfigured: false, briefingConfigured: false })
+  const [status, setStatus] = useState({ backend: 'freshrss' as 'freshrss' | 'standalone' | 'miniflux', discussionConfigured: false, readwiseConfigured: false, manualWebhooks: [] as Array<{ feedId: string; folderId: string }>, saveDestinations: [] as SaveDestination[], kirbyConfigured: false, briefingConfigured: false })
   const listRef = useRef<HTMLDivElement>(null)
   const selectedIdRef = useRef(selectedId)
   selectedIdRef.current = selectedId
@@ -1714,6 +1715,14 @@ function Reader() {
           onPrevious={() => void move(-1)} onNext={() => void move(1)}
           onToggleRead={() => void setEntryState(selected, selected.read ? 'unread' : 'read')}
           onToggleStar={() => void setEntryState(selected, selected.starred ? 'unstar' : 'star')}
+          onSendWebhook={status.manualWebhooks?.some(scope => (!scope.feedId || scope.feedId === selected.feedId) &&
+            (!scope.folderId || navigation?.folders.find(folder => folder.id === scope.folderId)?.feeds.some(feed => feed.id === selected.feedId)))
+            ? () => {
+              setSaveBusy(true)
+              void api.sendToWebhook(selected.id).then(({ count, message }) => notify([`Queued for ${count} delivery target${count === 1 ? '' : 's'}.`, message].filter(Boolean).join(' ')))
+                .catch(error => notify(error.message)).finally(() => setSaveBusy(false))
+            } : undefined}
+          webhookBusy={saveBusy}
           onSave={startSave}
           onCopyUrl={() => void copyArticleUrl(selected)}
           onFullText={() => { const full = fullVersions.current.get(selected.id); if (full) updateEntry(selected.id, articleContent(full)); else void fetchFullText() }}
@@ -1969,6 +1978,8 @@ const ArticleView = forwardRef<HTMLElement, {
   actionError: string
   onRetryAction: () => void
   fullTextError: string
+  onSendWebhook?: () => void
+  webhookBusy: boolean
   saveLabel: string
   saveCaption: string
   saveDisabled: boolean
@@ -2004,7 +2015,7 @@ const ArticleView = forwardRef<HTMLElement, {
   nextTitle: string
   onTextSelected: () => void
   onSelectionContext: (state: SelectionContextState | null) => void
-}>(function ArticleView({ active, entry, feedIconUrl, players, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, saveLabel, saveCaption, saveDisabled, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onSave, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, onKirby, notify, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext, onTextSelected }, ref) {
+}>(function ArticleView({ active, entry, feedIconUrl, players, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, onSendWebhook, webhookBusy, saveLabel, saveCaption, saveDisabled, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onSave, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, onKirby, notify, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext, onTextSelected }, ref) {
   const content = useRef<HTMLDivElement>(null)
   const annotations = useAnnotations(online, entry.id)
   const body = entry.fullText ? 'full' : 'feed'
@@ -2098,6 +2109,7 @@ const ArticleView = forwardRef<HTMLElement, {
             annotations.refresh()
             setNotesFor(entry.id)
           }}>Article notes</button>
+          {onSendWebhook && <button disabled={!online || webhookBusy} onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); onSendWebhook() }}>Send to webhook</button>}
           <button disabled={offlineBusy} onClick={onOffline}>{offlineBusy ? 'Saving offline...' : 'Save offline'}</button>
           {onRemoveOffline && <button onClick={async () => {
             let needsConfirmation = true
@@ -2469,6 +2481,7 @@ function Settings({ backend, section, setSection, initialFeedId, initialFeedView
           : <div className="connections-settings">
             <ReadingSettings feeds={uniqueFeeds(navigation)} />
             <ConnectionSettings onChanged={onConnectionsChanged} />
+            <WebhookSettingsPanel navigation={navigation} feeds={uniqueFeeds(navigation)} onChanged={onConnectionsChanged} />
           </div>
   return <Modal title="Settings" onClose={onClose} className="settings-modal">
     <div className="settings-layout">

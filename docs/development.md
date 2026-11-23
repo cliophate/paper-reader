@@ -97,6 +97,15 @@ generation, including when the store is empty.
 | Reader controls, viewport layout and gesture state | Memory on the current device |
 | Article order within a stream | Existing server stream-order setting |
 
+Schema v26 adds webhook subscriptions and a durable delivery queue. The
+migration saves `paper.sqlite.before-webhooks-v26` before installing article
+arrival and star triggers. For rollback, stop all Paper processes and preserve
+the current data directory. Restore `paper.sqlite.before-webhooks-v26` as `paper.sqlite`
+in a separate copy of the data directory without the newer SQLite WAL and SHM
+files. Start the previous build against that copy. Changes made after the
+backup stay in the preserved directory. See [webhook delivery](webhooks.md)
+for receiver setup and retry behavior.
+
 Use Node 24 or newer. From the repository root:
 
 ```sh

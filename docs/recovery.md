@@ -13,7 +13,9 @@ state. An empty standalone database cannot recover subscriptions or reading stat
 The same directory also holds connections.json when connections have been edited
 in Settings. It contains connection switches and credentials, including save
 destination tokens and Wallabag login details, without encryption at rest. Keep its permissions at 0600 and include it
-in private backups. A database-only backup does not include these settings.
+in private backups. If you use webhooks or push notifications, include the
+`webhooks/` directory with its owner-only target URLs, signing secrets and
+push credentials. SQLite holds the corresponding subscriptions and deliveries.
 `secrets.json` contains generated signing and internal secrets. Losing it can
 invalidate saved briefing links and prevent Paper from decrypting feed cookies. Keep these files private and together. The
 permanent `paper-lock.sqlite` is a coordination file, not an application database.

@@ -11,9 +11,14 @@ import { minifluxApi } from '../tests/fixtures/miniflux-api.mjs'
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'paper-miniflux-smoke-'))
 const api = minifluxApi()
+const webhookPosts = []
 const fixture = http.createServer(async (request, response) => {
   try {
     const body = Buffer.concat(await Array.fromAsync(request)).toString()
+    if (request.url.startsWith('/notify/') && request.method === 'POST') {
+      webhookPosts.push({ path: request.url, article: JSON.parse(body).entry.id })
+      response.writeHead(204); response.end(); return
+    }
     const result = await api.fetch(`http://fixture${request.url}`, { method: request.method, headers: request.headers, body: body || undefined })
     response.writeHead(result.status, Object.fromEntries(result.headers))
     response.end(Buffer.from(await result.arrayBuffer()))
@@ -129,9 +134,24 @@ try {
   await stop()
   const restored = path.join(temporary, 'restored')
   await fs.cp(state, restored, { recursive: true })
-  await start(restored, { PAPER_LOCAL_READS: 'false' })
+  const receiver = `http://127.0.0.1:${fixture.address().port}`
+  await start(restored, { PAPER_LOCAL_READS: 'false', PAPER_TRUSTED_SAVE_ORIGINS: receiver })
   assert.equal((await request('/api/status')).data.localReadsActive, false)
   assert.equal((await request('/api/entries?kind=all&id=all&unread=0')).data.items.length, 3)
+  const webhooks = '/api/settings/connections/webhooks'
+  for (const [name, folderId] of [['old', destination.id], ['current', source.id]]) {
+    assert.equal((await request(webhooks, { name, kind: 'webhook', folderId, url: receiver + '/notify/' + name, events: ['save_entry'] })).status, 200)
+  }
+  // Move directly in Miniflux, leaving Paper's last synced folder untouched.
+  api.feeds[0].category = api.categories[0]
+  assert.equal((await request('/api/entries/send-to-webhook', { id })).data.count, 1)
+  await until(async () => (await request(webhooks)).data.deliveries.some(row => row.state === 'delivered'))
+  assert.deepEqual(webhookPosts, [{ path: '/notify/current', article: id }])
+  api.failures.push({ path: 'v1/categories', method: 'GET', remaining: 3, status: 503 })
+  const unavailable = await request('/api/entries/send-to-webhook', { id })
+  assert.equal(unavailable.status, 503)
+  assert.match(unavailable.data.error, /verify folder membership/)
+  assert.equal((await request(webhooks)).data.deliveries.filter(row => row.state === 'skipped').length, 2)
   await stop()
   api.userId = 12
   const rejection = await runBriefing(state, {}, 1)

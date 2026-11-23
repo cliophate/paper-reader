@@ -28,6 +28,7 @@ import { migrateLinkNumbers } from './link-numbers.js'
 import { migrateBackendKinds } from './backend-schema.js'
 import { FeedIconStore, migrateFeedIcons } from './feed-icon-store.js'
 import { migratePulseCatchUps } from './pulse-schema.js'
+import { WebhookStore, WEBHOOK_SCHEMA_VERSION, migrateWebhooks } from './webhook-store.js'
 import { BriefingDeliveryStore, migrateBriefingDelivery } from './briefing-delivery-store.js'
 import { FRESHRSS_ORGANIZATION_CAPABILITIES, MINIFLUX_ORGANIZATION_CAPABILITIES, LOCAL_ORGANIZATION_CAPABILITIES, LocalOrganizationService, migrateOrganization } from './organization.js'
 import type { EntryStateOperation } from './backend.js'
@@ -201,6 +202,7 @@ export class PaperDatabase {
   readonly feedFetch: FeedFetchStore
   readonly feedIcons: FeedIconStore
   readonly readingPreferences: ReadingPreferenceStore
+  readonly webhooks: WebhookStore
   readonly briefingDelivery: BriefingDeliveryStore
   private activeBackendId = ''
   private closed = false
@@ -268,6 +270,10 @@ export class PaperDatabase {
           if (version > 0) this.backupBeforeMigration(READING_PREFERENCES_VERSION, 'reading-preferences')
           migrateReadingPreferences(this.db)
         }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < WEBHOOK_SCHEMA_VERSION) {
+          if (version > 0) this.backupBeforeMigration(WEBHOOK_SCHEMA_VERSION, 'webhooks')
+          migrateWebhooks(this.db)
+        }
       }
       this.db.function('checked_url_match', { directOnly: true }, matched => {
         const now = performance.now()
@@ -287,6 +293,7 @@ export class PaperDatabase {
       this.organization = new LocalOrganizationService(this.db, id => this.assertLocalBackend(id), () => this.localNavigation())
       this.feedIcons = new FeedIconStore(this.db, id => this.organization.subscriptionChanged(id), id => this.assertLocalBackend(id))
       this.readingPreferences = new ReadingPreferenceStore(this.db)
+      this.webhooks = new WebhookStore(this.db)
       this.briefingDelivery = new BriefingDeliveryStore(this.db)
     } catch (error) {
       this.db.close()
@@ -1034,7 +1041,10 @@ export class PaperDatabase {
       this.db.prepare('UPDATE entries SET read = 1 WHERE read = 0 AND NOT EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entries.id)').run()
       this.db.prepare('UPDATE entries SET read = 0 WHERE read = 1 AND EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entries.id)').run()
       this.db.prepare('UPDATE entries SET starred = 0 WHERE starred = 1 AND NOT EXISTS (SELECT 1 FROM incoming_starred WHERE incoming_starred.id = entries.id)').run()
+      const initialSnapshot = !this.getSyncValue('state_synced_at') || this.getSyncValue('backfill_complete') !== 'true'
+      if (initialSnapshot) this.db.exec("INSERT INTO sync_state(key,value) VALUES ('webhook_importing_stars','1')")
       this.db.prepare('UPDATE entries SET starred = 1 WHERE starred = 0 AND EXISTS (SELECT 1 FROM incoming_starred WHERE incoming_starred.id = entries.id)').run()
+      if (initialSnapshot) this.db.exec("DELETE FROM sync_state WHERE key='webhook_importing_stars'")
       this.setSyncValueInTransaction('state_synced_at', new Date().toISOString())
       this.db.exec('COMMIT')
       return {

@@ -32,7 +32,9 @@ The owner can also change integration switches, replace tokens,
 and set a Kirby publishing endpoint, including an endpoint on its private network.
 Limit access to trusted administrators. Settings never returns tokens to clients.
 Tokens entered there are stored without encryption in data/connections.json with
-mode 0600. Treat the data directory and backups as credentials. Codex authentication
+mode 0600. Webhook and push targets use separate files with the same permissions
+under data/webhooks/. Paper shows a new signing secret once, when you create or
+rotate it. Treat the data directory and backups as credentials. Codex authentication
 remains in each CLI's separate login store.
 
 Paper encrypts saved feed cookies in SQLite with a key derived from
