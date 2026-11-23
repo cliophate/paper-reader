@@ -121,6 +121,52 @@ describe('mobile reader switching', () => {
     expect(api.entry).toHaveBeenCalledExactlyOnceWith(article.id)
   })
 
+  it('plays an Instagram story in place from its bridge poster', async () => {
+    const page = 'https://bridge.example/items/1.html'
+    const poster = 'https://bridge.example/media/1_poster.jpg'
+    const video = 'https://bridge.example/media/1.mp4'
+    const story = { ...post('a'), url: page, thumbnailUrl: 'https://bridge.example/thumbnail.jpg',
+      enclosures: [{ url: video, type: 'video/mp4' }],
+      contentHtml: `<p><a href="${page}"><img src="${poster}" alt="Video story by @someone" /></a></p>
+        <p><a href="${page}">Watch cached video</a> · <a href="${video}">Open video file</a></p>` }
+    initialPage.items[0] = story
+    vi.mocked(api.entry).mockResolvedValue({ entry: story })
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
+    try {
+      await mount()
+      const card = container.querySelector('.social-card')!
+      expect(card.querySelectorAll(`img[src="${poster}"]`)).toHaveLength(1)
+      expect(card.querySelector('.enclosure-preview img')?.getAttribute('src')).toBe(poster)
+      expect(card.querySelectorAll('button')).toHaveLength(1)
+      expect(card.querySelectorAll('video')).toHaveLength(1)
+      const player = card.querySelector('video')!
+      expect(player.poster).toBe(poster)
+      expect(player.preload).toBe('none')
+      expect(player.hasAttribute('src')).toBe(false)
+      expect(player.hidden).toBe(true)
+      const button = card.querySelector('button')!
+      expect(button.getAttribute('aria-label')).toBe('Play video for Post a')
+      await act(() => button.click())
+      expect(play).toHaveBeenCalledOnce()
+      expect(player.src).toBe(video)
+      expect(player.hidden).toBe(false)
+      expect(card.querySelector('button')).toBeNull()
+    } finally { play.mockRestore() }
+  })
+
+  it('uses the thumbnail for a poster-less social video and keeps the caption', async () => {
+    const thumbnailUrl = 'https://bridge.example/media/cover.jpg'
+    const story = { ...post('a'), thumbnailUrl, enclosures: [{ url: 'https://bridge.example/media/2.mp4', type: 'video/mp4' }],
+      contentHtml: `<p><a href="/story"><img src="${thumbnailUrl}">Story details</a></p>` }
+    initialPage.items[0] = story
+    vi.mocked(api.entry).mockResolvedValue({ entry: story })
+    await mount()
+    const card = container.querySelector('.social-card')!
+    expect(card.querySelector('.enclosure-preview img')?.getAttribute('src')).toBe(thumbnailUrl)
+    expect(card.querySelector('.social-content img')).toBeNull()
+    expect(card.querySelector('.social-content a')?.textContent).toBe('Story details')
+  })
+
   async function openEpisode() {
     const file = { url: 'https://example.test/episode.mp3', type: 'audio/mpeg', position: 10, updatedAt: 1 }
     const episode = { ...post('a'), kind: 'article' as const, enclosures: [file] }

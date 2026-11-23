@@ -437,6 +437,29 @@ test('keeps alternate video sources without modern URL helpers and limits mounte
   await expect(page.locator('.article-content [src="/clip.mp4"]')).toHaveCount(0)
 })
 
+test('keeps a video enclosure in the same space when playback starts', async ({ page }) => {
+  const poster = 'https://example.test/cover.svg'
+  const clip = 'https://example.test/clip.mp4'
+  let requested = false
+  await page.route(poster, route => route.fulfill({ contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="360" height="640"><rect width="360" height="640" fill="navy"/></svg>' }))
+  await page.route(clip, route => { requested = true; return route.abort() })
+  await openReader(page, false, false, { enclosures: [{ url: clip, type: 'video/mp4' }], thumbnailUrl: poster,
+    contentHtml: '<p>Clip from the feed.</p>' })
+  await expect(page.locator('.article-lead-image')).toHaveCount(0)
+  const image = page.locator('.enclosure-player img')
+  const play = page.getByRole('button', { name: 'Play video for Synthetic article a' })
+  await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalHeight)).toBe(640)
+  await play.scrollIntoViewIfNeeded()
+  const before = await image.boundingBox()
+  expect(requested).toBe(false)
+  await play.click()
+  await expect.poll(() => requested).toBe(true)
+  const player = page.locator('.enclosure-player video')
+  await expect(player).toBeVisible()
+  expect(await player.boundingBox()).toEqual(before)
+})
+
 test('plays attachments on demand and leaves them out of offline downloads', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 })
   const url = 'https://media.example.test/episode.wav'

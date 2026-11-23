@@ -18,7 +18,7 @@ import { createArticleNavigation } from './articleNavigation'
 import { api, ApiError, playback } from './api'
 import { useDialogFocus, useMenuFocus } from './dialogFocus'
 import { rememberPosition, useReadingProgress } from './readingProgress'
-import { MAX_ENCLOSURES } from '../server/enclosure-limits'
+import { prepareArticleMedia } from './articleMedia'
 import { clearOffline, downloadPages, inOfflineStream, offlineArticles, offlineNavigation, patchOffline, removeOffline } from './offline'
 import { FeedOverrides } from './components/FeedOverrides'
 import type { FullTextMode } from '../server/reading-preference-values'
@@ -30,7 +30,7 @@ import { WebhookSettingsPanel } from './components/WebhookSettingsPanel'
 import { ConnectionSettings } from './components/ConnectionSettings'
 import { FeedSettings } from './components/FeedSettings'
 import { isDarkTheme, toggledTheme } from './appearance'
-import { removeBrokenArticleImage, shouldShowArticleLeadImage } from './articleImages'
+import { articleImageSource, removeBrokenArticleImage, shouldShowArticleLeadImage } from './articleImages'
 import { Icon } from './components/Icon'
 import { ActivitySettings, FiltersSettings, ReportsSettings } from './components/SettingsPanels'
 import { TopicsLibrary } from './components/TopicsLibrary'
@@ -46,7 +46,7 @@ import { readReaderLocation, readerLocationUrl, resolveReaderLocation, type Read
 import { articleEdgeState, swipeDirection, type GesturePoint } from './mobileGestures'
 import { initialReaderChromeScrollState, readerChromeCanAutoHide, updateReaderChromeScroll } from './readerChrome'
 import { authorLine, resistedPullDistance, shouldAutoMarkRead, shouldAutomaticallyFetchFullArticle, shouldFetchFullArticle, shouldReleaseToRefresh } from './reading'
-import { formatInstagramHtml, formatThreadsHtml, formatXPostHtml, formatYoutubeHtml } from './socialHtml'
+import { formatXPostHtml } from './socialHtml'
 import type { ArticleReport, Entry, Feed, Folder, NavigationPayload, StreamRef, XThreadPost } from './types'
 
 type ReaderDestination = SaveDestination | { id: 'readwise'; name: string }
@@ -1799,7 +1799,7 @@ function Reader() {
           ref={articleRef}
           active={view === 'reader' && mobilePane === 'article'}
           entry={selected}
-          players={(!refreshOffline || offlineMedia?.id === selected.id) && <EnclosurePlayers entry={selected} />}
+          showPlayers={!refreshOffline || offlineMedia?.id === selected.id}
           feedIconUrl={feedIcons.get(selected.feedId) || ''}
           onBack={closeEntry}
           collectionTitle={pulseContext?.title || ''}
@@ -2001,15 +2001,8 @@ function SelectionContextMenu({ state, onClose, onCreate, onDiscuss, kirbyConfig
   </div>
 }
 
-function thumbnailSource(entry: Entry) {
-  if (!entry.offline && navigator.onLine) return entry.thumbnailUrl
-  if (!entry.thumbnailUrl || !navigator.serviceWorker?.controller) return undefined
-  try { return '/_offline/image?' + new URLSearchParams({ url: new URL(entry.thumbnailUrl, entry.url).href }) }
-  catch { return undefined }
-}
-
 const StoryRow = forwardRef<HTMLElement, { checked?: boolean; onCheck?: () => void; entry: Entry; active: boolean; onOpen: () => void; onContext: (left: number, top: number) => void }>(function StoryRow({ checked, onCheck, entry, active, onOpen, onContext }, ref) {
-  const thumbnail = thumbnailSource(entry)
+  const thumbnail = articleImageSource(entry)
   const [thumbnailReady, setThumbnailReady] = useState(false)
   const pressTimer = useRef<number | undefined>(undefined)
   const pressOrigin = useRef({ x: 0, y: 0 })
@@ -2091,7 +2084,7 @@ const ArticleView = forwardRef<HTMLElement, {
   active: boolean
   entry: Entry
   feedIconUrl: string
-  players: React.ReactNode
+  showPlayers: boolean
   onBack: () => void
   backLabel: string
   collectionTitle: string
@@ -2135,7 +2128,7 @@ const ArticleView = forwardRef<HTMLElement, {
   nextTitle: string
   onTextSelected: () => void
   onSelectionContext: (state: SelectionContextState | null) => void
-}>(function ArticleView({ active, entry, feedIconUrl, players, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, onSendWebhook, webhookBusy, saveLabel, saveCaption, saveDisabled, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onSave, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, onKirby, notify, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext, onTextSelected }, ref) {
+}>(function ArticleView({ active, entry, feedIconUrl, showPlayers, onBack, backLabel, collectionTitle, actionError, onRetryAction, fullTextError, onSendWebhook, webhookBusy, saveLabel, saveCaption, saveDisabled, online, fullMode, onFullMode, onFeedText, onRefreshText, onOffline, offlineBusy, onRemoveOffline, onPrevious, onNext, onToggleRead, onToggleStar, onSave, onCopyUrl, onFullText, onReport, onDiscuss, discussionConfigured, onKirby, notify, fullTextBusy, onAppearance, onScroll, boundaryStore, navigationBusy, onTouchEnd, previousAvailable, nextAvailable, previousTitle, nextTitle, onSelectionContext, onTextSelected }, ref) {
   const content = useRef<HTMLDivElement>(null)
   const annotations = useAnnotations(online, entry.id)
   const body = entry.fullText ? 'full' : 'feed'
@@ -2247,7 +2240,7 @@ const ArticleView = forwardRef<HTMLElement, {
     <div ref={content} className="article-scroll" onScroll={onScroll} onTouchEndCapture={() => onTouchEnd(Boolean(content.current && selectedTextWithin(content.current)))} onTouchCancelCapture={() => onTouchEnd(true)} onContextMenu={openSelectionContext}>
       <ArticleEdgeZone direction="previous" title={previousTitle} available={previousAvailable} store={boundaryStore} />
       <div key={entry.id} className="article-document">
-        {entry.kind !== 'article' ? <SocialArticle entry={entry} feedIconUrl={feedIconUrl}>{players}</SocialArticle> : <StandardArticle entry={entry} feedIconUrl={feedIconUrl}>{players}</StandardArticle>}
+        <ArticleDocument entry={entry} feedIconUrl={feedIconUrl} showPlayers={showPlayers} />
       </div>
       <ArticleEdgeZone direction="next" title={nextTitle} available={nextAvailable} store={boundaryStore} />
     </div>
@@ -2280,23 +2273,28 @@ function selectedTextWithin(root: HTMLElement): string {
   return selection.toString().replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').trim()
 }
 
-function StandardArticle({ entry, feedIconUrl, children }: { entry: Entry; feedIconUrl: string; children: React.ReactNode }) {
+function ArticleDocument({ entry, feedIconUrl, showPlayers }: { entry: Entry; feedIconUrl: string; showPlayers: boolean }) {
+  const { contentHtml, kind, url, enclosures, thumbnailUrl } = entry
+  const { html, posters } = useMemo(() => prepareArticleMedia({ contentHtml, kind, url, enclosures, thumbnailUrl }),
+    [contentHtml, kind, url, enclosures, thumbnailUrl])
+  const players = showPlayers && <EnclosurePlayers entry={entry} posters={posters} />
+  if (kind !== 'article') return <SocialArticle entry={entry} feedIconUrl={feedIconUrl} html={html}>{players}</SocialArticle>
   return <div className="article-column">
     <ArticleHeader entry={entry} feedIconUrl={feedIconUrl} />
-    {children}
-    <ArticleLeadImage entry={entry} />
-    <ArticleBody entry={entry} html={entry.contentHtml} />
+    {players}
+    {!(showPlayers && [...posters.values()].includes(thumbnailUrl)) && <ArticleLeadImage entry={entry} />}
+    <ArticleBody html={html} />
   </div>
 }
 
 function ArticleLeadImage({ entry }: { entry: Entry }) {
   const [failed, setFailed] = useState(false)
   useEffect(() => setFailed(false), [entry.id, entry.thumbnailUrl])
-  if (failed || !thumbnailSource(entry) || !shouldShowArticleLeadImage(entry.thumbnailUrl, entry.contentHtml)) return null
-  return <figure className="article-lead-image"><img src={thumbnailSource(entry)} alt="" onError={() => setFailed(true)} /></figure>
+  if (failed || !articleImageSource(entry) || !shouldShowArticleLeadImage(entry.thumbnailUrl, entry.contentHtml)) return null
+  return <figure className="article-lead-image"><img src={articleImageSource(entry)} alt="" onError={() => setFailed(true)} /></figure>
 }
 
-function SocialArticle({ entry, feedIconUrl, children }: { entry: Entry; feedIconUrl: string; children: React.ReactNode }) {
+function SocialArticle({ entry, feedIconUrl, html, children }: { entry: Entry; feedIconUrl: string; html: string; children: React.ReactNode }) {
   const [thread, setThread] = useState<XThreadPost[] | null>(null)
   useEffect(() => {
     let cancelled = false
@@ -2309,11 +2307,6 @@ function SocialArticle({ entry, feedIconUrl, children }: { entry: Entry; feedIco
       .catch(() => undefined)
     return () => { cancelled = true }
   }, [entry.id, entry.kind, entry.url])
-  const contentHtml = useMemo(() => entry.kind === 'x' ? formatXPostHtml(entry.contentHtml)
-    : entry.kind === 'instagram' ? formatInstagramHtml(entry.contentHtml)
-    : entry.kind === 'threads' ? formatThreadsHtml(entry.contentHtml)
-    : entry.kind === 'youtube' ? formatYoutubeHtml(entry.contentHtml)
-    : entry.contentHtml, [entry.contentHtml, entry.kind])
   const videoId = entry.kind === 'youtube' ? youtubeVideoId(entry.url) : ''
   const identity = socialIdentity(entry)
   if (entry.kind === 'x') return <div className="social-column">
@@ -2322,7 +2315,7 @@ function SocialArticle({ entry, feedIconUrl, children }: { entry: Entry; feedIco
       <article className="x-root-post">
         <div className="social-author"><FeedMark title={identity.name} url={entry.feedUrl || entry.url} iconUrl={feedIconUrl} /><div><strong>{identity.name}</strong>{identity.meta && <span>{identity.meta}</span>}</div></div>
         {children}
-        <ArticleBody entry={entry} html={contentHtml} className="social-content" />
+        <ArticleBody html={html} className="social-content" />
         <a className="social-original" href={entry.url} target="_blank" rel="noopener noreferrer">View original <Icon name="external" /></a>
       </article>
       {thread && thread.length > 0 && <section className="x-thread" aria-label={`Thread with ${thread.length + 1} posts`}>
@@ -2346,7 +2339,7 @@ function SocialArticle({ entry, feedIconUrl, children }: { entry: Entry; feedIco
       {entry.kind === 'youtube' && <h1>{entry.title}</h1>}
       {children}
       {videoId && <div className="youtube-frame"><iframe src={`https://www.youtube-nocookie.com/embed/${videoId}`} title={entry.title} loading="lazy" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowFullScreen /></div>}
-      <ArticleBody entry={entry} html={contentHtml} className="social-content" />
+      <ArticleBody html={html} className="social-content" />
       <a className="social-original" href={entry.url} target="_blank" rel="noopener noreferrer">View original <Icon name="external" /></a>
     </div>
   </div>
@@ -2391,42 +2384,15 @@ function youtubeVideoId(value: string): string {
   } catch { return '' }
 }
 
-function ArticleBody({ html, entry, className = '' }: { html: string; entry?: Entry; className?: string }) {
+function ArticleBody({ html, className = '' }: { html: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null)
   const renderedHtml = useRef('')
-  const contentHtml = useMemo(() => {
-    if (!entry || !/<video\b/i.test(html)) return html
-    // Parse inertly so embedded copies cannot preload before we remove them.
-    const template = document.createElement('template')
-    template.innerHTML = html
-    const urls = new Set(entry.enclosures?.slice(0, MAX_ENCLOSURES).map(file => file.url))
-    for (const media of template.content.querySelectorAll('video')) {
-      let removed = false
-      for (const source of [media, ...media.querySelectorAll('source[src]')]) {
-        const src = source.getAttribute('src')
-        if (src === null) continue
-        try {
-          const url = new URL(src, entry.url || undefined)
-          if (src.trim() && ['https:', 'http:'].includes(url.protocol) && !urls.has(url.href)) {
-            source.setAttribute('src', url.href)
-            continue
-          }
-        } catch { /* Drop a source without a usable article URL. */ }
-        if (source === media) media.removeAttribute('src')
-        else source.remove()
-        removed = true
-      }
-      if (removed && !media.hasAttribute('src') && !media.querySelector('source[src]')) media.remove()
-    }
-    return template.innerHTML
-  }, [html, entry?.enclosures, entry?.url])
-
   useLayoutEffect(() => {
     const root = ref.current
-    if (!root || renderedHtml.current === contentHtml) return
-    root.innerHTML = contentHtml
-    renderedHtml.current = contentHtml
-  }, [contentHtml])
+    if (!root || renderedHtml.current === html) return
+    root.innerHTML = html
+    renderedHtml.current = html
+  }, [html])
 
   useEffect(() => {
     const root = ref.current

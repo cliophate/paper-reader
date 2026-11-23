@@ -387,10 +387,16 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
 .article-content h3 { font-size: 23px; }
 .article-content a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .enclosure-player { margin-block: 1em; }
-.enclosure-player button { padding: 8px 16px; min-height: 44px; border: 1px solid var(--line); border-radius: 6px; background: var(--soft); color: var(--ink); cursor: pointer; }
-.enclosure-player button:hover { background: var(--hover); }
+.enclosure-player button, .enclosure-preview button span { padding: 8px 16px; min-height: 44px; border: 1px solid var(--line); border-radius: 6px; background: var(--soft); color: var(--ink); cursor: pointer; }
+.enclosure-player button:hover, .enclosure-preview button:hover span { background: var(--hover); }
 .enclosure-player audio, .enclosure-player video { width: 100%; max-width: 100%; }
 .enclosure-player video { max-height: 65vh; }
+.enclosure-preview { position: relative; overflow: hidden; border-radius: 10px; background: #111; }
+.enclosure-preview img { display: block; width: 100%; min-height: 44px; max-height: 65vh; object-fit: contain; }
+.enclosure-preview video { position: absolute; inset: 0; height: 100%; background: #111; }
+.enclosure-preview button, .enclosure-preview button:hover { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; border: 0; background: transparent; }
+.enclosure-preview button span { display: grid; align-items: center; }
+.enclosure-preview button:focus-visible { outline-offset: -3px; }
 
 .article-content img, .article-content video { display: block; max-width: 100%; height: auto; border-radius: 10px; margin: 2em auto; }
 .article-content iframe { display: block; width: 100%; min-height: min(56vw, 520px); border: 0; border-radius: 10px; margin: 2em auto; }
