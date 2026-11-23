@@ -102,6 +102,7 @@ with tempfile.TemporaryDirectory(prefix='paper-ai-isolation-') as directory:
         assert set(proxy_config['services']['paper-ai']['networks']) == {'ai'}
         assert not proxy_config['networks']['ai'].get('internal', False)
         assert proxy_config['services']['paper']['healthcheck']['test']
+        assert proxy_config['services']['paper']['healthcheck']['start_period'] == '10m0s'
         compose('up', '-d', '--no-build', '--pull', 'never', 'paper', 'paper-ai', 'fixture')
         paper = compose('ps', '-q', 'paper')
         worker = compose('ps', '-q', 'paper-ai')

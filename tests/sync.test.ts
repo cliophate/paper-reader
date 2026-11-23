@@ -1,3 +1,4 @@
+import { expectMatchingEntryState } from './fixtures/entry-state.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -88,6 +89,7 @@ describe('Backend synchronization', () => {
     expect(source.continuations).toEqual(['', '10'])
     expect(database.localEntry('one')).toMatchObject({ read: true, starred: true })
     expect(database.localEntry('two')).toMatchObject({ read: false, starred: false })
+    expectMatchingEntryState(database.greaderDatabase)
     expect(database.syncAudit(1)[0]).toMatchObject({ remoteUnread: 1, localUnreadAfter: 1, newEntries: 2 })
   })
 
@@ -127,6 +129,7 @@ describe('Backend synchronization', () => {
     await sync.editEntries(['one'], 'read')
     expect(changes).toEqual([{ ids: ['one'], operation: 'read' }])
 
+    expectMatchingEntryState(database.greaderDatabase)
     expect(source.edits).toEqual([{ ids: ['one'], operation: 'read' }])
     expect(database.localEntry('one')?.read).toBe(true)
   })

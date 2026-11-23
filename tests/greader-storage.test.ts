@@ -1,3 +1,4 @@
+import { dropEntryState } from './fixtures/entry-state.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -19,7 +20,7 @@ it('backs up v15 privately, migrates once and preserves settings on reopen', () 
   const raw = new DatabaseSync(path.join(directory,'paper.sqlite'))
   for (const row of raw.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'greader_%'").all()) raw.exec(`DROP TRIGGER ${row.name}`)
   for (const row of raw.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'greader_%'").all()) raw.exec(`DROP INDEX ${row.name}`)
-  raw.exec('DROP TABLE greader_settings; ALTER TABLE entries DROP COLUMN greader_modified_ms; ALTER TABLE feeds DROP COLUMN greader_modified_ms; PRAGMA user_version = 15'); raw.close()
+  raw.exec(dropEntryState + 'DROP TABLE greader_settings; ALTER TABLE entries DROP COLUMN greader_modified_ms; ALTER TABLE feeds DROP COLUMN greader_modified_ms; PRAGMA user_version = 15'); raw.close()
   db = new PaperDatabase(path.join(directory,'paper.sqlite'))
   const backup = path.join(directory,'paper.sqlite.before-greader-v16')
   expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
@@ -33,7 +34,7 @@ it('backs up the prior schema before adding labels and preserves feeds and app s
   const app = await db.auth.createApp('Existing app', null)
   const file = db.searchDatabasePath
   const key = db.greaderDatabase.prepare('SELECT key FROM greader_settings').get()!.key
-  db.greaderDatabase.exec(`DROP TABLE entry_labels; DROP TABLE article_labels; ALTER TABLE auth_apps DROP COLUMN article_labels; PRAGMA user_version = ${ARTICLE_LABELS_VERSION - 1}`)
+  db.greaderDatabase.exec(dropEntryState + `DROP TABLE entry_labels; DROP TABLE article_labels; ALTER TABLE auth_apps DROP COLUMN article_labels; PRAGMA user_version = ${ARTICLE_LABELS_VERSION - 1}`)
   db.close()
   db = new PaperDatabase(file)
   expect(db.auth.apps()).toContainEqual(expect.objectContaining({ id: app.id, articleLabels: false }))

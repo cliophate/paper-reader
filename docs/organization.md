@@ -139,8 +139,9 @@ the v8 marker commit together; a failure rolls back that migration.
 
 Before upgrading an existing database below v8, Paper creates a consistent
 SQLite backup at `<database-path>.before-organization-v8`, including committed
-WAL data. It uses a unique temporary path with mode `0600`, then renames the
-completed backup. A direct v6-to-v8 upgrade also saves `.before-identity-v7`.
+WAL data. Paper writes to `<database-path>.before-organization-v8.tmp` with
+mode `0600`, verifies the copy and renames it. A direct v6-to-v8 upgrade also
+saves `.before-identity-v7`.
 Both backups capture the pre-upgrade v6 database. An already-v7 database gets
 the v8 backup without replacing its original v7 backup. A failed v8 migration
 after a successful v7 migration can resume from v7.

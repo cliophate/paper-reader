@@ -42,7 +42,9 @@ alongside the fetch lease. It also stores Miniflux parsing errors with cached
 feed metadata. The migration saves `paper.sqlite.before-feed-maintenance-v21`
 before upgrading. The previous Paper binary rejects the v21 database.
 
-On a repeat upgrade, Paper renames the previous backup with a timestamp and writes a fresh backup at the usual path.
+On retry, Paper discards the interrupted `<backup>.tmp` file. Once it verifies
+the fresh backup, it archives the previous backup with a timestamp and moves
+the fresh one to the usual path.
 
 To roll back, stop Paper. Copy the current database and any `paper.sqlite-wal`
 and `paper.sqlite-shm` files to a separate directory. Remove those sidecars
@@ -138,6 +140,26 @@ Paper saves `paper.sqlite.before-article-labels-v29` before upgrading an existin
 database. To roll back, stop Paper and preserve the data directory. Restore that
 backup as `paper.sqlite` in a separate copy without the newer WAL and SHM files,
 then start the previous build against that copy.
+
+Schema v30 copies read status, stars, the state revision and the Reader modification
+clock into `entry_state`. Startup saves `paper.sqlite.before-entry-state-v30`
+before the backfill. Articles already have a permanent integer key in
+`article_arrivals.sequence`. The new table uses it as its primary key and joins
+to `entries` by the unique text article ID. Both survive `VACUUM`.
+
+Readers still query `entries`. A trigger on arrival insertion creates the state
+row. Triggers on `entries` copy changes in the same transaction, including clock
+updates made by Reader and mute triggers. This covers writes from every backend
+and from other SQLite connections. External tools that write to the database
+must run `PRAGMA foreign_keys=ON` on each connection. Otherwise, deleting an
+article leaves orphaned rows in `article_arrivals` and `entry_state`.
+The state table copies the feed ID even for historical articles whose feeds no
+longer appear in navigation.
+
+On SSD, one v28 upgrade took 23.08 seconds for 200,000 synthetic articles
+and another took 279.70 seconds for 1,000,000. Both timings include the backup
+and end when coordinated startup returns. The source databases occupied
+2.83 GiB and 14.13 GiB respectively.
 
 Use Node 24 or newer. From the repository root:
 

@@ -116,6 +116,20 @@ The 0.2.0-alpha.3 release uses database schema v17.
 The [alpha.3 upgrade steps](#upgrade-from-020-alpha2-to-020-alpha3) describe
 the migration backup from schema v16.
 
+### Article state migration and recovery
+
+Source builds with schema v30 copy article state into a separate table. Allow
+space for a full database backup and the new table and indexes. Downtime grows
+with database size. On the test machine, the upgrade took about 25 seconds for
+200,000 articles and 5 minutes for 1 million. Most of that time went into the
+backup. If you use a custom Compose file, set the reader's health check
+`start_period` to `10m`, as in the shipped file.
+
+To roll back to v29, stop Paper and briefing commands and preserve the current data directory.
+In a separate copy, restore `paper.sqlite.before-entry-state-v30` as `paper.sqlite`
+without the newer WAL and SHM files. Start the v29 build against that copy.
+It contains the articles and reading state saved before the upgrade.
+
 ### Feed icon migration and recovery
 
 Schema v18 stores standalone feed icons in SQLite. Upgrading an existing

@@ -1,3 +1,4 @@
+import { expectMatchingEntryState } from './fixtures/entry-state.js'
 import clients from './fixtures/greader/clients.json'
 import { setTimeout as delay } from 'node:timers/promises'
 import fs from 'node:fs'
@@ -105,6 +106,7 @@ it('commits read and star once, preserves no-ops and rejects invalid labels atom
   const sql = db.greaderDatabase, id = String(sql.prepare('SELECT entry_id FROM article_arrivals WHERE sequence = 1').get()!.entry_id)
   expect((await call('edit-tag', [['i', '1'], ['a', `${STATE}read`], ['a', `${STATE}starred`], ['T', token]], 'POST')).status).toBe(200)
   expect(db.entryState(id)).toEqual({ read: true, starred: true, revision: 1 })
+  expectMatchingEntryState(sql)
   const modified = sql.prepare('SELECT greader_modified_ms FROM entries WHERE id = ?').get(id)!.greader_modified_ms
   expect((await call('edit-tag', [['i', '1'], ['a', `${STATE}read`], ['T', token]], 'POST')).status).toBe(200)
   expect(sql.prepare('SELECT greader_modified_ms FROM entries WHERE id = ?').get(id)!.greader_modified_ms).toBe(modified)
@@ -143,7 +145,16 @@ it('filters arrival and modification times with inclusive boundaries and interse
   expect(page(sql, { ...q, it: [{ kind: 'state', id: 'read' }], xt: [{ kind: 'state', id: 'read' }] }, false).values).toHaveLength(0)
 })
 it('omits deleted content and accepts retries for deleted state IDs', async () => {
-  db.greaderDatabase.exec('DELETE FROM entries WHERE id IN (SELECT entry_id FROM article_arrivals WHERE sequence = 2)')
+  const sql = db.greaderDatabase
+  const stateClock = sql.prepare('SELECT greader_modified_ms FROM entry_state WHERE arrival_sequence = 2')
+  const before = Number(stateClock.get()!.greader_modified_ms)
+  const label = sql.prepare("INSERT INTO article_labels(title, title_key) VALUES ('Temporary', 'temporary')").run()
+  sql.prepare('INSERT INTO entry_labels(label_id, sequence) VALUES (?, 2)').run(label.lastInsertRowid)
+  expect(Number(stateClock.get()!.greader_modified_ms)).toBeGreaterThan(before)
+  sql.exec('DELETE FROM entries WHERE id IN (SELECT entry_id FROM article_arrivals WHERE sequence = 2)')
+  expect(sql.prepare('SELECT 1 FROM entry_labels WHERE sequence = 2').get()).toBeUndefined()
+  expect(stateClock.get()).toBeUndefined()
+  sql.prepare('DELETE FROM article_labels WHERE id = ?').run(label.lastInsertRowid)
   const response = await call('stream/items/contents', [['i', '2']], 'POST'); expect(response.status).toBe(200); expect((await response.json()).items).toEqual([])
   expect((await call('edit-tag', [['i', '2'], ['a', `${STATE}read`], ['T', token]], 'POST')).status).toBe(200)
 })

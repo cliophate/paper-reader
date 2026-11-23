@@ -1,3 +1,4 @@
+import { expectMatchingEntryState } from './fixtures/entry-state.js'
 import { archivedBackup } from './fixtures/migration-backup.js'
 import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
@@ -101,7 +102,7 @@ it('matches preview and actual counts after auto-read and keeps FTS and revision
   const preview = await save(policy({ autoReadDays: 30, readDays: 60 }))
   expect(preview).toMatchObject({ marked: 205, deleted: 205 })
   expect(db.retention.lastRun()).toMatchObject({ marked: 205, deleted: 205, batches: 3 })
-  for (const table of ['entries', 'entries_fts', 'entry_search_rows', 'article_arrivals', 'article_urls']) expect(sql.prepare(`SELECT COUNT(*) n FROM ${table}`).get()?.n).toBe(0)
+  for (const table of ['entries', 'entry_state', 'entries_fts', 'entry_search_rows', 'article_arrivals', 'article_urls']) expect(sql.prepare(`SELECT COUNT(*) n FROM ${table}`).get()?.n).toBe(0)
   expect(sql.prepare("SELECT COUNT(*) n FROM entries_fts WHERE entries_fts MATCH 'retentionneedle'").get()?.n).toBe(0)
   expect(sql.prepare('SELECT COUNT(*) n FROM retention_tombstones').get()?.n).toBe(205)
   const backup = file + '.before-retention-first-delete'
@@ -117,6 +118,7 @@ it('auto-read increments revisions once without requiring a deletion backup', as
   const [id] = seed(1)
   await save(policy({ autoReadDays: 1 }))
   expect(db.entryState(id)).toEqual({ read: true, starred: false, revision: 1 })
+  expectMatchingEntryState(sql)
   expect(fs.existsSync(file + '.before-retention-first-delete')).toBe(false)
   service.wake(true); await service.drain()
   expect(db.entryState(id)?.revision).toBe(1)
@@ -321,7 +323,7 @@ it('keeps the article foreign-key inventory explicit for future schema changes',
     const table = String(row.name)
     return sql.prepare(`PRAGMA foreign_key_list("${table.replaceAll('"', '""')}")`).all().some(key => key.table === 'entries') ? [table] : []
   }).sort()
-  expect(references).toEqual(['annotations', 'article_arrivals', 'article_enclosures', 'article_urls', 'briefing_considered', 'coverage_cluster_entries', 'entry_search_rows',
+  expect(references).toEqual(['annotations', 'article_arrivals', 'article_enclosures', 'article_urls', 'briefing_considered', 'coverage_cluster_entries', 'entry_search_rows', 'entry_state',
     'headline_cache', 'muted_entries', 'pulse_memberships', 'pulse_scanned', 'reading_progress', 'retention_auto_read'].sort())
 })
 
