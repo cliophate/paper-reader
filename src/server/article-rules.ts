@@ -132,8 +132,9 @@ export class ArticleRules {
     }
     // Resolve every query against the incoming read/star snapshot before changing it.
     const matches = rules.map(({ query }) => {
-      const entries = this.db.prepare(`SELECT entries.id,entries.read,entries.starred
-        FROM json_each(?) batch CROSS JOIN entries ON entries.rowid=batch.value WHERE ${query.sql}`).all(batchIds, ...query.parameters)
+      const entries = this.db.prepare(`SELECT entries.id,entry_state.read,entry_state.starred
+        FROM json_each(?) batch CROSS JOIN entries ON entries.rowid=batch.value
+        CROSS JOIN entry_state ON entry_state.entry_id=entries.id WHERE ${query.sql}`).all(batchIds, ...query.parameters)
       return entries.map(row => ({ id: String(row.id), read: Boolean(row.read), starred: Boolean(row.starred) }))
     })
     rules.forEach((rule, index) => this.applyMatches(rule, matches[index], backendId, archive))

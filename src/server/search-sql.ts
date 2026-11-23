@@ -27,8 +27,11 @@ function compile(node: SearchNode, now: number, positive: string[], urlRows?: Sq
       if (!negated || !urlRows) positive.push(match)
       return { match }
     }
-    case 'state':
-      return { sql: node.value === 'starred' ? 'entries.starred = 1' : 'entries.read = ' + (node.value === 'read' ? '1' : '0'), parameters: [] }
+    case 'state': {
+      const state = node.value === 'starred' ? 'starred = 1' : 'read = ' + (node.value === 'read' ? '1' : '0')
+      if (!urlRows) return { sql: `entry_state.${state}`, parameters: [] }
+      return { sql: `entries.id IN (SELECT entry_id FROM entry_state WHERE ${state})`, parameters: [] }
+    }
     case 'before': case 'after':
       return { sql: 'entries.timestamp ' + (node.kind === 'before' ? '< ?' : '>= ?'), parameters: [searchDate(node.value, now)] }
     case 'url':

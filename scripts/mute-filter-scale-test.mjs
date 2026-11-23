@@ -26,15 +26,17 @@ async function measureRuleArrivals(db) {
     contentHtml: '<p>Synthetic arrival body.</p>', excerpt: '', publishedAt: '2026-01-01', timestamp: i,
     read: false, starred: false, readingMinutes: 1, thumbnailUrl: '', kind: 'article',
   }))
+  const textRules = Array.from({ length: 50 }, (_, rule) => {
+    const terms = Array.from({ length: 22 }, (_, term) => `absent${rule}x${term}`)
+    terms.push('title:article', `title:cohort${rule}x`)
+    return terms.join(' OR ')
+  })
   const results = []
   try {
-    for (const ruleCount of [0, 50]) {
+    for (const queries of [[], ['is:unread'], textRules]) {
       assert.equal(db.entryCount(), 200_000)
-      for (let rule = 0; rule < ruleCount; rule++) {
-        const terms = Array.from({ length: 22 }, (_, term) => `absent${rule}x${term}`)
-        terms.push('title:article', `title:cohort${rule}x`)
-        db.rules.save({ query: terms.join(' OR '), actions: ['hide'] })
-      }
+      assert.equal(db.unreadCount(), 200_000)
+      const ruleIds = queries.map(query => db.rules.save({ query, actions: ['hide'] }))
       let done = false, healthError
       const probes = []
       const health = (async () => {
@@ -51,15 +53,15 @@ async function measureRuleArrivals(db) {
       finally { done = true; await health }
       if (healthError) throw healthError
       const matches = db.muteFilters().reduce((sum, rule) => sum + rule.matchCount, 0)
-      assert.equal(matches, ruleCount ? 1000 : 0)
-      const report = { operation: 'rule-arrivals', ruleCount, termsPerRule: ruleCount ? 24 : 0,
+      assert.equal(matches, queries.length ? entries.length : 0)
+      const report = { operation: 'rule-arrivals', ruleCount: queries.length,
+        termsPerRule: queries[0]?.split(' OR ').length ?? 0, query: queries.length === 1 ? queries[0] : undefined,
         arrivals: entries.length, wallMs, matches, healthProbes: probes.length, healthMaxMs: Math.max(...probes) }
       console.log(JSON.stringify(report))
       assert.ok(probes.length > 1 && report.healthMaxMs < 2000)
       results.push(report)
-      if (!ruleCount) {
-        db.greaderDatabase.prepare('DELETE FROM entries WHERE id IN (SELECT value FROM json_each(?))').run(JSON.stringify(entries.map(entry => entry.id)))
-      }
+      for (const id of ruleIds) db.deleteMuteFilter(id)
+      db.greaderDatabase.prepare('DELETE FROM entries WHERE id IN (SELECT value FROM json_each(?))').run(JSON.stringify(entries.map(entry => entry.id)))
     }
     return results
   } finally { await new Promise(resolve => server.close(resolve)) }

@@ -381,6 +381,10 @@ it('yields between arrival batches and matches grouped FTS terms only on new row
     const queries = select.mock.contexts.map(statement => statement.sourceSQL).filter(sql => sql.includes('rule_words MATCH'))
     expect(queries).toHaveLength(5)
     expect(queries.every(sql => sql.match(/ MATCH /g)?.length === 1)).toBe(true)
+    const matchIndex = select.mock.contexts.findIndex(statement => statement.sourceSQL === queries[0])
+    const plan = db.greaderDatabase.prepare('EXPLAIN QUERY PLAN ' + queries[0]).all(...select.mock.calls[matchIndex])
+    expect(plan.map(row => row.detail).filter(detail => String(detail).includes('entry_state')))
+      .toEqual([expect.stringMatching(/SEARCH entry_state .*\(entry_id=\?\)/)])
   } finally { select.mockRestore() }
   expect(midBatchCount).toBeGreaterThan(1)
   expect(midBatchCount).toBeLessThan(513)

@@ -47,8 +47,9 @@ whole-feed transaction, including ambiguity records and the successful-fetch
 checkpoint. No response limits or article retention rules change.
 
 Search ranking and eligibility join FTS rowids through this mapping. A covering
-index contains the article ID, timestamps, read/star flags and feed ID, so these
-queries do not load article bodies merely to filter or rank results. Snippet
+index supplies article IDs, timestamps and feed IDs. Filters for read status
+and stars use `entry_state`. Paper loads article bodies after it selects the
+page. Snippet
 queries constrain the FTS rowid as well as `MATCH`. Results still use the full
 matching set and frozen pagination snapshots. Mandatory full-text terms supply
 the BM25 score. When a field or an exclusion can match by itself in an alternative,

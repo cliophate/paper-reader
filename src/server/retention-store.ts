@@ -69,10 +69,10 @@ export class RetentionStore {
   ceiling(): number { return Number(this.db.prepare('SELECT MAX(sequence) AS n FROM article_arrivals').get()?.n || 0) }
 
   candidates(cursor: number, ceiling: number, now: number): Candidate[] {
-    return this.db.prepare(`SELECT a.sequence, e.id, e.feed_id, e.title, e.first_seen_at, e.read,
+    return this.db.prepare(`SELECT s.arrival_sequence AS sequence, e.id, e.feed_id, e.title, s.first_seen_at, s.read,
       (SELECT json_group_array(folder_id) FROM feed_folders WHERE feed_id = e.feed_id) AS folder_ids,
       COALESCE((SELECT exempt FROM retention_auto_read WHERE entry_id = e.id), 0) AS auto_read_exempt,
-      (e.starred = 1
+      (s.starred = 1
         OR EXISTS (SELECT 1 FROM discussions WHERE entry_id = e.id)
         OR EXISTS (SELECT 1 FROM pulse_memberships WHERE entry_id = e.id)
         OR EXISTS (SELECT 1 FROM briefing_entries WHERE entry_id = e.id)
@@ -83,8 +83,8 @@ export class RetentionStore {
         OR e.id IN (SELECT entry_id FROM reading_progress ORDER BY updated_at DESC LIMIT 100)
         OR NOT EXISTS (SELECT 1 FROM retention_feeds WHERE feed_id = e.feed_id)
         OR EXISTS (SELECT 1 FROM retention_present WHERE feed_id = e.feed_id AND entry_id = e.id)) AS protected
-      FROM article_arrivals a JOIN entries e ON e.id = a.entry_id
-      WHERE a.sequence > ? AND a.sequence <= ? ORDER BY a.sequence LIMIT ?`)
+      FROM entry_state s JOIN entries e ON e.id = s.entry_id
+      WHERE s.arrival_sequence > ? AND s.arrival_sequence <= ? ORDER BY s.arrival_sequence LIMIT ?`)
       .all(new Date(now - 30 * DAY).toISOString(), cursor, ceiling, RETENTION_BATCH)
       .map(row => ({ ...row, folder_ids: JSON.parse(String(row.folder_ids)) })) as Candidate[]
   }

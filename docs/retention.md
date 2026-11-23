@@ -33,7 +33,7 @@ These rules also cover references stored as JSON or URLs.
 
 | Table or field | Retention decision |
 | --- | --- |
-| `entries.starred` | Protect starred articles. |
+| `entry_state.starred` | Protect starred articles. |
 | `annotations.entry_id` | Keep articles with a highlight or personal note, even if the passage has changed. |
 | `discussions.entry_id` | Protect every article with a discussion, including an empty discussion. |
 | `pulse_memberships.entry_id` | Protect every saved Pulse collection member. `pulse_collections` and `pulse_visits` remain. |

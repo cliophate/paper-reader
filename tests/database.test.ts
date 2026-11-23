@@ -202,6 +202,25 @@ describe('Paper read model', () => {
     expect(database.localRelativeUnreadEntryIds(folder, '3', 'below', { unreadOnly: true })).toEqual(['2', '1'])
   })
 
+  it('reads state from entry_state across web pages, search and offline lists', () => {
+    database.replaceNavigation(navigation)
+    database.upsertEntries([
+      entry({ id: 'a', timestamp: 30, crawledAt: 20, read: true }),
+      entry({ id: 'z', timestamp: 30, crawledAt: 10, read: true }),
+    ])
+    database.greaderDatabase.exec('UPDATE entry_state SET read = 0, starred = 1, state_revision = 7')
+    const stream = { kind: 'starred' as const, id: 'starred', title: 'Starred' }
+    const first = database.localEntriesPage(stream, { limit: 1, unreadOnly: true })
+    expect(first.items).toMatchObject([{ id: 'a', read: false, starred: true, stateRevision: 7 }])
+    const next = database.localEntriesPage(stream, { limit: 1, unreadOnly: true, continuation: first.continuation })
+    expect(next.items.map(e => e.id)).toEqual(['z'])
+    expect(database.previewUnread(stream, {}, true).revisions).toEqual({ a: 7, z: 7 })
+    expect(database.localEntriesPage(stream, { query: 'is:unread is:starred' }).items.map(e => e.id)).toEqual(['a', 'z'])
+    expect(database.localEntries(stream, { unreadOnly: true }).map(e => e.id)).toEqual(['z', 'a'])
+    expect(database.localNavigation()).toMatchObject({ unread: 2, starred: 2, folders: [{ unread: 2 }] })
+    expect(database.localEntry('z')).toMatchObject({ read: false, starred: true, stateRevision: 7 })
+  })
+
   it('builds navigation and stream counts from indexed entries', () => {
     database.replaceNavigation(navigation)
     database.upsertEntries([

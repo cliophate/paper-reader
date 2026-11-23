@@ -168,18 +168,18 @@ try {
     const state = stream === 'sparse-starred' ? 'starred' : stream
     const q = { backend: backend.id, stream: { kind: 'state', id: state }, it: [], xt: [], ot: 0, nt: 0, order: 'DESC', n: 250 }
     const filter = where(q), scan = scanPageFrom(check.greaderDatabase,q)
-    const plan = check.greaderDatabase.prepare(`EXPLAIN QUERY PLAN SELECT a.sequence ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY a.sequence DESC LIMIT 251`).all(...filter.args).map(row => row.detail).join('; ')
+    const plan = check.greaderDatabase.prepare(`EXPLAIN QUERY PLAN SELECT s.arrival_sequence ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY s.arrival_sequence DESC LIMIT 251`).all(...filter.args).map(row => row.detail).join('; ')
     console.log(`${stream} plan:`, plan)
-    if (stream !== 'starred') assert(plan.includes(`INDEX greader_${state}`), plan)
+    assert(plan.includes(`INDEX state_${state}_arrival`), plan)
     const result = JSON.parse((await call('stream/items/ids', [['s', `user/-/state/com.google/${state}`], ['n', '250']])).text)
     assert.equal(result.itemRefs.length, stream === 'starred' ? 250 : 2)
   }
   const dated = { backend: backend.id, stream: { kind: 'state', id: 'reading-list' }, it: [], xt: [], ot: Math.ceil(Date.now()/1000) + 60, nt: 0, order: 'DESC', n: 250 }
   const datedFilter = where(dated), datedScan = scanPageFrom(check.greaderDatabase,dated)
-  const datePlan = check.greaderDatabase.prepare(`EXPLAIN QUERY PLAN SELECT a.sequence ${datedScan.from} WHERE ${datedFilter.sql}${datedScan.extra} ORDER BY a.sequence DESC LIMIT 251`).all(...datedFilter.args).map(row => row.detail).join('; ')
+  const datePlan = check.greaderDatabase.prepare(`EXPLAIN QUERY PLAN SELECT s.arrival_sequence ${datedScan.from} WHERE ${datedFilter.sql}${datedScan.extra} ORDER BY s.arrival_sequence DESC LIMIT 251`).all(...datedFilter.args).map(row => row.detail).join('; ')
   console.log('sparse date plan:', datePlan)
-  for (const index of ['entries_first_seen_idx', 'greader_modified', 'greader_feed_modified', 'entries_feed_published_idx']) assert(datePlan.includes(index), datePlan)
-  assert(!/SCAN (e|a)\b/.test(datePlan), datePlan)
+  for (const index of ['state_first_seen', 'state_modified', 'greader_feed_modified', 'state_feed']) assert(datePlan.includes(index), datePlan)
+  assert(!/SCAN s\b/.test(datePlan), datePlan)
   check.close()
   const controllers = Array.from({length:8}, () => new AbortController())
   const cancelled = controllers.map(controller => fetch(root + '/reader/api/0/stream/items/contents', { method: 'POST', headers, body: new URLSearchParams(content), signal: controller.signal }).then(response => response.text()).catch(() => {}))

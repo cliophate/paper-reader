@@ -397,6 +397,16 @@ it('runs query actions once on arrival and undoes the fields changed by an archi
   expect(db.rules.hidden(id, '').items).toHaveLength(1)
 })
 
+it('uses the narrow state row to match and apply archive rule actions', async () => {
+  const [entry] = ingest('Archive article').results
+  if (entry.status !== 'resolved') throw new Error('Fixture identity failed')
+  db.commitLocalEntryState(backend, [entry.id], 'read', { fields: { read: true, starred: true } })
+  db.greaderDatabase.prepare('UPDATE entry_state SET read=0, starred=0 WHERE entry_id=?').run(entry.id)
+  db.rules.save({ query: 'is:unread -is:starred', actions: ['read', 'star'], applyExisting: true })
+  await db.backfillMuteFilters()
+  expect(db.entryState(entry.id)).toMatchObject({ read: true, starred: true })
+})
+
 it('applies a rule only to its target within the configured folder', async () => {
   db.organization.apply(backend, db.organization.snapshot(backend).revision, [{ type: 'create-folder', title: 'Science' }])
   const folderId = db.organization.snapshot(backend).navigation.folders[0].id
