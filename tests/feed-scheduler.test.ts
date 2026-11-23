@@ -1,3 +1,4 @@
+import { expectMatchingEntryState, legacyStateColumns } from './fixtures/entry-state.js'
 import { archivedBackup } from './fixtures/migration-backup.js'
 import { EXTRACTION_TIMEOUT_MS } from '../src/server/feed-extraction.js'
 import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION } from '../src/server/auth-schema.js'
@@ -56,6 +57,7 @@ describe('standalone collector', () => {
     const hidden = db.rules.save({ query: 'is:unread -title:"Topic 1"', actions: ['hide'] })
     expect(await scheduler(origin).runDue()).toMatchObject({ fetched: 1 })
     expect(db.entryCount()).toBe(257)
+    expectMatchingEntryState(db.greaderDatabase)
     expect(db.unreadCount()).toBe(0)
     expect(db.muteFilters(hidden)[0].matchCount).toBe(256)
     expect(checkpoint(feed)).toBeTruthy()
@@ -443,7 +445,7 @@ describe('schema v13 recovery', () => {
 describe('schema v9 recovery', () => {
   function downgrade() {
     db.close()
-    sql(c => c.exec('DROP TABLE feed_http_slots; DROP TABLE feed_fetch_state; PRAGMA user_version = 8'))
+    sql(c => c.exec(legacyStateColumns + 'DROP TABLE feed_http_slots; DROP TABLE feed_fetch_state; PRAGMA user_version = 8'))
     db = new PaperDatabase(':memory:')
   }
   it('backs up v8, seeds existing endpoints and preserves generation on reopen', () => {

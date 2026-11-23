@@ -118,12 +118,37 @@ the migration backup from schema v16.
 
 ### Article state migration and recovery
 
+When upgrading from v32 to v33, stop Paper and briefing commands, back up the
+data directory and start the new build. Startup takes the migration lock,
+saves and verifies `paper.sqlite.before-entry-state-writes-v33`, then rebuilds
+the article table. Allow disk space for the backup, the replacement table and
+SQLite's write-ahead log. Reader clients can reconnect when startup completes.
+Article numbers, search results, read status and stars carry over.
+
+On the test machine, the upgrade took about 45 seconds for 200,000 articles
+and 16 minutes for 1 million, including the backup. Paper's health check
+passes once the server is ready. The shipped Compose file allows 30 minutes
+for startup. Set a similar `start_period` in custom Compose files and allow
+longer for slower storage.
+
+After the rebuild, `paper.sqlite` stays larger. One small test database grew
+by about 55%. SQLite reuses the freed pages as the library grows. To reclaim
+the disk space sooner, stop Paper and briefing commands and run `VACUUM`
+on the database offline.
+
+To return to v32, stop Paper and briefing commands again. Keep the entire
+current data directory. In a separate copy, restore
+`paper.sqlite.before-entry-state-writes-v33` as `paper.sqlite` and remove any
+`paper.sqlite-wal` and `paper.sqlite-shm` files. Start the previous v32 build
+against that copy. Edits made after the upgrade remain in the preserved
+directory. FreshRSS and Miniflux keep changes already sent upstream.
+
 Source builds with schema v30 copy article state into a separate table. Allow
 space for a full database backup and the new table and indexes. Downtime grows
 with database size. On the test machine, the upgrade took about 25 seconds for
 200,000 articles and 5 minutes for 1 million. Most of that time went into the
 backup. If you use a custom Compose file, set the reader's health check
-`start_period` to `10m`, as in the shipped file.
+`start_period` to `30m` to match the shipped file.
 
 To roll back to v29, stop Paper and briefing commands and preserve the current data directory.
 In a separate copy, restore `paper.sqlite.before-entry-state-v30` as `paper.sqlite`

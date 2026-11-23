@@ -11,8 +11,8 @@ import { AI_ACTIVITY_VERSION, AiActivityStore, migrateAiActivity } from './ai-ac
 import { migrateFeedCheckSettings } from './feed-check-settings.js'
 import { migrateRetention, saveRetentionBriefingReferences } from './retention-schema.js'
 import { RetentionStore } from './retention-store.js'
-import { ARTICLE_LABELS_VERSION, migrateArticleLabels, migrateGreader } from './greader-schema.js'
-import { ENTRY_STATE_VERSION, migrateEntryState } from './entry-state-schema.js'
+import { advanceReaderClock, ARTICLE_LABELS_VERSION, migrateArticleLabels, migrateGreader } from './greader-schema.js'
+import { ENTRY_STATE_VERSION, ENTRY_STATE_WRITES_VERSION, migrateEntryState, migrateEntryStateWrites } from './entry-state-schema.js'
 import { ANNOTATIONS_VERSION, AnnotationStore, hasAnnotations, migrateAnnotations } from './annotations.js'
 import { DATABASE_VERSION, FEED_MAINTENANCE_VERSION, FEED_OVERRIDE_VERSION, migrateAuth } from './auth-schema.js'
 import { AuthStore } from './auth-store.js'
@@ -29,7 +29,7 @@ import { FeedFetchStore, migrateFeedFetchState } from './feed-fetch-state.js'
 import { migrateStandaloneSetup } from './migration-schema.js'
 import { parseSearch, SearchLimitError } from './search-query.js'
 import { compileSearch } from './search-sql.js'
-import { migrateSearchRows } from './search-schema.js'
+import { migrateSearchRows, rebuildSearchRows } from './search-schema.js'
 import { migrateLinkNumbers } from './link-numbers.js'
 import { migrateBackendKinds } from './backend-schema.js'
 import { FeedIconStore, migrateFeedIcons } from './feed-icon-store.js'
@@ -319,6 +319,15 @@ export class PaperDatabase {
           if (version > 0) this.backupBeforeMigration(SAVED_VIEWS_VERSION, 'saved-views')
           migrateSavedViews(this.db)
         }
+        if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < ENTRY_STATE_WRITES_VERSION) {
+          const started = performance.now()
+          if (version > 0) {
+            console.info('Starting schema v33 migration backup')
+            this.backupBeforeMigration(ENTRY_STATE_WRITES_VERSION, 'entry-state-writes')
+          }
+          migrateEntryStateWrites(this.db)
+          if (version > 0) console.info(`Schema v33 migration finished in ${((performance.now() - started) / 1000).toFixed(1)} s`)
+        }
       }
       this.savedViews = new SavedViews(this.db)
       this.rules = new ArticleRules(this)
@@ -382,7 +391,7 @@ export class PaperDatabase {
         }
       } finally { backup.close() }
       if (fs.existsSync(backupPath)) {
-        fs.renameSync(backupPath, `${backupPath}.${Date.now()}-${crypto.randomUUID()}`)
+        fs.linkSync(backupPath, `${backupPath}.${Date.now()}-${crypto.randomUUID()}`)
       }
       fs.renameSync(temporaryPath, backupPath)
     } finally { fs.rmSync(temporaryPath, { force: true }) }
@@ -537,9 +546,9 @@ export class PaperDatabase {
       const fields = options.fields || { [column]: value }
       const changed = states.filter(state => (fields.read !== undefined && state.read !== fields.read) || (fields.starred !== undefined && state.starred !== fields.starred))
       // Prepare once per batch, and advance the clock in the state write so the
-      // fallback trigger does not rewrite each article during bulk changes.
-      const update = this.db.prepare(`UPDATE entries SET read = ?, starred = ?, state_revision = state_revision + 1,
-        greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE id = ?`)
+      // fallback trigger can skip a second write.
+      const update = this.db.prepare(`UPDATE entry_state SET read = ?, starred = ?, state_revision = state_revision + 1,
+        ${advanceReaderClock} WHERE entry_id = ?`)
       for (const state of changed) update.run(Number(fields.read ?? state.read), Number(fields.starred ?? state.starred), state.id)
       if (fields.read === false) {
         const exempt = this.db.prepare('UPDATE retention_auto_read SET exempt = 1 WHERE entry_id = ?')
@@ -602,7 +611,15 @@ export class PaperDatabase {
   }
 
   private migrate(backupAuth: boolean) {
-    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) >= 11 && this.getSyncValue('fulltext_search_v1') === 'true') {
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) >= 11) {
+      if (this.getSyncValue('fulltext_search_v1') !== 'true') transaction(this.db, () => {
+        const update = this.db.prepare('UPDATE entries SET full_content_text = ? WHERE url = ? OR canonical_url = ?')
+        for (const article of this.db.prepare('SELECT url, content_html FROM article_cache').iterate()) {
+          update.run(plainText(String(article.content_html)), article.url, normalizeUrl(String(article.url)))
+        }
+        rebuildSearchRows(this.db)
+        this.setSyncValueInTransaction('fulltext_search_v1', 'true')
+      })
       if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 12) migrateLinkNumbers(this.db)
       if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 13) migrateFeedCheckSettings(this.db)
       if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) < 14) migrateRetention(this.db)
@@ -1030,8 +1047,8 @@ export class PaperDatabase {
       INSERT INTO entries (
         id, feed_id, feed_title, feed_url, title, author, url, canonical_url,
         source_domain, content_html, content_text, excerpt, published_at, timestamp,
-        crawled_at, read, starred, reading_minutes, thumbnail_url, kind, synced_at, first_seen_at, source_order, enclosures_checked
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        crawled_at, reading_minutes, thumbnail_url, kind, synced_at, first_seen_at, source_order, enclosures_checked
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         feed_id = excluded.feed_id,
         feed_title = excluded.feed_title,
@@ -1050,14 +1067,19 @@ export class PaperDatabase {
         crawled_at = excluded.crawled_at,
         enclosures_checked = max(entries.enclosures_checked, excluded.enclosures_checked),
         source_order = CASE WHEN excluded.source_order = '' THEN entries.source_order ELSE excluded.source_order END,
-        read = entries.read,
-        starred = entries.starred,
         reading_minutes = excluded.reading_minutes,
         thumbnail_url = excluded.thumbnail_url,
         kind = excluded.kind,
         synced_at = excluded.synced_at
     `)
     transaction(this.db, () => {
+      const exists = this.db.prepare('SELECT 1 FROM entry_state WHERE entry_id=?')
+      // Imported stars keep the arrival clock and do not send a star webhook.
+      // Only replace the default row created by this insert.
+      const initialState = this.db.prepare(`INSERT OR REPLACE INTO entry_state
+        (arrival_sequence, entry_id, feed_id, read, starred, state_revision, greader_modified_ms, timestamp, first_seen_at)
+        SELECT arrival_sequence, entry_id, feed_id, ?, ?, state_revision, greader_modified_ms, timestamp, first_seen_at
+        FROM entry_state WHERE entry_id=?`)
       const applyRules = this.rules.prepareIngest(this.activeBackendId)
       const muteRules = this.db.prepare("SELECT id, phrase, scope, feed_id FROM mute_filters WHERE scope!='query'").all() as Array<{ id: string; phrase: string; scope: MuteFilterScope; feed_id: string }>
       const oldMuteMatches = this.db.prepare(`SELECT m.filter_id FROM muted_entries m JOIN mute_filters f ON m.filter_id=f.id
@@ -1069,14 +1091,16 @@ export class PaperDatabase {
         this.assertImportedIdentity(entry)
         const contentText = plainText(entry.contentHtml)
         const canonicalUrl = normalizeUrl(entry.url)
+        const initializeState = (entry.read || entry.starred) && !exists.get(entry.id)
         statement.run(
           entry.id, entry.feedId, entry.feedTitle, entry.feedUrl, entry.title, entry.author,
           entry.url, canonicalUrl, sourceDomain(canonicalUrl || entry.feedUrl), entry.contentHtml,
           contentText, entry.excerpt, entry.publishedAt, entry.timestamp,
           entry.crawledAt || entry.timestamp,
-          entry.read ? 1 : 0, entry.starred ? 1 : 0, entry.readingMinutes,
+          entry.readingMinutes,
           entry.thumbnailUrl, entry.kind, now, Date.parse(now), entry.sourceOrder || '', entry.enclosures ? 1 : 0,
         )
+        if (initializeState) initialState.run(entry.read ? 1 : 0, entry.starred ? 1 : 0, entry.id)
         if (entry.enclosures) replaceEnclosures(this.db, entry.id, entry.enclosures)
         const cached = hasCachedArticles && this.getArticleForEntry(entry.id)
         const fullContentText = cached ? plainText(cached.contentHtml) : ''
@@ -1117,12 +1141,16 @@ export class PaperDatabase {
       for (const id of starredIds) addStarred.run(id)
       const readToUnreadRows = this.db.prepare(`SELECT entry_id AS id FROM entry_state WHERE read = 1 AND EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entry_state.entry_id)`).all() as Array<{ id: string }>
       const unreadToReadRows = this.db.prepare(`SELECT entry_id AS id FROM entry_state WHERE read = 0 AND NOT EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entry_state.entry_id)`).all() as Array<{ id: string }>
-      this.db.prepare('UPDATE entries SET read = 1 WHERE read = 0 AND NOT EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entries.id)').run()
-      this.db.prepare('UPDATE entries SET read = 0 WHERE read = 1 AND EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entries.id)').run()
-      this.db.prepare('UPDATE entries SET starred = 0 WHERE starred = 1 AND NOT EXISTS (SELECT 1 FROM incoming_starred WHERE incoming_starred.id = entries.id)').run()
+      this.db.prepare(`UPDATE entry_state SET read = 1, ${advanceReaderClock}
+        WHERE read = 0 AND NOT EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entry_state.entry_id)`).run()
+      this.db.prepare(`UPDATE entry_state SET read = 0, ${advanceReaderClock}
+        WHERE read = 1 AND EXISTS (SELECT 1 FROM incoming_unread WHERE incoming_unread.id = entry_state.entry_id)`).run()
+      this.db.prepare(`UPDATE entry_state SET starred = 0, ${advanceReaderClock}
+        WHERE starred = 1 AND NOT EXISTS (SELECT 1 FROM incoming_starred WHERE incoming_starred.id = entry_state.entry_id)`).run()
       const initialSnapshot = !this.getSyncValue('state_synced_at') || this.getSyncValue('backfill_complete') !== 'true'
       if (initialSnapshot) this.db.exec("INSERT INTO sync_state(key,value) VALUES ('webhook_importing_stars','1')")
-      this.db.prepare('UPDATE entries SET starred = 1 WHERE starred = 0 AND EXISTS (SELECT 1 FROM incoming_starred WHERE incoming_starred.id = entries.id)').run()
+      this.db.prepare(`UPDATE entry_state SET starred = 1, ${advanceReaderClock}
+        WHERE starred = 0 AND EXISTS (SELECT 1 FROM incoming_starred WHERE incoming_starred.id = entry_state.entry_id)`).run()
       if (initialSnapshot) this.db.exec("DELETE FROM sync_state WHERE key='webhook_importing_stars'")
       this.setSyncValueInTransaction('state_synced_at', new Date().toISOString())
       this.db.exec('COMMIT')
@@ -1142,11 +1170,11 @@ export class PaperDatabase {
     if (!ids.length) return
     const column = operation === 'read' || operation === 'unread' ? 'read' : 'starred'
     const value = operation === 'read' || operation === 'star' ? 1 : 0
-    const statement = this.db.prepare(`UPDATE entries SET ${column} = ? WHERE id = ?`)
+    const statement = this.db.prepare(`UPDATE entry_state SET ${column} = ?, ${advanceReaderClock} WHERE entry_id = ? AND ${column} != ?`)
     transaction(this.db, () => {
       const clear = this.db.prepare('DELETE FROM rule_remote_state WHERE operation=? AND entry_id=?')
       for (const id of ids) {
-        statement.run(value, id)
+        statement.run(value, id, value)
         clear.run(column === 'read' ? 'read' : 'star', id)
       }
     })

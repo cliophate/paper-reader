@@ -22,10 +22,12 @@ try {
   const sql = db.greaderDatabase
   const body = '<p>' + 'Synthetic body text for the reader performance regression. '.repeat(68) + '</p>'
   db.transaction(() => {
-    const insert = sql.prepare(`INSERT INTO entries(id, feed_id, feed_title, feed_url, title, author, url, canonical_url, source_domain, content_html, content_text, excerpt, published_at, timestamp, first_seen_at, reading_minutes, thumbnail_url, kind, synced_at, starred)
-      VALUES (?, ?, 'Synthetic', 'https://example.test', 'Synthetic article', '', 'https://example.test/article', '', 'example.test', ?, ?, '', '', ?, ?, 1, '', 'article', '', ?)`)
+    const insert = sql.prepare(`INSERT INTO entries(id, feed_id, feed_title, feed_url, title, author, url, canonical_url, source_domain, content_html, content_text, excerpt, published_at, timestamp, first_seen_at, reading_minutes, thumbnail_url, kind, synced_at)
+      VALUES (?, ?, 'Synthetic', 'https://example.test', 'Synthetic article', '', 'https://example.test/article', '', 'example.test', ?, ?, '', '', ?, ?, 1, '', 'article', '')`)
     const identity = sql.prepare('INSERT INTO article_identities VALUES (?, ?, ?)')
-    for (let i = 0; i < count; i++) { const id = `synthetic-${i}`, feed = feeds[i < largeFeedCount ? 0 : i < largeFeedCount + 10000 ? 1 : 2 + i % (feedCount - 2)]; identity.run(id, backend.id, feed); insert.run(id, feed, body, body, 1000000, 1000000, Number(i % 2 === 0)) }
+    for (let i = 0; i < count; i++) { const id = `synthetic-${i}`, feed = feeds[i < largeFeedCount ? 0 : i < largeFeedCount + 10000 ? 1 : 2 + i % (feedCount - 2)]; identity.run(id, backend.id, feed); insert.run(id, feed, body, body, 1000000, 1000000) }
+    sql.exec(`UPDATE entry_state SET starred=1 WHERE arrival_sequence % 2 = 1;
+      UPDATE entry_state SET greader_modified_ms=first_seen_at WHERE starred=1`)
     for (const title of ['First', 'Second']) {
       const snapshot = db.organization.metadata(backend.id)
       const result = db.organization.apply(backend.id, snapshot.revision, [{ type: 'create-folder', title }])
@@ -156,13 +158,13 @@ try {
   const deferred = await fetch(root + '/reader/api/0/mark-all-as-read', { method: 'POST', headers, body: new URLSearchParams({ s: 'user/-/state/com.google/reading-list', T: token }) })
   assert.equal(deferred.status, 404); assert.deepEqual(await deferred.json(), { errors: ['Not found.'] })
   // Prepare sparse state in a separate fixture process. This is not an API endpoint.
-  const prepare = spawn(process.execPath, ['--input-type=module', '-e', `import { DatabaseSync } from 'node:sqlite'; const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA busy_timeout=5000; UPDATE entries SET read=1; UPDATE entries SET read=0 WHERE rowid IN (2,3)'); db.close()`, file], { env: {}, stdio: 'ignore' })
+  const prepare = spawn(process.execPath, ['--input-type=module', '-e', `import { DatabaseSync } from 'node:sqlite'; const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA busy_timeout=5000; UPDATE entry_state SET read=1; UPDATE entry_state SET read=0 WHERE arrival_sequence IN (2,3)'); db.close()`, file], { env: {}, stdio: 'ignore' })
   assert.equal((await once(prepare, 'exit'))[0], 0)
   const check = new PaperDatabase(file, { readOnly: true })
   assert.equal(check.entryState('synthetic-1').starred, true)
   for (const stream of ['unread', 'starred', 'sparse-starred']) {
     if (stream === 'sparse-starred') {
-      const sparse = spawn(process.execPath, ['--input-type=module', '-e', `import { DatabaseSync } from 'node:sqlite'; const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA busy_timeout=5000; UPDATE entries SET starred=0 WHERE starred=1; UPDATE entries SET starred=1 WHERE rowid IN (2,3)'); db.close()`, file], { env: {}, stdio: 'ignore' })
+      const sparse = spawn(process.execPath, ['--input-type=module', '-e', `import { DatabaseSync } from 'node:sqlite'; const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA busy_timeout=5000; UPDATE entry_state SET starred=0 WHERE starred=1; UPDATE entry_state SET starred=1 WHERE arrival_sequence IN (2,3)'); db.close()`, file], { env: {}, stdio: 'ignore' })
       assert.equal((await once(sparse, 'exit'))[0], 0)
     }
     const state = stream === 'sparse-starred' ? 'starred' : stream

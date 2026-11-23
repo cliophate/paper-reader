@@ -83,7 +83,7 @@ it('uses stored read status and stars to decide which articles to delete', async
 
 it('protects every saved category but removes derived metadata with the article', async () => {
   const ids = seed(10)
-  sql.prepare('UPDATE entries SET starred = 1 WHERE id = ?').run(ids[0])
+  sql.prepare('UPDATE entry_state SET starred = 1 WHERE entry_id = ?').run(ids[0])
   sql.prepare('INSERT INTO discussions VALUES (?, ?)').run(ids[1], '{}')
   sql.exec("INSERT INTO pulse_collections VALUES ('pulse', 'Saved', 'all', '2026-01-01')")
   sql.prepare("INSERT INTO pulse_memberships(collection_id, entry_id, added_at) VALUES ('pulse', ?, '2026-01-01')").run(ids[2])
@@ -119,7 +119,7 @@ it('matches preview and actual counts after auto-read and keeps FTS and revision
   expect(fs.statSync(backup).mode & 0o777).toBe(0o600)
   const saved = new DatabaseSync(backup, { readOnly: true })
   expect(saved.prepare('SELECT COUNT(*) n FROM entries').get()?.n).toBe(205)
-  expect(saved.prepare('SELECT read FROM entries WHERE id = ?').get(ids[0])?.read).toBe(0)
+  expect(saved.prepare('SELECT read FROM entry_state WHERE entry_id = ?').get(ids[0])?.read).toBe(0)
   saved.close()
   expect(db.activity().some(event => event.kind === 'retention' && event.count === 205)).toBe(true)
 })
@@ -172,7 +172,7 @@ it('resumes an interrupted cursor after reopening without repeating committed wo
   db.close(); db = new PaperDatabase(file); service = new RetentionService(db, backend)
   service.wake(); await service.drain()
   expect(db.retention.lastRun()).toMatchObject({ marked: 250, batches: 3 })
-  expect(sql.prepare('SELECT MAX(state_revision) n FROM entries').get()?.n).toBe(1)
+  expect(sql.prepare('SELECT MAX(state_revision) n FROM entry_state').get()?.n).toBe(1)
 })
 
 it('rolls back a failed deletion batch including tombstones and its cursor', () => {
@@ -192,7 +192,7 @@ it('requires a matching preview, rejects stale settings and rechecks newly prote
   expect(() => service.save(p, 0)).toThrow(/Preview/)
   const preview = await service.preview(p)
   expect(() => service.save(policy({ unreadDays: 2 }), 0, preview.token)).toThrow(/Preview/)
-  sql.prepare('UPDATE entries SET starred = 1 WHERE id = ?').run(id)
+  sql.prepare('UPDATE entry_state SET starred = 1 WHERE entry_id = ?').run(id)
   service.save(p, 0, preview.token); await service.drain()
   expect(db.retention.lastRun()?.deleted).toBe(0)
   expect(() => service.save(defaultPolicy(), 0)).toThrow(/changed/)
@@ -339,11 +339,11 @@ it('keeps the article foreign-key inventory explicit for future schema changes',
 
 it('backs up before earlier marking batches when deletion first occurs in a later batch', async () => {
   const ids = seed(205)
-  for (const id of ids.slice(0, 100)) sql.prepare('UPDATE entries SET starred = 1 WHERE id = ?').run(id)
+  for (const id of ids.slice(0, 100)) sql.prepare('UPDATE entry_state SET starred = 1 WHERE entry_id = ?').run(id)
   await save(policy({ autoReadDays: 1, readDays: 1 }))
   expect(db.retention.lastRun()).toMatchObject({ marked: 205, deleted: 105 })
   const saved = new DatabaseSync(file + '.before-retention-first-delete', { readOnly: true })
-  try { expect(saved.prepare('SELECT COUNT(*) n FROM entries WHERE read = 1').get()?.n).toBe(0) } finally { saved.close() }
+  try { expect(saved.prepare('SELECT COUNT(*) n FROM entry_state WHERE read = 1').get()?.n).toBe(0) } finally { saved.close() }
 })
 
 
@@ -372,14 +372,14 @@ it('commits auto-read activity and bounded state notifications after every batch
   const notifications: unknown[] = [], committed: number[] = []
   state.onStateChanged(change => {
     notifications.push(change)
-    committed.push(Number(sql.prepare('SELECT COUNT(*) n FROM entries WHERE read = 1').get()?.n))
+    committed.push(Number(sql.prepare('SELECT COUNT(*) n FROM entry_state WHERE read = 1').get()?.n))
   })
   await save(policy({ autoReadDays: 1 }))
   expect(notifications).toEqual([null, null, null])
   expect(committed).toEqual([100, 200, 205])
   const activity = db.activity().filter(event => event.kind === 'state' && event.origin === 'retention')
   expect(activity.map(event => event.count).sort((a, b) => a - b)).toEqual([5, 100, 100])
-  expect(sql.prepare('SELECT COUNT(*) n FROM entries WHERE state_revision = 1').get()?.n).toBe(205)
+  expect(sql.prepare('SELECT COUNT(*) n FROM entry_state WHERE state_revision = 1').get()?.n).toBe(205)
 })
 
 it('uses the most conservative override across every folder and honors feed priority', async () => {

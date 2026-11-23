@@ -28,13 +28,15 @@ function seedPreviewArticles(entries: Entry[]) {
     const insert = sql.prepare(`INSERT INTO entries (
       id, feed_id, feed_title, feed_url, title, author, url, canonical_url,
       source_domain, content_html, content_text, excerpt, published_at, timestamp,
-      crawled_at, read, starred, reading_minutes, thumbnail_url, kind, synced_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'example.test', ?, 'A short teaser.', ?, ?, ?, ?, ?, ?, ?, ?, ?, '')`)
+      crawled_at, reading_minutes, thumbnail_url, kind, synced_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'example.test', ?, 'A short teaser.', ?, ?, ?, ?, ?, ?, ?, '')`)
+    const state = sql.prepare('UPDATE entry_state SET read=?, starred=? WHERE entry_id=?')
     for (const entry of entries) {
       insert.run(entry.id, entry.feedId, entry.feedTitle, entry.feedUrl, entry.title, entry.author,
         entry.url, entry.url, entry.contentHtml, entry.excerpt, entry.publishedAt, entry.timestamp,
-        entry.crawledAt || entry.timestamp, entry.read ? 1 : 0, entry.starred ? 1 : 0,
+        entry.crawledAt || entry.timestamp,
         entry.readingMinutes, entry.thumbnailUrl, entry.kind)
+      if (entry.read || entry.starred) state.run(Number(entry.read), Number(entry.starred), entry.id)
     }
     sql.exec('COMMIT')
   } finally {

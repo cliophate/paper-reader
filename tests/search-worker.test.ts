@@ -40,7 +40,7 @@ it('runs the source worker and preserves full ranked snapshots, fresh eligibilit
     persist(snapshot)
     // This runs after ranking but before final eligibility. WAL reads never
     // compete with the parent's normal writer or hold a transaction across RPC.
-    sql(db => db.exec("UPDATE entries SET read=1,state_revision=1 WHERE id='11'; UPDATE entries SET starred=1,state_revision=2 WHERE id='10'"))
+    sql(db => db.exec("UPDATE entry_state SET read=1,state_revision=1 WHERE entry_id='11'; UPDATE entry_state SET starred=1,state_revision=2 WHERE entry_id='10'"))
   })
   const page = await service.search(all, options)
   expect(expected.items.map(item => item.id)).toEqual(['11', '10', '9'])
@@ -49,7 +49,7 @@ it('runs the source worker and preserves full ranked snapshots, fresh eligibilit
   const cursor = JSON.parse(Buffer.from(page.continuation, 'base64url').toString())
   expect(sql(db => JSON.parse(String(db.prepare('SELECT ids_json FROM search_pages WHERE id=?').get(cursor.snapshot)?.ids_json)))).toHaveLength(12)
   save.mockImplementation(persist)
-  sql(db => db.exec("UPDATE entries SET read=1,state_revision=1 WHERE id='7'"))
+  sql(db => db.exec("UPDATE entry_state SET read=1,state_revision=1 WHERE entry_id='7'"))
   database.upsertEntries([entry(99)])
   const next = await service.search(all, { ...options, continuation: page.continuation })
   expect(next.items.map(item => item.id)).toEqual(['6', '5', '4'])
@@ -141,7 +141,7 @@ it('marks below an auto-read anchor using its original snapshot and current cand
   const page = await service.search(all, options)
   const anchor = page.items[1]
   expect(anchor.id).toBe('10')
-  sql(db => db.exec("UPDATE entries SET read=1,state_revision=1 WHERE id IN ('10','8')"))
+  sql(db => db.exec("UPDATE entry_state SET read=1,state_revision=1 WHERE entry_id IN ('10','8')"))
   database.upsertEntries([{ ...entry(99), timestamp: 5 }])
   const selection = { kind: 'relative', anchorId: anchor.id, direction: 'below', snapshot: anchor.searchSnapshot, withRevisions: true } as const
   const below = await service.select(all, options, selection)
@@ -182,11 +182,11 @@ it('pages saved queries in stream order and confines searches and bulk reads to 
   expect(database.savedViews.list()).toMatchObject([{ id: other, query: 'after:7d' }])
 })
 
-it('uses entry_state for a saved view when the entries row still says read', async () => {
+it('uses the current read and star state for a saved view', async () => {
   const id = database.savedViews.save({ title: 'Unread', query: 'title:synthetic is:unread' })
   const view = { kind: 'view' as const, id, title: 'Unread' }
   sql(db => db.exec(`
-    UPDATE entries SET read=1;
+    UPDATE entry_state SET read=1;
     UPDATE entry_state SET read=0, starred=1, state_revision=7 WHERE entry_id='11';
   `))
 
@@ -218,7 +218,7 @@ it('coalesces sidebar counts and gives searches and bulk previews the next worke
   expect(jobs()).toHaveLength(15)
   database.editLocalEntryState(['0'], 'read')
   expect((await service.savedViewCounts())['1'].count).toBe(11)
-  sql(db => db.exec("UPDATE entries SET read=1 WHERE id='1'"))
+  sql(db => db.exec("UPDATE entry_state SET read=1 WHERE entry_id='1'"))
   expect((await service.savedViewCounts())['1'].count).toBe(10)
   database.savedViews.save({ title: 'Stars', query: 'is:starred', revision: 1 }, '1')
   expect((await service.savedViewCounts())['1'].count).toBe(0)
