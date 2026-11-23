@@ -1,7 +1,7 @@
 import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import { archivedBackup } from './fixtures/migration-backup.js'
 import { dropEntryState, expectMatchingEntryState } from './fixtures/entry-state.js'
-import { ENTRY_STATE_VERSION } from '../src/server/entry-state-schema.js'
+import { ENTRY_STATE_VERSION, ENTRY_STATE_WRITES_VERSION, migrateEntryState } from '../src/server/entry-state-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -33,9 +33,9 @@ describe('Paper read model', () => {
     const file = database.searchDatabasePath
     const backup = file + '.before-entry-state-v' + ENTRY_STATE_VERSION
     const sql = database.greaderDatabase
-    sql.exec(dropEntryState + 'PRAGMA user_version = ' + (ENTRY_STATE_VERSION - 1))
     // Older remote libraries can have articles whose feeds are absent from navigation.
     database.upsertEntries([entry({ id: 'discard' }), entry({ id: 'keep', read: true, starred: true })])
+    sql.exec(dropEntryState + 'PRAGMA user_version = ' + (ENTRY_STATE_VERSION - 1))
     sql.exec("DELETE FROM entries WHERE id = 'discard'; UPDATE entries SET state_revision = 7")
     const arrival = sql.prepare("SELECT sequence FROM article_arrivals WHERE entry_id = 'keep'").get()!.sequence
     database.close()
@@ -65,7 +65,7 @@ describe('Paper read model', () => {
     database.close()
     database = new PaperDatabase(file)
     expectMatchingEntryState(database.greaderDatabase)
-    expect(fs.readdirSync(directory).filter(name => name.includes('.before-entry-state'))).toHaveLength(1)
+    expect(fs.readdirSync(directory).filter(name => name.includes('.before-entry-state-v'))).toHaveLength(1)
     expect(fs.readdirSync(directory).filter(name => name.includes('.before-article-rules'))).toHaveLength(1)
   })
 
@@ -76,7 +76,7 @@ describe('Paper read model', () => {
     sql.exec(dropEntryState + 'PRAGMA user_version = ' + (ENTRY_STATE_VERSION - 1))
     sql.prepare('VACUUM INTO ?').run(backup)
     const previous = fs.readFileSync(backup)
-    database.upsertEntries([entry({ id: 'since-first-backup' })])
+    sql.exec("INSERT INTO entries(id, feed_id, feed_title, feed_url, title, author, url, canonical_url, source_domain, content_html, content_text, excerpt, published_at, timestamp, reading_minutes, thumbnail_url, kind, synced_at) VALUES ('since-first-backup','','','','','','','','','','','','',0,0,'','','')")
     database.close()
     fs.writeFileSync(backup + '.tmp', 'interrupted copy')
 
@@ -88,6 +88,24 @@ describe('Paper read model', () => {
     try {
       expect(fresh.prepare('SELECT id FROM entries').all()).toEqual([{ id: 'since-first-backup' }])
     } finally { fresh.close() }
+  })
+
+  it('keeps both backup paths readable if publishing the replacement fails', () => {
+    const file = database.searchDatabasePath
+    const backup = file + '.before-entry-state-v' + ENTRY_STATE_VERSION
+    const sql = database.greaderDatabase
+    sql.exec(dropEntryState + 'PRAGMA user_version = ' + (ENTRY_STATE_VERSION - 1))
+    sql.prepare('VACUUM INTO ?').run(backup)
+    const previous = fs.readFileSync(backup)
+    const rename = fs.renameSync
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (from === backup + '.tmp' && to === backup) throw new Error('Interrupted publish')
+      rename(from, to)
+    })
+
+    expect(() => new PaperDatabase(file)).toThrow('Interrupted publish')
+    expect(fs.readFileSync(backup)).toEqual(previous)
+    expect(archivedBackup(backup)).toEqual(previous)
   })
 
   it('keeps the published backup in place when the new copy fails verification', () => {
@@ -111,12 +129,59 @@ describe('Paper read model', () => {
   it('rolls back the state migration if an article has lost its arrival number', () => {
     const sql = database.greaderDatabase
     const file = database.searchDatabasePath
-    sql.exec(dropEntryState + 'PRAGMA user_version = ' + (ENTRY_STATE_VERSION - 1))
     database.upsertEntries([entry({ id: 'missing-arrival' })])
+    sql.exec(dropEntryState + 'PRAGMA user_version = ' + (ENTRY_STATE_VERSION - 1))
     sql.exec('DELETE FROM article_arrivals')
     expect(() => new PaperDatabase(file)).toThrow(/missing its arrival number/)
     expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(ENTRY_STATE_VERSION - 1)
     expect(sql.prepare("SELECT name FROM sqlite_master WHERE name = 'entry_state'").get()).toBeUndefined()
+  })
+
+  it('keeps SQL for the retired entries columns inside historical migrations', () => {
+    const server = path.resolve('src/server')
+    const state = String.raw`(?:read|starred|state_revision|greader_modified_ms)\b`
+    const references = new RegExp([
+      String.raw`\bentries\.${state}`,
+      String.raw`\bUPDATE\s+entries\s+SET\s+(?:[^;'"\`]*?,\s*)?${state}\s*=`,
+      String.raw`\bINSERT\s+INTO\s+entries\s*\([^)]*?\b${state}`,
+      String.raw`\bUPDATE\s+entries\s+SET\s+\$\{`,
+      String.raw`\bSELECT\s+(?:\w+\s*,\s*)*${state}(?:\s*,\s*\w+)*\s+FROM\s+entries\b`,
+      String.raw`\be\.${state}[^;'"\`]*?\b(?:FROM|JOIN)\s+entries\s+(?:AS\s+)?e\b`,
+    ].join('|'), 'i')
+    for (const file of fs.globSync('**/*.ts', { cwd: server })) {
+      const source = fs.readFileSync(path.join(server, file), 'utf8')
+        .replace(/export function migrateEntryState\([\s\S]*?^}/m, '')
+        .replace(/export function migrateGreader\([\s\S]*?^}/m, '')
+        .replace(/export function migrateArticleLabels\([\s\S]*?^}/m, '')
+      expect(source.match(references), file).toBeNull()
+    }
+  })
+
+  it('keeps the v32 backup usable and rolls back an incomplete state table', () => {
+    database.upsertEntries([entry({ id: 'old', read: true, starred: true })])
+    const file = database.searchDatabasePath
+    const sql = database.greaderDatabase
+    sql.exec(dropEntryState)
+    migrateEntryState(sql)
+    sql.exec(`PRAGMA user_version = ${ENTRY_STATE_WRITES_VERSION - 1}`)
+    const state = sql.prepare('SELECT * FROM entry_state').get()!
+    sql.exec('DELETE FROM entry_state')
+    expect(() => new PaperDatabase(file)).toThrow(/without its state and arrival/)
+    expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(ENTRY_STATE_WRITES_VERSION - 1)
+    sql.exec(`INSERT INTO entry_state(arrival_sequence, entry_id, feed_id, read, starred,
+      state_revision, greader_modified_ms, timestamp, first_seen_at)
+      SELECT a.sequence, e.id, feed_id, read, starred, state_revision, greader_modified_ms, timestamp, first_seen_at
+      FROM entries e JOIN article_arrivals a ON a.entry_id=e.id`)
+    database.close()
+    database = new PaperDatabase(file)
+    expect(database.greaderDatabase.prepare('SELECT * FROM entry_state').get()).toEqual(state)
+    const backup = new DatabaseSync(file + '.before-entry-state-writes-v' + ENTRY_STATE_WRITES_VERSION, { readOnly: true })
+    try {
+      expect(backup.prepare('PRAGMA user_version').get()?.user_version).toBe(ENTRY_STATE_WRITES_VERSION - 1)
+      expect(backup.prepare('SELECT read, starred FROM entries').get()).toEqual({ read: 1, starred: 1 })
+    } finally { backup.close() }
+    const columns = database.greaderDatabase.prepare('PRAGMA table_info(entries)').all().map(row => row.name)
+    for (const name of ['read', 'starred', 'state_revision', 'greader_modified_ms']) expect(columns).not.toContain(name)
   })
 
   it('waits for another process to commit before binding the standalone backend', async () => {

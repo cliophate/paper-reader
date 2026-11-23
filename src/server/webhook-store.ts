@@ -53,6 +53,16 @@ function targetScope(feed: string, target = 'webhook_targets') {
     WHERE f.feed_id=${feed} AND f.folder_id=${target}.folderId AND feeds.active=1))`
 }
 
+export function installStateStarWebhook(db: DatabaseSync) {
+  db.exec(`CREATE TRIGGER webhook_star AFTER UPDATE OF starred ON entry_state
+    WHEN new.starred=1 AND old.starred=0 AND NOT EXISTS (SELECT 1 FROM sync_state WHERE key='webhook_importing_stars')
+    BEGIN
+      INSERT INTO webhook_intake SELECT webhook_targets.id,'starred_entry',${article('e')},folderId
+        FROM webhook_targets JOIN entries e ON e.id=new.entry_id
+        WHERE stars AND ${targetScope('new.feed_id')};
+    END;`)
+}
+
 export function migrateWebhooks(db: DatabaseSync) {
   const matchesScope = targetScope('new.feed_id')
   transaction(db, () => {

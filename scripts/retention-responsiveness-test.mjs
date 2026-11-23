@@ -34,10 +34,10 @@ try {
   const identity = sql.prepare('INSERT INTO article_identities VALUES (?, ?, ?)')
   const alias = sql.prepare('INSERT INTO article_aliases VALUES (?, ?, ?, ?)')
   const entry = sql.prepare(`INSERT INTO entries(id, feed_id, feed_title, feed_url, title, author, url, canonical_url,
-    source_domain, content_html, content_text, excerpt, published_at, timestamp, first_seen_at, read,
+    source_domain, content_html, content_text, excerpt, published_at, timestamp, first_seen_at,
     reading_minutes, thumbnail_url, kind, synced_at)
     VALUES (?, ?, 'Retention', '', 'Synthetic retentionneedle', '', ?, ?, 'example.test',
-    '<p>Synthetic retentionneedle</p>', 'Synthetic retentionneedle', '', '', ?, ?, 0, 1, '', 'article', '')`)
+    '<p>Synthetic retentionneedle</p>', 'Synthetic retentionneedle', '', '', ?, ?, 1, '', 'article', '')`)
   for (let i = 0; i < count; i++) {
     const id = `retention-${i}`, url = `https://example.test/${i}`
     identity.run(id, backend.id, feed); alias.run(backend.id, feed, `guid-${i}`, id)

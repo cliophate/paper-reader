@@ -1,6 +1,15 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { transaction } from './transaction.js'
 
+export function rebuildSearchRows(db: DatabaseSync) {
+  db.exec(`INSERT OR IGNORE INTO entry_search_rows(entry_id) SELECT id FROM entries;
+    DELETE FROM entry_search_rows WHERE NOT EXISTS (SELECT 1 FROM entries WHERE entries.id = entry_search_rows.entry_id);
+    DELETE FROM entries_fts;
+    INSERT INTO entries_fts(rowid, entry_id, title, author, feed_title, content_text)
+      SELECT search.id, entries.id, title, author, feed_title, content_text || ' ' || full_content_text
+      FROM entries JOIN entry_search_rows search ON search.entry_id = entries.id;`)
+}
+
 // FTS5's UNINDEXED entry_id column cannot support point lookups. Keep a normal
 // unique index beside FTS and use its explicit integer key as the search rowid.
 // Neither old FTS rowids nor entries' implicit rowids are stable identifiers.
@@ -13,13 +22,9 @@ export function migrateSearchRows(db: DatabaseSync) {
       );
       CREATE INDEX IF NOT EXISTS entries_search_scope_idx
         ON entries(id, timestamp, crawled_at, read, starred, feed_id);
-      INSERT OR IGNORE INTO entry_search_rows(entry_id) SELECT id FROM entries;
-      DELETE FROM entry_search_rows WHERE NOT EXISTS (SELECT 1 FROM entries WHERE entries.id = entry_search_rows.entry_id);
-      DELETE FROM entries_fts;
-      INSERT INTO entries_fts(rowid, entry_id, title, author, feed_title, content_text)
-        SELECT search.id, entries.id, title, author, feed_title, content_text || ' ' || full_content_text
-        FROM entries JOIN entry_search_rows search ON search.entry_id = entries.id;
-
+    `)
+    rebuildSearchRows(db)
+    db.exec(`
       DROP TRIGGER IF EXISTS entries_fts_insert;
       DROP TRIGGER IF EXISTS entries_fts_update;
       DROP TRIGGER IF EXISTS entries_fts_delete;

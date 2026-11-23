@@ -119,7 +119,7 @@ it('keeps effective modification timestamps unchanged on identical imports and t
   const { ingestFeed } = await import('../src/server/feed-ingestion')
   const options = { backendId: backend, subscriptionId: feed, endpointGeneration: 'fixture', requestUrl: 'https://example.test/feed', responseUrl: 'https://example.test/feed', fetchedAt: new Date().toISOString(), xml: '<rss version="2.0"><channel><title>Fixture</title><item><guid>one</guid><title>First</title><description>Unchanged</description></item></channel></rss>' }
   ingestFeed(db, options)
-  const row = () => db.greaderDatabase.prepare('SELECT id, greader_modified_ms FROM entries').get()!
+  const row = () => db.greaderDatabase.prepare('SELECT entry_id AS id, greader_modified_ms FROM entry_state').get()!
   const first = row().greader_modified_ms
   const feedClock = () => db.greaderDatabase.prepare('SELECT greader_modified_ms FROM feeds WHERE id = ?').get(feed)!.greader_modified_ms
   const firstFeed = feedClock()
@@ -155,8 +155,8 @@ it('intersects and excludes every combination of state, feed and folder streams'
   if (folder.status !== 'applied') throw new Error('Folder fixture failed')
   db.organization.apply(backend, db.organization.snapshot(backend).revision, [{type:'add-membership', feedId:feed, folderId:folder.id!}])
   const sql = db.greaderDatabase
-  sql.exec('UPDATE entries SET read = 1 WHERE rowid % 2 = 0; UPDATE entries SET starred = 1 WHERE rowid <= 2')
-  const articles = sql.prepare('SELECT a.sequence, e.read, e.starred, e.feed_id FROM entries e JOIN article_arrivals a ON a.entry_id=e.id').all()
+  sql.exec('UPDATE entry_state SET read = 1 WHERE arrival_sequence % 2 = 0; UPDATE entry_state SET starred = 1 WHERE arrival_sequence <= 2')
+  const articles = sql.prepare('SELECT arrival_sequence AS sequence, read, starred, feed_id FROM entry_state').all()
   const streams = ['reading-list','read','unread','starred'].map(id => ({kind:'state' as const,id})).concat([])
   const allStreams: import('../src/server/greader-query').Stream[] = [...streams, {kind:'feed',id:feed}, {kind:'feed',id:second}, {kind:'folder',id:folder.id!}, {kind:'folder',id:''}]
   const matches = (row: typeof articles[number], stream: typeof allStreams[number]) => stream.kind === 'feed' ? row.feed_id === stream.id : stream.kind === 'folder' ? row.feed_id === (stream.id ? feed : second) : stream.id === 'read' ? !!row.read : stream.id === 'unread' ? !row.read : stream.id === 'starred' ? !!row.starred : true
@@ -214,7 +214,7 @@ it('reconciles actual retention deletions without recycling arrivals or reimport
   ingestFeed(db,{...options,xml:'<rss version="2.0"><channel><title>Fixture</title></channel></rss>'})
   const sql = db.greaderDatabase
   sql.prepare('UPDATE entries SET first_seen_at = ?').run(Date.now()-200*DAY)
-  sql.exec('UPDATE entries SET starred=1 WHERE rowid=2')
+  sql.exec('UPDATE entry_state SET starred=1 WHERE arrival_sequence=2')
   const run = db.retention.start({...defaultPolicy(),unreadDays:1})
   expect(db.retention.batch(run,true).done).toBe(true)
   const q = {backend,stream:{kind:'state' as const,id:'reading-list'},it:[],xt:[],ot:0,nt:0,order:'DESC' as const,n:250}
@@ -271,7 +271,7 @@ it.each(['app', 'global', 'disabled'])('checks %s revocation inside discovery an
   expect(db.organization.metadata(backend)).toEqual(before)
   expect(() => new LocalStateService(db, backend).editReaderNumbers([1n], { read: true }, authorize)).toThrow(expect.objectContaining({ status: 401 }))
   expect(() => organization.edit('subscription/edit', form({ s: `feed/${db.linkNumber('feed', feed)}`, ac: 'unsubscribe' }), authorize)).toThrow(expect.objectContaining({ status: 401 }))
-  expect(sql.prepare('SELECT sum(read) read, sum(state_revision) revision FROM entries').get()).toMatchObject({ read: 0, revision: 0 })
+  expect(sql.prepare('SELECT sum(read) read, sum(state_revision) revision FROM entry_state').get()).toMatchObject({ read: 0, revision: 0 })
   expect(db.organization.metadata(backend)).toEqual(before)
 })
 
@@ -296,7 +296,7 @@ it('returns every article after feed organization changes without updating artic
   const organization = new GreaderOrganization(db, backend, async () => { throw new Error() })
   const stream = `feed/${db.linkNumber('feed', feed)}`
   const q = { backend, stream: { kind: 'state' as const, id: 'reading-list' }, it: [], xt: [], ot: 1001, nt: 0, order: 'ASC' as const, n: 250 }
-  const reset = () => sql.exec('UPDATE entries SET first_seen_at = 1000000, greader_modified_ms = 1000000; UPDATE feeds SET greader_modified_ms = 1000000')
+  const reset = () => sql.exec('UPDATE entries SET first_seen_at = 1000000; UPDATE entry_state SET greader_modified_ms = 1000000; UPDATE feeds SET greader_modified_ms = 1000000')
   const clock = () => sql.prepare('SELECT greader_modified_ms n FROM feeds WHERE id = ?').get(feed)!.n
   const all = () => {
     let last: string | undefined, high: string | undefined, count = 0
@@ -305,7 +305,7 @@ it('returns every article after feed organization changes without updating artic
       count += result.values.length; last = result.last; high = result.high
     } while (last)
     expect(count).toBe(1260)
-    expect(sql.prepare('SELECT min(greader_modified_ms) low, max(greader_modified_ms) high FROM entries').get()).toMatchObject({ low: 1000000, high: 1000000 })
+    expect(sql.prepare('SELECT min(greader_modified_ms) low, max(greader_modified_ms) high FROM entry_state').get()).toMatchObject({ low: 1000000, high: 1000000 })
     expect(page(sql, { ...q, ot: 0, nt: 1000 }, false).values).toHaveLength(0)
   }
   for (const [kind, fields] of [
@@ -364,8 +364,8 @@ it('uses indexed arrival, article and feed modification paths for sparse increme
 it.each(['unread', 'starred'])('uses the partial index for sparse %s pages', async state => {
   await seedArticles(5)
   const sql = db.greaderDatabase
-  sql.exec('UPDATE entries SET read = 1, starred = 0')
-  sql.exec(`UPDATE entries SET ${state === 'unread' ? 'read = 0' : 'starred = 1'} WHERE rowid IN (2, 4)`)
+  sql.exec('UPDATE entry_state SET read = 1, starred = 0')
+  sql.exec(`UPDATE entry_state SET ${state === 'unread' ? 'read = 0' : 'starred = 1'} WHERE arrival_sequence IN (2, 4)`)
   const q = { backend, stream: { kind: 'state' as const, id: state }, it: [], xt: [], ot: 0, nt: 0, order: 'DESC' as const, n: 250 }
   const filter = where(q), scan = scanPageFrom(sql, q)
   const plan = sql.prepare(`EXPLAIN QUERY PLAN SELECT s.arrival_sequence ${scan.from} WHERE ${filter.sql}${scan.extra} ORDER BY s.arrival_sequence DESC LIMIT 251`).all(...filter.args).map(row => row.detail).join('; ')
@@ -375,7 +375,7 @@ it.each(['unread', 'starred'])('uses the partial index for sparse %s pages', asy
 })
 
 
-it.each(['web state', 'reader state', 'undo', 'retention'])('advances the clock with one article update for %s', async writer => {
+it.each(['web state', 'reader state', 'undo', 'retention'])('updates only the state row and advances its clock once for %s', async writer => {
   await seedArticles(1)
   const { LocalStateService } = await import('../src/server/local-state')
   const { defaultPolicy, DAY } = await import('../src/server/retention-store')
@@ -385,9 +385,11 @@ it.each(['web state', 'reader state', 'undo', 'retention'])('advances the clock 
   if (writer === 'undo') service.editEntries([id], 'read', { undo })
   // A future clock exercises the monotonic branch without depending on timers.
   const before = Date.now() + 10 * 365 * DAY
-  sql.prepare('UPDATE entries SET first_seen_at = ?, greader_modified_ms = ?').run(Date.now() - 200 * DAY, before)
-  sql.exec(`CREATE TABLE article_updates (id TEXT);
-    CREATE TRIGGER count_article_updates AFTER UPDATE ON entries BEGIN INSERT INTO article_updates VALUES (new.id); END`)
+  sql.prepare('UPDATE entries SET first_seen_at = ?').run(Date.now() - 200 * DAY)
+  sql.prepare('UPDATE entry_state SET greader_modified_ms = ?').run(before)
+  sql.exec(`CREATE TABLE article_updates (changed_table TEXT);
+    CREATE TRIGGER count_article_updates AFTER UPDATE ON entries BEGIN INSERT INTO article_updates VALUES ('entries'); END;
+    CREATE TRIGGER count_state_updates AFTER UPDATE ON entry_state BEGIN INSERT INTO article_updates VALUES ('entry_state'); END`)
   if (writer === 'web state') service.editEntries([id], 'read')
   else if (writer === 'reader state') service.editReaderNumbers([1n], { read: true, starred: true })
   else if (writer === 'undo') service.undo(undo.token)
@@ -395,6 +397,6 @@ it.each(['web state', 'reader state', 'undo', 'retention'])('advances the clock 
     const run = db.retention.start({ ...defaultPolicy(), autoReadDays: 1 })
     service.retentionBatch(run, true)
   }
-  expect(sql.prepare('SELECT greader_modified_ms n FROM entries').get()!.n).toBe(before + 1)
-  expect(sql.prepare('SELECT count(*) n FROM article_updates').get()!.n).toBe(1)
+  expect(sql.prepare('SELECT greader_modified_ms n FROM entry_state').get()!.n).toBe(before + 1)
+  expect(sql.prepare('SELECT changed_table FROM article_updates').all()).toEqual([{ changed_table: 'entry_state' }])
 })

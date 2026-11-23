@@ -1,3 +1,4 @@
+import { advanceReaderClock } from './greader-schema.js'
 import type { DatabaseSync } from 'node:sqlite'
 import type { Enclosure } from '../shared/enclosures.js'
 import { transaction } from './transaction.js'
@@ -45,5 +46,5 @@ export function replaceEnclosures(db: DatabaseSync, id: string, files: Enclosure
     ON CONFLICT(entry_id, url) DO UPDATE SET type = excluded.type, size = excluded.size,
       duration = excluded.duration, ordinal = excluded.ordinal`)
   files.forEach((file, ordinal) => upsert.run(id, file.url, file.type, file.size ?? null, file.duration ?? null, ordinal))
-  db.prepare("UPDATE entries SET greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE id = ?").run(id)
+  db.prepare(`UPDATE entry_state SET ${advanceReaderClock} WHERE entry_id = ?`).run(id)
 }

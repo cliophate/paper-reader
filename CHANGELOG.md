@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Marking articles read or starred now writes only the article state table.
+  Schema v33 backs up the database before removing the old state columns.
+  On the test machine, the upgrade took about 45 seconds for 200,000 articles
+  and 16 minutes for 1 million. Set the reader health check
+  `start_period` to `30m` in custom Compose files to match the shipped file.
+  See the [upgrade and rollback steps](docs/recovery.md#article-state-migration-and-recovery).
 - Save named article views in the sidebar. Combine feeds, folders, keywords,
   authors, dates, reading time and read or star status. Views sync across devices.
 - Download folders, saved views, search results or selected articles for offline reading.
@@ -15,8 +21,7 @@
 - Paper backs up the database before copying article read status and stars into
   a separate table in schema v30. On the test machine, downtime was about
   25 seconds for 200,000 articles and 5 minutes for 1 million, mostly for the
-  backup. Custom Compose files should give the reader the same `10m` health
-  check start period as the shipped file.
+  backup.
 - Save search queries as article rules to hide, mark read, star or send matching
   articles to a notification target. Preview matches and choose whether to apply
   a rule to the archive. Existing mute filters keep their hidden articles.

@@ -151,14 +151,9 @@ Web pages, offline lists, Reader sync, retention and article rules read state
 from `entry_state`. Rules look up each article in the current batch by ID.
 Reader pages use the arrival sequence for ordering and
 continuation. Web pages order by publication time, crawl time and article ID.
-Writes still update `entries`. A trigger on arrival insertion creates the state
-row. Triggers on `entries` copy changes in the same transaction, including clock
-updates made by Reader and mute triggers. This covers writes from every backend
-and from other SQLite connections. External tools that write to the database
-must run `PRAGMA foreign_keys=ON` on each connection. Otherwise, deleting an
-article leaves orphaned rows in `article_arrivals` and `entry_state`.
-The state table copies the feed ID even for historical articles whose feeds no
-longer appear in navigation.
+In schemas v30 through v32, triggers copied changes from `entries` into
+`entry_state`. Schema v33 removes that copy step. The state table keeps the
+feed ID even for historical articles whose feeds no longer appear in navigation.
 
 On SSD, one v28 upgrade took 23.08 seconds for 200,000 synthetic articles
 and another took 279.70 seconds for 1,000,000. Both timings include the backup
@@ -188,6 +183,35 @@ unread counts in one request. The search worker counts one view at a time after
 waiting searches and bulk previews. Paper caches each count until the view or
 database changes, or the minute changes for a relative date. The sidebar displays `1000+`
 when the worker finds a 1001st match.
+
+Schema v33 saves `paper.sqlite.before-entry-state-writes-v33` and rebuilds
+`entries` without read status, stars, the state revision or the Reader clock.
+All backends now write those fields in `entry_state`. Each article insert creates
+its arrival number and state row in the same transaction. Reimporting an article
+preserves its read status and stars. Changes to content, enclosures, labels
+or mute visibility advance the Reader clock on the state row. External SQLite
+writers must enable `PRAGMA foreign_keys=ON` on every connection so article
+deletion also removes its arrival and state.
+
+On a shared SSD, coordinated startup from v32 took 44.18 seconds for 200,000
+synthetic articles and 976.52 seconds for 1,000,000. The source databases
+occupied 2.53 GiB and 12.68 GiB. Each article had about 8 KB of combined HTML
+and text. Both times include creating and verifying the backup, rebuilding
+the article table and indexes, checking foreign keys and reopening the database.
+
+In separate runs on the same disk, one standalone state transaction marked
+20,000 articles read in 2.43 seconds on v32 and 0.75 seconds on v33. Importing
+four batches of 5,000 new articles through `importSourceEntries` took a median
+of 2.28 seconds per batch on v32 and 2.02 seconds on v33.
+
+The Reader API scale check passed on both builds with 220,000 articles.
+Its 880-page sync took 85.30 seconds on v32 and 85.28 seconds on v33.
+The 1,000-ID edit took 208 ms and 95 ms respectively. Peak health latency
+fell from 203 ms to 182 ms, and peak process RSS from 530 MiB to 502 MiB.
+
+To roll back to v32, stop Paper and briefing commands and preserve the data
+directory. In a separate copy, restore the pre-v33 backup as `paper.sqlite`,
+remove the newer WAL and SHM sidecars and start the previous release.
 
 Use Node 24 or newer. From the repository root:
 

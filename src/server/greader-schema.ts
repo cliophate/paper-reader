@@ -1,6 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { transaction } from './transaction.js'
 
+export const advanceReaderClock = "greader_modified_ms = max(greader_modified_ms + 1, CAST(unixepoch('subsec') * 1000 AS INTEGER))"
+
 export function migrateGreader(db: DatabaseSync) {
   transaction(db, () => {
     if (db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'greader_settings'").get()) { db.exec('PRAGMA user_version = 16'); return }

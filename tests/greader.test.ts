@@ -107,9 +107,9 @@ it('commits read and star once, preserves no-ops and rejects invalid labels atom
   expect((await call('edit-tag', [['i', '1'], ['a', `${STATE}read`], ['a', `${STATE}starred`], ['T', token]], 'POST')).status).toBe(200)
   expect(db.entryState(id)).toEqual({ read: true, starred: true, revision: 1 })
   expectMatchingEntryState(sql)
-  const modified = sql.prepare('SELECT greader_modified_ms FROM entries WHERE id = ?').get(id)!.greader_modified_ms
+  const modified = sql.prepare('SELECT greader_modified_ms FROM entry_state WHERE entry_id = ?').get(id)!.greader_modified_ms
   expect((await call('edit-tag', [['i', '1'], ['a', `${STATE}read`], ['T', token]], 'POST')).status).toBe(200)
-  expect(sql.prepare('SELECT greader_modified_ms FROM entries WHERE id = ?').get(id)!.greader_modified_ms).toBe(modified)
+  expect(sql.prepare('SELECT greader_modified_ms FROM entry_state WHERE entry_id = ?').get(id)!.greader_modified_ms).toBe(modified)
   expect((await call('edit-tag', [['i', '1'], ['r', `${STATE}read`], ['a', LABEL], ['T', token]], 'POST')).status).toBe(400)
   expect(db.entryState(id)!.revision).toBe(1)
   expect(() => db.commitLocalEntryState(backend, [id], 'unread', { expectedRevisions: { [id]: 0 } })).toThrow()
@@ -139,7 +139,7 @@ it('rejects oversized batches and login bodies without accepting cookie-only aut
 it('filters arrival and modification times with inclusive boundaries and intersecting states', () => {
   const sql = db.greaderDatabase
   const q = { backend, stream: { kind: 'state' as const, id: 'reading-list' }, it: [], xt: [], ot: 0, nt: 0, order: 'DESC' as const, n: 250 }
-  sql.exec('UPDATE entries SET first_seen_at = 1000000, greader_modified_ms = 1000000; UPDATE feeds SET greader_modified_ms = 0')
+  sql.exec('UPDATE entries SET first_seen_at = 1000000; UPDATE entry_state SET greader_modified_ms = 1000000; UPDATE feeds SET greader_modified_ms = 0')
   expect(page(sql, { ...q, ot: 1000, nt: 1000 }, false).values.length).toBe(250)
   expect(page(sql, { ...q, ot: 1001 }, false).values).toHaveLength(0)
   expect(page(sql, { ...q, it: [{ kind: 'state', id: 'read' }], xt: [{ kind: 'state', id: 'read' }] }, false).values).toHaveLength(0)
@@ -226,7 +226,7 @@ it.each(['subscription/quickadd', 'subscription/edit'])('cancels paused %s after
   })
   const before = {
     organization: db.organization.metadata(backend),
-    state: db.greaderDatabase.prepare('SELECT id, read, starred, state_revision, greader_modified_ms FROM entries ORDER BY id').all(),
+    state: db.greaderDatabase.prepare('SELECT entry_id, read, starred, state_revision, greader_modified_ms FROM entry_state ORDER BY entry_id').all(),
     activity: db.greaderDatabase.prepare('SELECT count(*) n FROM activity_events').get(),
   }
   const fields: [string, string][] = endpoint.endsWith('quickadd') ? [['quickadd', 'https://example.test/pending']] : [['s', 'feed/https://example.test/pending'], ['ac', 'subscribe'], ['a', `${LABEL}Must not exist`]]
@@ -238,7 +238,7 @@ it.each(['subscription/quickadd', 'subscription/edit'])('cancels paused %s after
   resume(); await done; await delay(20)
   expect(db.greaderDatabase.prepare("SELECT id FROM feeds WHERE url = 'https://example.test/pending'").get()).toBeUndefined()
   expect(db.organization.metadata(backend)).toEqual(before.organization)
-  expect(db.greaderDatabase.prepare('SELECT id, read, starred, state_revision, greader_modified_ms FROM entries ORDER BY id').all()).toEqual(before.state)
+  expect(db.greaderDatabase.prepare('SELECT entry_id, read, starred, state_revision, greader_modified_ms FROM entry_state ORDER BY entry_id').all()).toEqual(before.state)
   expect(db.greaderDatabase.prepare('SELECT count(*) n FROM activity_events').get()).toEqual(before.activity)
 })
 it('rejects organization batches above 100 before discovery or metadata work', async () => {
@@ -251,13 +251,13 @@ it('rejects organization batches above 100 before discovery or metadata work', a
   snapshot.mockRestore()
 })
 it('defers mark-all-as-read with a terminal JSON 404 and leaves state unchanged', async () => {
-  const before = db.greaderDatabase.prepare('SELECT sum(read) n, sum(state_revision) revision FROM entries').get()
+  const before = db.greaderDatabase.prepare('SELECT sum(read) n, sum(state_revision) revision FROM entry_state').get()
   for (const method of ['GET', 'POST']) {
     const response = await call('mark-all-as-read', [['s', READING], ['T', token]], method)
     expect(response.status).toBe(404)
     expect(await response.json()).toEqual({ errors: ['Not found.'] })
   }
-  expect(db.greaderDatabase.prepare('SELECT sum(read) n, sum(state_revision) revision FROM entries').get()).toEqual(before)
+  expect(db.greaderDatabase.prepare('SELECT sum(read) n, sum(state_revision) revision FROM entry_state').get()).toEqual(before)
 })
 it('invalidates web navigation after organization commits despite a failed listener', async () => {
   const transactionStates: boolean[] = []
@@ -301,7 +301,7 @@ it('edits article labels, pages their streams and preserves their identity throu
   const { request: labelCall, write } = await labelClient()
   const name = 'Keep / + Café', stream = LABEL + name, moved = LABEL + 'Later'
   const edit = (fields: [string, string][]) => write('edit-tag', fields)
-  const clock = () => db.greaderDatabase.prepare('SELECT greader_modified_ms FROM article_arrivals a JOIN entries e ON e.id = a.entry_id WHERE sequence = 3').get()!.greader_modified_ms
+  const clock = () => db.greaderDatabase.prepare('SELECT greader_modified_ms FROM entry_state WHERE arrival_sequence = 3').get()!.greader_modified_ms
   expect((await edit([['i', '3'], ['i', longId(4n)], ['a', `user/paper/label/${name}`], ['r', STATE + 'read']])).status).toBe(200)
   const modified = clock()
   expect((await edit([['i', '3'], ['a', stream]])).status).toBe(200)

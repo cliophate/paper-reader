@@ -273,6 +273,7 @@ it('keeps initial star state silent and batches first-import articles published 
       read: true, starred: i !== 0, readingMinutes: 1, thumbnailUrl: '', kind: 'article' as const }
   })
   db.saveRemotePage(items, { backfill_complete: 'true' })
+  expectMatchingEntryState(db.greaderDatabase)
   const stars = items.map(item => item.id)
   db.reconcileEntryState([], stars)
   expect(db.entryState(stars[0])?.starred).toBe(true)

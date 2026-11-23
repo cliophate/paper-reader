@@ -175,7 +175,7 @@ describe('local state ownership', () => {
   it('commits before events, survives restart, and makes repeated explicit writes idempotent', () => {
     const id = ingest(local(), { externalId: 'one' })
     const service = new LocalStateService(db, backend.id)
-    const listener = vi.fn(() => expect(sql(c => c.prepare('SELECT read FROM entries WHERE id = ?').get(id)?.read)).toBe(1))
+    const listener = vi.fn(() => expect(sql(c => c.prepare('SELECT read FROM entry_state WHERE entry_id = ?').get(id)?.read)).toBe(1))
     service.onStateChanged(listener)
     expect(service.editEntries([id, id], 'read', { expectedRevisions: { [id]: 0 } })).toMatchObject({ ids: [id], revisions: { [id]: 1 } })
     expect(service.editEntries([id], 'read').ids).toEqual([])

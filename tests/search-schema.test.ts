@@ -1,3 +1,4 @@
+import { legacyStateColumns } from './fixtures/entry-state.js'
 import { archivedBackup } from './fixtures/migration-backup.js'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -22,6 +23,7 @@ function sql<T>(fn: (db: DatabaseSync) => T, filename = file): T {
 }
 function legacy() {
   sql(db => db.exec(`
+    ${legacyStateColumns}
     DROP TRIGGER entries_fts_insert; DROP TRIGGER entries_fts_update; DROP TRIGGER entries_fts_delete;
     DROP TABLE entry_search_rows; DROP INDEX entries_search_scope_idx;
     DELETE FROM entries_fts;
@@ -52,7 +54,8 @@ afterEach(() => { fs.rmSync(directory, { recursive: true, force: true }) })
 
 describe('indexed FTS row migration', () => {
   it('backs up divergent v10 FTS rows under exclusive bootstrap, preserves source rows and keeps subsequent opens DDL-free', async () => {
-    const before = sql(db => db.prepare('SELECT * FROM entries ORDER BY id').all())
+    const before = sql(db => db.prepare('SELECT * FROM entries ORDER BY id').all().map(
+      ({ read, starred, state_revision, greader_modified_ms, ...content }) => content))
     const held = acquireStateLock(directory, 'shared')
     await expect(openCoordinatedStorage(directory, { timeoutMs: 0 })).rejects.toThrow(/in use/)
     expect(sql(db => db.prepare('PRAGMA user_version').get()?.user_version)).toBe(10)

@@ -1,3 +1,4 @@
+import { legacyStateColumns } from './fixtures/entry-state.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -55,7 +56,7 @@ describe('coordinated storage bootstrap', () => {
     const filename = path.join(directory, 'paper.sqlite')
     new PaperDatabase(filename).close()
     const old = new DatabaseSync(filename)
-    old.exec(`ALTER TABLE undo_actions DROP COLUMN backend_id; ALTER TABLE undo_actions DROP COLUMN expected_revisions_json; PRAGMA user_version = 9`)
+    old.exec(legacyStateColumns + `ALTER TABLE undo_actions DROP COLUMN backend_id; ALTER TABLE undo_actions DROP COLUMN expected_revisions_json; PRAGMA user_version = 9`)
     old.close()
     const starts = await Promise.all([participant(), participant()])
     expect(starts.every(start => start.ready)).toBe(true)

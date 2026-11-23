@@ -1,3 +1,4 @@
+import { legacyStateColumns } from './fixtures/entry-state.js'
 import { archivedBackup } from './fixtures/migration-backup.js'
 import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
@@ -246,7 +247,7 @@ describe('v8 migration and FreshRSS snapshots', () => {
     return navigation
   }
   function downgrade() {
-    sql(c => c.exec(`DROP TABLE organization_revisions;
+    sql(c => c.exec(legacyStateColumns + `DROP TABLE organization_revisions;
       ALTER TABLE feeds DROP COLUMN position;
       ALTER TABLE feed_folders DROP COLUMN position;
       PRAGMA user_version = 7`))
