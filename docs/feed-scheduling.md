@@ -183,10 +183,9 @@ subscriptions, preserves all v8 organization and v7 identity tables, and creates
 no standalone state for FreshRSS feeds. The schema and v9 marker commit together.
 
 Before upgrading an existing database, Paper creates a consistent private
-backup at `<database-path>.before-feed-fetch-v9`. It includes committed WAL data,
-uses mode `0600`, validates an existing backup on retry, and retains older
-identity and organization backups. A migration failure rolls back v9 and can
-retry from the previous version.
+backup at `<database-path>.before-feed-fetch-v9`. The backup includes committed WAL
+data and uses mode `0600`. Paper keeps older identity and organization backups.
+A migration failure rolls back v9 and can retry from the previous version.
 
 To roll back, stop Paper and preserve its data directory. Restore the pre-v9
 backup with no stale WAL or SHM sidecars, then start the matching older release.
@@ -202,8 +201,8 @@ article state and existing schedules survive the migration.
 
 Before upgrading an existing database, Paper creates a consistent backup at
 `<database-path>.before-feed-checks-v13`, including committed WAL data. It uses
-mode `0600` and validates an existing backup on retry. The schema changes and
-v13 marker commit together. A failed v13 migration rolls back and can retry.
+mode `0600`. The schema changes and v13 marker commit together. A failed v13 migration
+rolls back and can retry.
 
 Older schedules did not record Retry-After separately. The migration treats each
 existing next-check time as a publisher wait once. This may delay the first

@@ -1,3 +1,4 @@
+import { archivedBackup } from './fixtures/migration-backup.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -210,7 +211,7 @@ it('upgrades a standalone v17 database with FreshRSS URLs and keeps a private ro
   } finally { storage.close() }
 })
 
-it('rolls back a failed v18 migration and keeps the original backup for a retry', async () => {
+it('rolls back a failed v18 migration and archives the original backup on retry', async () => {
   const { directory, file, db } = library()
   downgrade(db)
   const sql = new DatabaseSync(file)
@@ -224,7 +225,7 @@ it('rolls back a failed v18 migration and keeps the original backup for a retry'
     sql.exec('DROP VIEW feed_icon_state')
     const storage = await openCoordinatedStorage(directory)
     storage.close()
-    expect(fs.readFileSync(backupPath)).toEqual(backup)
+    expect(archivedBackup(backupPath)).toEqual(backup)
   } finally { sql.close() }
 })
 

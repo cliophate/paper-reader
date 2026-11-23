@@ -1,3 +1,4 @@
+import { archivedBackup } from './fixtures/migration-backup.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -68,7 +69,7 @@ describe('backend-kind schema upgrade', () => {
     expect(restored.localEntry(entry.id)?.readingPosition).toBe(.77)
     restored.close()
   })
-  it('rolls back failed table replacement and reuses the original backup on retry', async () => {
+  it('rolls back failed table replacement and archives the original backup on retry', async () => {
     sql(db => db.exec('CREATE VIEW reader_backends_v17 AS SELECT 1 AS incompatible'))
     await expect(openCoordinatedStorage(directory)).rejects.toThrow()
     expect(sql(db => db.prepare('PRAGMA user_version').get()?.user_version)).toBe(16)
@@ -76,7 +77,7 @@ describe('backend-kind schema upgrade', () => {
     const saved = fs.readFileSync(file + '.before-miniflux-v17')
     sql(db => db.exec('DROP VIEW reader_backends_v17'))
     const storage = await openCoordinatedStorage(directory)
-    expect(fs.readFileSync(file + '.before-miniflux-v17')).toEqual(saved)
+    expect(archivedBackup(file + '.before-miniflux-v17')).toEqual(saved)
     expect(sql(db => db.prepare('PRAGMA foreign_key_check').all())).toEqual([])
     storage.close()
   })

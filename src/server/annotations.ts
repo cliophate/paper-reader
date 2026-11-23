@@ -5,7 +5,11 @@ import { transaction } from './transaction.js'
 
 export const ANNOTATIONS_VERSION = 24
 
-export function migrateAnnotations(db: DatabaseSync) {
+export function hasAnnotations(db: DatabaseSync) {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='annotations'").get())
+}
+
+export function migrateAnnotations(db: DatabaseSync, currentVersion: number) {
   transaction(db, () => db.exec(`
     CREATE TABLE IF NOT EXISTS annotations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -19,7 +23,7 @@ export function migrateAnnotations(db: DatabaseSync) {
     );
     CREATE INDEX IF NOT EXISTS annotations_entry ON annotations(entry_id, id);
     CREATE INDEX IF NOT EXISTS annotations_parent ON annotations(parent_id);
-    PRAGMA user_version = ${ANNOTATIONS_VERSION};
+    PRAGMA user_version = ${Math.max(currentVersion, ANNOTATIONS_VERSION)};
   `))
 }
 

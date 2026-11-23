@@ -313,3 +313,49 @@ it('backs up the previous schema before installing the queue', () => {
   expect(db.webhooks.history()).toEqual([])
   if (article.status === 'resolved') expect(db.localEntry(article.id)?.title).toBe('Preserved')
 })
+
+it('upgrades the v22 webhook preview with its existing targets and delivery history', () => {
+  const { target } = create({ feedId: feed })
+  db.greaderDatabase.exec(`DROP TRIGGER webhook_arrival; DROP TRIGGER webhook_star;
+    DROP VIEW webhook_intake; DROP VIEW webhook_capacity;
+    DROP INDEX webhook_overflow; DROP INDEX webhook_pending_size; DROP INDEX webhook_history;
+    CREATE INDEX webhook_history ON webhook_deliveries(seq DESC) WHERE state IN ('delivered','failed');
+    ALTER TABLE webhook_targets DROP COLUMN created;
+    ALTER TABLE webhook_deliveries DROP COLUMN folder_id;
+    ALTER TABLE webhook_deliveries DROP COLUMN overflow_window;
+    ALTER TABLE webhook_deliveries DROP COLUMN dropped;
+    ALTER TABLE webhook_deliveries DROP COLUMN payload_bytes;
+    ALTER TABLE webhook_deliveries DROP COLUMN retried;
+    CREATE TRIGGER webhook_star_insert AFTER INSERT ON entries BEGIN SELECT 1; END;
+    PRAGMA user_version=22`)
+  db.greaderDatabase.prepare(`INSERT INTO webhook_deliveries(target_id,event,entries,state,status,attempts)
+    VALUES (?,'save_entry','[]','delivered',204,1)`).run(target.id)
+  db.close()
+  db = new PaperDatabase(path.join(dir, 'paper.sqlite'))
+  expect(db.webhooks.targets()).toEqual([target])
+  expect(db.webhooks.history()).toMatchObject([{ event: 'save_entry', state: 'delivered', status: 204, attempts: 1 }])
+  expect(db.greaderDatabase.prepare('SELECT folder_id,payload_bytes,dropped,retried FROM webhook_deliveries').get())
+    .toEqual({ folder_id: '', payload_bytes: 2, dropped: 0, retried: null })
+  expect(db.greaderDatabase.prepare("SELECT 1 FROM sqlite_schema WHERE name='webhook_star_insert'").get()).toBeUndefined()
+  ingest('New arrival')
+  expect(db.webhooks.history()[0].event).toBe('new_entries')
+})
+
+it('rechecks feed and folder scope on each delivery attempt', async () => {
+  const other = db.saveLocalSubscription(backend, { title: 'Other', url: 'https://example.test/other' })
+  db.organization.apply(backend, db.organization.snapshot(backend).revision, [{ type: 'create-folder', title: 'Selected' }])
+  const folderId = db.localNavigation().folders[0].id
+  db.organization.apply(backend, db.organization.snapshot(backend).revision, [{ type: 'add-membership', feedId: feed, folderId }])
+  const { target } = create()
+  ingest('Keep')
+  ingestFrom(other, ['Omit'])
+  hooks.update(target.id, { name: target.name, events: target.events, folderId })
+  status = 503
+  await hooks.tick()
+  expect(requests.map(r => JSON.parse(r.body).entries.map((entry: { title: string }) => entry.title))).toEqual([['Keep']])
+  hooks.update(target.id, { name: target.name, events: target.events, feedId: other })
+  db.webhooks.retry(db.webhooks.history()[0].id)
+  await hooks.tick()
+  expect(requests).toHaveLength(1)
+  expect(db.webhooks.history()[0]).toMatchObject({ attempts: 2, state: 'skipped', error: expect.stringContaining('outside') })
+})

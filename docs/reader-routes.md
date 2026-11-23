@@ -106,8 +106,7 @@ back the migration. Upgrading v11 leaves its existing tables and indexes intact.
 Before upgrading an existing database, Paper uses its coordinated migration lock
 and `VACUUM INTO` backup procedure to create
 `<database-path>.before-link-numbers-v12`, including committed WAL data. The
-completed backup has mode `0600`. Retries validate and reuse it; older upgrade
-backups remain intact.
+completed backup has mode `0600`.
 
 To roll back, stop Paper, preserve the current data directory, and restore this
 backup as the configured database without stale WAL or SHM sidecars. Start the

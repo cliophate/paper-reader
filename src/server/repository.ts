@@ -9,17 +9,22 @@ const MAX_REMOTE_BRIEFING_PAGES = 5
 
 export async function briefingCandidates(source: EntrySource, stream: StreamRef, options: BriefingEntryOptions): Promise<Entry[]> {
   if (source.briefingEntries) return source.briefingEntries(stream, options)
-  if (!options.followed?.size && !options.muted?.size) return source.entries(stream, options)
+  const excludedFeeds = options.excludedFeeds
+  if (!options.followed?.size && !options.muted?.size && !excludedFeeds?.size) return source.entries(stream, options)
 
   const limit = options.limit || 1000
   const priority = new Map<string, Entry>()
   const other = new Map<string, Entry>()
   const cursors = new Set<string>()
   let continuation = ''
-  for (let pageIndex = 0; pageIndex < MAX_REMOTE_BRIEFING_PAGES; pageIndex++) {
+  let remaining = REMOTE_PAGE_SIZE * MAX_REMOTE_BRIEFING_PAGES
+  while (remaining > 0) {
     options.signal?.throwIfAborted()
     const page = await source.entriesPage(stream, { ...options, limit: REMOTE_PAGE_SIZE, continuation })
-    for (const entry of page.items) {
+    const candidates = excludedFeeds?.size ? page.items.filter(entry => !excludedFeeds.has(entry.feedId)).slice(0, remaining) : page.items
+    // When exclusions are active, count only articles from eligible feeds toward the scan limit.
+    remaining -= excludedFeeds?.size && page.items.length ? candidates.length : REMOTE_PAGE_SIZE
+    for (const entry of candidates) {
       if (options.muted?.has(entry.id) || options.surfaced?.has(entry.id)) continue
       if (options.followed?.has(entry.id)) priority.set(entry.id, entry)
       else if (other.size < limit) other.set(entry.id, entry)

@@ -20,6 +20,7 @@ export interface EntryOptions {
 export interface BriefingEntryOptions extends EntryOptions {
   before: Date
   surfaced?: ReadonlySet<string>
+  excludedFeeds?: ReadonlySet<string>
   followed?: ReadonlySet<string>
   muted?: ReadonlySet<string>
 }

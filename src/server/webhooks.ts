@@ -175,14 +175,26 @@ export class Webhooks {
       let status: number | null = null
       let error = ''
       try {
-        const target = this.target(job.target_id)
+        let target = this.target(job.target_id)
         let entries: Article[] = JSON.parse(job.entries)
-        if (job.folder_id) {
-          const nav = await this.currentNavigation()
-          const membership = entries.map(entry => Array.from(entry.feed_id).length > 2048
-            ? undefined : folderMembership(nav, job.folder_id, entry.feed_id))
+        if (job.event !== 'test' && (job.folder_id || target.folderId || target.feedId)) {
+          let nav: NavigationPayload | undefined
+          if (job.folder_id || target.folderId) {
+            nav = await this.currentNavigation()
+            target = this.target(job.target_id)
+          }
+          const folders = [...new Set([job.folder_id, target.folderId].filter(Boolean))]
+          if (target.feedId) entries = entries.filter(entry => entry.feed_id === target.feedId)
+          const membership = entries.map(entry => {
+            for (const folder of folders) {
+              const member = Array.from(entry.feed_id).length > 2048 ? undefined : folderMembership(nav, folder, entry.feed_id)
+              if (!member) return member
+            }
+            return true
+          })
           if (membership.includes(undefined) || !membership.includes(true)) {
-            this.store.skip(job.id, job.attempts, membership.includes(undefined) ? unverified : outsideFolder)
+            const outside = entries.length ? outsideFolder : 'The article is outside the selected feed.'
+            this.store.skip(job.id, job.attempts, membership.includes(undefined) ? unverified : outside)
             continue
           }
           entries = entries.filter((_entry, index) => membership[index])

@@ -1,3 +1,4 @@
+import { archivedBackup } from './fixtures/migration-backup.js'
 import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -125,7 +126,7 @@ describe('reader link numbers', () => {
     writer.close()
   })
 
-  it('rolls back failed backfill and reuses the verified backup on retry', () => {
+  it('rolls back failed backfill and archives the original backup on retry', () => {
     db.close(); downgrade()
     sql(connection => connection.exec(`CREATE TABLE link_numbers(number INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, target_id TEXT, UNIQUE(kind, target_id));
       CREATE TRIGGER fail_backfill BEFORE INSERT ON link_numbers WHEN new.kind='folder' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;`))
@@ -135,7 +136,7 @@ describe('reader link numbers', () => {
     const saved = fs.readFileSync(`${file}.before-link-numbers-v12`)
     sql(connection => connection.exec('DROP TRIGGER fail_backfill'))
     db = new PaperDatabase(file)
-    expect(fs.readFileSync(`${file}.before-link-numbers-v12`)).toEqual(saved)
+    expect(archivedBackup(`${file}.before-link-numbers-v12`)).toEqual(saved)
     expect(db.localNavigation().folders[0].linkNumber).toBeGreaterThan(0)
   })
 })

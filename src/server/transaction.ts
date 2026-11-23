@@ -17,12 +17,18 @@ export function transaction<T>(db: DatabaseSync, operation: () => T): T {
   }
 }
 
+export function isSqliteBusy(error: unknown) {
+  // Extended SQLite result codes keep the primary code in the low byte.
+  const code = Number((error as { errcode?: number } | null)?.errcode) & 0xff
+  return code === 5 || code === 6
+}
+
 export async function retryBusy<T>(write: () => T | Promise<T>): Promise<T> {
   const deadline = Date.now() + 5000
   while (true) {
     try { return await write() }
     catch (error) {
-      if (![5, 6].includes(Number((error as { errcode?: number }).errcode)) || Date.now() >= deadline) throw error
+      if (!isSqliteBusy(error) || Date.now() >= deadline) throw error
       await delay(25)
     }
   }

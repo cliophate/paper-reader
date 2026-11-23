@@ -1,3 +1,4 @@
+import { archivedBackup } from './fixtures/migration-backup.js'
 import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -297,7 +298,7 @@ it('runs a policy saved just before a restart even when the previous run was tod
   expect(db.getSyncValue('retention_pending')).toBe('false')
 })
 
-it('rolls back a failed migration and retains the same backup on retry', async () => {
+it('rolls back a failed migration and archives the original backup on retry', async () => {
   seed(1); await service.stop(); db.close()
   for (const table of ['retention_auto_read', 'retention_removals', 'retention_settings', 'retention_runs', 'retention_feeds', 'retention_present', 'retention_tombstones', 'retention_briefing_entries']) sql.exec(`DROP TABLE ${table}`)
   sql.exec('PRAGMA user_version = 13')
@@ -312,7 +313,7 @@ it('rolls back a failed migration and retains the same backup on retry', async (
   const saved = fs.readFileSync(file + '.before-retention-v14')
   db = new PaperDatabase(file); service = new RetentionService(db, backend)
   expect(sql.prepare('PRAGMA user_version').get()?.user_version).toBe(DATABASE_VERSION)
-  expect(fs.readFileSync(file + '.before-retention-v14')).toEqual(saved)
+  expect(archivedBackup(file + '.before-retention-v14')).toEqual(saved)
 })
 
 it('keeps the article foreign-key inventory explicit for future schema changes', () => {

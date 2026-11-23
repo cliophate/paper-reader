@@ -110,3 +110,41 @@ describe('coordinated storage bootstrap', () => {
     acquireStateLock(directory, 'exclusive').release()
   })
 })
+
+it('repairs missing annotations under the upgrade lock without replaying later migrations', async () => {
+  const filename = path.join(directory, 'paper.sqlite')
+  const db = new PaperDatabase(filename)
+  db.greaderDatabase.exec('DROP TABLE annotations')
+  const version = db.greaderDatabase.prepare('PRAGMA user_version').get()
+  db.close()
+  const onUpgrade = vi.fn()
+  const storage = await openCoordinatedStorage(directory, { onUpgrade })
+  try {
+    expect(onUpgrade).toHaveBeenCalledOnce()
+    expect(storage.database.annotations.list().items).toEqual([])
+    expect(storage.database.greaderDatabase.prepare('PRAGMA user_version').get()).toEqual(version)
+    expect(fs.readdirSync(directory).some(name => name.includes('.before-'))).toBe(false)
+  } finally { storage.close() }
+})
+
+it('refreshes the rollback backup after restoring and editing an older database', () => {
+  const filename = path.join(directory, 'paper.sqlite')
+  const backup = filename + '.before-ai-activity-v28'
+  const db = new PaperDatabase(filename)
+  db.setSyncValue('fixture', 'first upgrade')
+  db.greaderDatabase.exec('PRAGMA user_version=27')
+  db.close()
+  new PaperDatabase(filename).close()
+  fs.copyFileSync(backup, filename)
+  const restored = new DatabaseSync(filename)
+  restored.exec("UPDATE sync_state SET value='second upgrade' WHERE key='fixture'")
+  restored.close()
+  new PaperDatabase(filename).close()
+  const archives = fs.globSync(backup + '.[0-9]*')
+  expect(archives).toHaveLength(1)
+  for (const [file, value] of [[backup, 'second upgrade'], [archives[0], 'first upgrade']]) {
+    const saved = new DatabaseSync(file, { readOnly: true })
+    try { expect(saved.prepare("SELECT value FROM sync_state WHERE key='fixture'").get()?.value).toBe(value) }
+    finally { saved.close() }
+  }
+})

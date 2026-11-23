@@ -27,11 +27,33 @@ function article(row: string) {
     'title', substr(${row}.title,1,512), 'url', substr(${row}.url,1,2048))`
 }
 
+function upgradePreviewQueue(db: DatabaseSync) {
+  const columns = (table: string) => new Set(db.prepare('SELECT name FROM pragma_table_xinfo(?)').all(table).map(row => row.name))
+  const targets = columns('webhook_targets')
+  if (targets.size && !targets.has('created')) {
+    db.exec('ALTER TABLE webhook_targets ADD COLUMN created INTEGER NOT NULL DEFAULT 0')
+    db.exec(`UPDATE webhook_targets SET created=${nowMs}`)
+  }
+  const deliveries = columns('webhook_deliveries')
+  if (!deliveries.size) return
+  for (const [name, definition] of Object.entries({
+    folder_id: "TEXT NOT NULL DEFAULT ''",
+    overflow_window: 'INTEGER',
+    dropped: 'INTEGER NOT NULL DEFAULT 0',
+    payload_bytes: 'INTEGER AS (length(CAST(entries AS BLOB)))',
+    retried: 'INTEGER',
+  })) {
+    if (!deliveries.has(name)) db.exec(`ALTER TABLE webhook_deliveries ADD COLUMN ${name} ${definition}`)
+  }
+}
+
 export function migrateWebhooks(db: DatabaseSync) {
   const matchesScope = `(feedId='' OR feedId=new.feed_id) AND (folderId='' OR EXISTS (
     SELECT 1 FROM feed_folders f JOIN feeds ON feeds.id=f.feed_id
     WHERE f.feed_id=new.feed_id AND f.folder_id=webhook_targets.folderId AND feeds.active=1))`
-  transaction(db, () => db.exec(`
+  transaction(db, () => {
+    upgradePreviewQueue(db)
+    db.exec(`
     CREATE TABLE IF NOT EXISTS webhook_targets (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
       arrivals INTEGER NOT NULL, stars INTEGER NOT NULL, manual INTEGER NOT NULL,
@@ -48,7 +70,8 @@ export function migrateWebhooks(db: DatabaseSync) {
       retried INTEGER
     );
     CREATE INDEX IF NOT EXISTS webhook_due ON webhook_deliveries(due, seq) WHERE state IN ('pending','sending');
-    CREATE INDEX IF NOT EXISTS webhook_history ON webhook_deliveries(seq DESC) WHERE ${completed};
+    DROP INDEX IF EXISTS webhook_history;
+    CREATE INDEX webhook_history ON webhook_deliveries(seq DESC) WHERE ${completed};
     CREATE INDEX IF NOT EXISTS webhook_target ON webhook_deliveries(target_id);
     CREATE UNIQUE INDEX IF NOT EXISTS webhook_batch ON webhook_deliveries(target_id) WHERE state='collecting';
     CREATE INDEX IF NOT EXISTS webhook_pending_size ON webhook_deliveries(target_id,payload_bytes) WHERE ${active};
@@ -78,6 +101,7 @@ export function migrateWebhooks(db: DatabaseSync) {
     END;
     DROP TRIGGER IF EXISTS webhook_arrival;
     DROP TRIGGER IF EXISTS webhook_star;
+    DROP TRIGGER IF EXISTS webhook_star_insert;
     CREATE TRIGGER webhook_arrival AFTER INSERT ON entries WHEN EXISTS (SELECT 1 FROM webhook_targets WHERE arrivals)
     BEGIN
       INSERT INTO webhook_intake SELECT id,'new_entries',${article('new')},folderId FROM webhook_targets
@@ -90,7 +114,8 @@ export function migrateWebhooks(db: DatabaseSync) {
         WHERE stars AND ${matchesScope};
     END;
     PRAGMA user_version = ${WEBHOOK_SCHEMA_VERSION};
-  `))
+    `)
+  })
 }
 
 export const maxAttempts = 8
@@ -113,8 +138,8 @@ export class WebhookStore {
     }))
   }
   add(target: WebhookTarget) {
-    this.db.prepare(`INSERT INTO webhook_targets (id,kind,name,arrivals,stars,manual,feedId,folderId)
-      VALUES (?,?,?,?,?,?,?,?)`).run(target.id, target.kind, ...subscriptionFields(target))
+    this.db.prepare(`INSERT INTO webhook_targets (id,kind,name,arrivals,stars,manual,feedId,folderId,created)
+      VALUES (?,?,?,?,?,?,?,?,${nowMs})`).run(target.id, target.kind, ...subscriptionFields(target))
   }
   update(target: WebhookTarget) {
     return transaction(this.db, () => {

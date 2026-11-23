@@ -368,7 +368,7 @@ describe('v7 migration recovery', () => {
     expect(fs.readFileSync(organizationBackup)).toEqual(organizationBefore)
   })
 
-  it('rolls back interrupted schema migration and can retry against the same backup', () => {
+  it('rolls back interrupted schema migration and can retry after repair', () => {
     downgradeFixtureToV6()
     sql(c => c.exec('CREATE VIEW article_arrivals AS SELECT 1 AS broken'))
     expect(() => new PaperDatabase(file)).toThrow()
