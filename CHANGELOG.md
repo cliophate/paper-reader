@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-alpha.4
+
+An alpha release with changes since [0.2.0-alpha.3](https://github.com/cliophate/paper-reader/releases/tag/v0.2.0-alpha.3).
 
 ### Reading
 
@@ -83,7 +85,7 @@
   The web reader, Reader apps and article cleanup all use it. Paper backs
   up the database before removing the old columns. The upgrade can take minutes
   on large databases. For timings, custom Compose health checks and rollback
-  steps, see the [recovery guide](docs/recovery.md#article-state-migration-and-recovery).
+  steps, see the [alpha.4 upgrade guide](docs/recovery.md#upgrade-from-020-alpha3-to-020-alpha4).
 
 ### Fixes
 
