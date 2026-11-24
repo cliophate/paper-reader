@@ -50,6 +50,8 @@ function formatQuotedPost(html: string): string {
 }
 
 export function formatInstagramHtml(html: string): string {
+  // Reels already arrive as a video with a poster, caption and link to the post.
+  if (/<video\b/i.test(html)) return html
   const videoUrl = html.match(/href="([^"]+\.mp4(?:\?[^"]*)?)"/i)?.[1]
   if (!videoUrl) return html
   const poster = html.match(/<img\b[^>]*src="([^"]+)"/i)?.[1] || ''

@@ -167,6 +167,22 @@ describe('mobile reader switching', () => {
     expect(card.querySelector('.social-content a')?.textContent).toBe('Story details')
   })
 
+  it('keeps the poster and caption of an Instagram reel', async () => {
+    const poster = 'https://bridge.example/media/3_poster.jpg'
+    const video = 'https://bridge.example/media/3.mp4'
+    const reel = { ...post('a'), thumbnailUrl: '', enclosures: [{ url: video, type: 'video/mp4' }],
+      contentHtml: `<p><video controls preload="metadata" poster="${poster}" src="${video}"><a href="${video}">Open cached video</a></video></p>
+        <p>on film*</p><p><a href="https://www.instagram.com/reel/abc/">Open reel on Instagram</a></p>` }
+    initialPage.items[0] = reel
+    vi.mocked(api.entry).mockResolvedValue({ entry: reel })
+    await mount()
+    const card = container.querySelector('.social-card')!
+    expect(card.querySelector('.enclosure-preview img')?.getAttribute('src')).toBe(poster)
+    expect(card.querySelectorAll('video')).toHaveLength(1)
+    expect(card.querySelector('.social-content')?.textContent).toContain('on film*')
+    expect(card.querySelector('.social-content a')?.textContent).toBe('Open reel on Instagram')
+  })
+
   async function openEpisode() {
     const file = { url: 'https://example.test/episode.mp3', type: 'audio/mpeg', position: 10, updatedAt: 1 }
     const episode = { ...post('a'), kind: 'article' as const, enclosures: [file] }
