@@ -39,7 +39,8 @@ let snapshot = db.organization.snapshot(backend.id)
 db.organization.apply(backend.id, snapshot.revision, [{ type: 'create-folder', title: 'A' }])
 snapshot = db.organization.snapshot(backend.id)
 db.organization.apply(backend.id, snapshot.revision, [{ type: 'add-membership', feedId, folderId: snapshot.navigation.folders[0].id }])
-const now = new Date().toISOString()
+const seededAt = Date.now()
+const now = new Date(seededAt).toISOString()
 const reports = [
   'The Willow Creek footbridge opens on Saturday morning. Cyclists can use it as soon as it opens. The path to the park reopens at the same time.',
   'Crews moved the landing uphill after they found soft ground near the creek. The route through the park is about the same length.',
@@ -50,7 +51,7 @@ for (const [index, subscriptionId] of [[1, feedId], [2, feedId], [3, feedId], [4
   db.importSourceEntries(backend.id, subscriptionId, [{ identity: { externalId: `synthetic-${index}` }, entry: {
     feedTitle: subscriptionId === feedId ? 'Synthetic feed' : '中文', feedUrl: 'https://example.test/feed', title: `Synthetic article ${index}`, author: 'Fixture writer',
     url: storyUrl(index), contentHtml: '<p>This article belongs to a disposable route test. No account or live installation is involved.</p>'.repeat(12),
-    excerpt: 'Disposable route fixture', publishedAt: now, timestamp: Date.now() - index, readingMinutes: 2, thumbnailUrl: '', kind: 'article',
+    excerpt: 'Disposable route fixture', publishedAt: now, timestamp: seededAt - index, readingMinutes: 2, thumbnailUrl: '', kind: 'article',
   } }])
 }
 // The reader tests use feed text for scroll restoration. Put the reporting in the full-text cache.
