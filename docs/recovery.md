@@ -112,19 +112,8 @@ migrations. Use the matching pre-upgrade data backup if a migration is not
 backward compatible. Retain both the original database and backup until you have
 verified the restored application.
 
-The 0.2.0-alpha.3 release uses database schema v17.
-The [alpha.3 upgrade steps](#upgrade-from-020-alpha2-to-020-alpha3) describe
-the migration backup from schema v16.
-
-A direct upgrade from 0.2.0-alpha.3 to v34 creates 17 full SQLite backups,
-one before each migration from v18 through v34. Allow roughly one
-database-sized file per step, plus room for the replacement article table
-and write-ahead log during the v33 rebuild.
-
-To roll back, follow the restore steps below with the snapshot for your build.
-For alpha.3, use `paper.sqlite.before-feed-icons-v18`, which contains schema v17.
-For v32, use `paper.sqlite.before-entry-state-writes-v33`. Once you verify the
-upgrade, you can remove intermediate backups for versions you no longer need.
+Paper 0.2.0-alpha.4 uses schema v34. See the [alpha.4 upgrade steps](#upgrade-from-020-alpha3-to-020-alpha4)
+for disk space, migration backups and rollback to alpha.3.
 
 ### Article state migration and recovery
 
@@ -247,6 +236,78 @@ Include your usual proxy overrides in those Compose commands. Verify startup,
 articles, reading positions, saved state and AI availability when enabled.
 The pull helper's archive contains only the runtime image. Source installations
 can build the selected tag as described in the [README](../README.md#build-from-source).
+
+### Upgrade from 0.2.0-alpha.3 to 0.2.0-alpha.4
+
+Stop Paper, every briefing command and the AI worker if you use it. Back up
+the full data directory and private configuration first, including `ai-auth`
+for the worker. Back up FreshRSS or Miniflux separately if used. Keep the
+same backend, account and Compose or proxy overrides.
+
+Startup migrates schema v17 to v34 on all backends. Before each step, Paper
+writes and verifies a private SQLite backup alongside the database. Allow
+roughly one database-sized file per step, plus room for the replacement
+`entries` table and SQLite write-ahead log during v33.
+
+| Schema in backup | Backup file |
+| --- | --- |
+| v17 | `<database-path>.before-feed-icons-v18` |
+| v18 | `<database-path>.before-pulse-catch-ups-v19` |
+| v19 | `<database-path>.before-briefing-delivery-v20` |
+| v20 | `<database-path>.before-feed-maintenance-v21` |
+| v21 | `<database-path>.before-feed-overrides-v22` |
+| v22 | `<database-path>.before-podcast-enclosures-v23` |
+| v23 | `<database-path>.before-annotations-v24` |
+| v24 | `<database-path>.before-reading-preferences-v25` |
+| v25 | `<database-path>.before-webhooks-v26` |
+| v26 | `<database-path>.before-story-choices-v27` |
+| v27 | `<database-path>.before-ai-activity-v28` |
+| v28 | `<database-path>.before-article-labels-v29` |
+| v29 | `<database-path>.before-entry-state-v30` |
+| v30 | `<database-path>.before-article-rules-v31` |
+| v31 | `<database-path>.before-saved-views-v32` |
+| v32 | `<database-path>.before-entry-state-writes-v33` |
+| v33 | `<database-path>.before-regex-rules-v34` |
+
+The v33 rebuild took about a minute for 200,000 articles on the test machine
+and 16 minutes for 1 million, including its backup. The reader's Compose
+health check allows 30 minutes for startup. If you maintain your own Compose
+file, set `start_period: 30m` or allow longer for slower storage. See
+[article state migration and recovery](#article-state-migration-and-recovery).
+
+For a reader without the AI worker, run these steps with your usual overrides.
+
+```sh
+docker compose stop paper
+# Back up the full data directory and private configuration before continuing.
+git fetch origin tag v0.2.0-alpha.4
+git switch --detach v0.2.0-alpha.4
+sh scripts/pull-image.sh
+docker compose up -d --no-build --force-recreate paper
+```
+
+With the Codex worker, stop and recreate both services.
+
+```sh
+docker compose -f compose.yaml -f compose.ai.yaml stop paper paper-ai
+# Back up the full data directory, private configuration and ai-auth before continuing.
+git fetch origin tag v0.2.0-alpha.4
+git switch --detach v0.2.0-alpha.4
+docker compose -f compose.yaml -f compose.ai.yaml pull paper paper-ai
+docker compose -f compose.yaml -f compose.ai.yaml up -d --no-build --force-recreate paper paper-ai
+```
+
+Once Paper is healthy, check articles, read status and stars. Check the worker
+if enabled. Keep the backups until you have verified the upgrade.
+
+Rolling back the image alone does not undo the migrations. To return to
+alpha.3, stop all Paper writers again and preserve the current data directory.
+[Restore the full pre-upgrade backup](#restore) with the alpha.3 images and
+original configuration. If restoring the SQLite snapshot in a separate copy
+of the data directory, use `paper.sqlite.before-feed-icons-v18` as
+`paper.sqlite`, without the newer WAL or SHM files. This restores schema v17.
+For a source build on v32, use `paper.sqlite.before-entry-state-writes-v33`.
+For v33, use `paper.sqlite.before-regex-rules-v34`.
 
 ### Upgrade from 0.2.0-alpha.2 to 0.2.0-alpha.3
 

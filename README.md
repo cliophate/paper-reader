@@ -6,10 +6,10 @@ or connect it to FreshRSS or Miniflux to share subscriptions, read state, and st
 
 Entirely AI-coded. If this steals kittens, don't blame me.
 
-Paper 0.2.0-alpha.3 is an alpha release for single-user use. Built-in login
+Paper 0.2.0-alpha.4 is an alpha release for single-user use. Built-in login
 is optional and starts off. Keep it local until you enable login or an
 [authenticated HTTPS proxy](docs/access.md) for remote access.
-See the [changelog](CHANGELOG.md) for 0.2.0-alpha.3 changes and upgrade notes.
+See the [changelog](CHANGELOG.md) for 0.2.0-alpha.4 changes and upgrade notes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/desktop-dark.png">
@@ -26,16 +26,15 @@ See the [changelog](CHANGELOG.md) for 0.2.0-alpha.3 changes and upgrade notes.
 ## Quick start
 
 Start new installations in standalone mode. For an existing installation, follow
-the [upgrade guide](docs/recovery.md#upgrade-from-020-alpha1-to-020-alpha2).
+the [upgrade guide](docs/recovery.md#upgrade-from-020-alpha3-to-020-alpha4).
 
-You need Docker Compose 2.24.4 or newer. The 0.2.0-alpha.3 images support Linux amd64.
-On a Raspberry Pi 4 or 5 with a 64-bit OS, or another Linux ARM64 server,
-[build from source](#build-from-source) until the first ARM64 release.
+You need Docker Compose 2.24.4 or newer. The 0.2.0-alpha.4 reader and
+Codex worker images support `linux/amd64` and `linux/arm64`.
 Standalone mode needs one Paper container and a persistent data directory. No
 FreshRSS or optional integration credentials are needed.
 
 ```sh
-git clone --branch v0.2.0-alpha.3 --depth 1 https://github.com/cliophate/paper-reader.git
+git clone --branch v0.2.0-alpha.4 --depth 1 https://github.com/cliophate/paper-reader.git
 cd paper-reader
 sh scripts/setup.sh
 sh scripts/pull-image.sh
@@ -118,7 +117,7 @@ and requires app passwords.
 
 ### Connect a feed server on first start
 
-In a source build after 0.2.0-alpha.3, set `PAPER_BACKEND=freshrss` or
+Set `PAPER_BACKEND=freshrss` or
 `PAPER_BACKEND=miniflux` and open Paper. If the connection is incomplete,
 Paper asks for a feed source. Enter the server root, including any installation
 subpath, and a FreshRSS username and API password or a Miniflux API key.
@@ -151,9 +150,6 @@ account in configuration does not transfer its data. Use a separate data directo
 for a different backend or account. Settings > Backend & data shows the current mode.
 
 ### Miniflux mode
-
-Native Miniflux support is available in source builds containing this change;
-use the build-from-source instructions below.
 
 Start with a new Paper data directory and Miniflux **2.3.2 or newer**. Set
 `PAPER_BACKEND=miniflux`, `MINIFLUX_BASE_URL` and `MINIFLUX_API_KEY` in private
@@ -259,7 +255,7 @@ edits before Paper contacts the server. They stay cleared if server logout fails
 
 ## Reading preferences
 
-In source builds after 0.2.0-alpha.3, open **Settings > Reading & connections**
+Open **Settings > Reading & connections**
 to choose how articles look and when Paper marks them read. Typeface, line
 spacing and column width follow you across browsers. Each feed's full-text mode also follows you. In Auto mode, Paper learns
 to load short articles from a feed after you request full text for three different
@@ -296,7 +292,7 @@ in Paper's environment. Separate multiple origins with commas.
 
 Each connection has setup instructions. AI supports an OpenAI-compatible API or the isolated Codex worker
 with a ChatGPT login. See [AI providers](docs/ai-providers.md) for setup. AI installs
-from before alpha.4 must follow the
+from before 0.1.0-alpha.4 must follow the
 [worker upgrade steps](docs/integrations.md#upgrade-an-existing-ai-installation).
 Open **AI activity and controls** in the same settings to see recent requests,
 set daily background limits or exclude feeds and folders.

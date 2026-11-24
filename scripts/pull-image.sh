@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-version=0.2.0-alpha.3
+version=0.2.0-alpha.4
 image="ghcr.io/cliophate/paper-reader:$version"
 if docker pull "$image"; then
     exit 0
