@@ -437,6 +437,35 @@ test('keeps alternate video sources without modern URL helpers and limits mounte
   await expect(page.locator('.article-content [src="/clip.mp4"]')).toHaveCount(0)
 })
 
+test('keeps the feed photo in the body and offers playback only for the video file', async ({ page }) => {
+  const photo = 'https://example.test/photo.svg'
+  await page.route(photo, route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"/>' }))
+  await openReader(page, false, false, { thumbnailUrl: photo, contentHtml: `<p>Intro.</p><img src="${photo}">`,
+    enclosures: [{ url: 'https://www.youtube.com/embed/synthetic', type: 'video' }, { url: 'https://example.test/clip.mp4', type: 'video/mp4' }] })
+  await expect(page.getByRole('button', { name: 'Play video for Synthetic article a' })).toBeVisible()
+  await expect(page.locator('.article-column img')).toHaveCount(1)
+  await expect(page.locator('.article-content img')).toHaveAttribute('src', photo)
+})
+
+test('uses the opening full-text figure and restores the feed thumbnail in feed view', async ({ page }) => {
+  const thumbnail = 'https://example.test/cover.webp'
+  const fullImage = 'https://example.test/cover_og.jpg'
+  for (const url of [thumbnail, fullImage]) {
+    await page.route(url, route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"/>' }))
+  }
+  await openReader(page, false, false, { thumbnailUrl: thumbnail })
+  await expect(page.locator('.article-lead-image img')).toHaveAttribute('src', thumbnail)
+  await page.route('**/api/fulltext', route => route.fulfill({ json: {
+    contentHtml: `<figure><img src="${fullImage}"></figure><div class="page"><p>Full story.</p></div>`, readingMinutes: 2,
+  } }))
+  await page.getByRole('button', { name: 'Fetch full article' }).click()
+  await expect(page.locator('.article-content img')).toHaveAttribute('src', fullImage)
+  await expect(page.locator('.article-lead-image')).toHaveCount(0)
+  await page.getByText('Article options', { exact: true }).click()
+  await page.getByRole('button', { name: 'Show feed version' }).click()
+  await expect(page.locator('.article-lead-image img')).toHaveAttribute('src', thumbnail)
+})
+
 test('keeps a video enclosure in the same space when playback starts', async ({ page }) => {
   const poster = 'https://example.test/cover.svg'
   const clip = 'https://example.test/clip.mp4'

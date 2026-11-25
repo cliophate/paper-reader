@@ -1,12 +1,11 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { Enclosure } from '../../shared/enclosures'
-import { MAX_ENCLOSURES } from '../../server/enclosure-limits'
 import { articleImageSource } from '../articleImages'
 import { playback } from '../api'
 import type { Entry } from '../types'
 
-export function EnclosurePlayers({ entry, posters }: { entry: Entry; posters: ReadonlyMap<string, string> }) {
-  return entry.enclosures?.slice(0, MAX_ENCLOSURES).map((file, i, files) => {
+export function EnclosurePlayers({ entry, files, posters }: { entry: Entry; files: Enclosure[]; posters: ReadonlyMap<string, string> }) {
+  return files.map((file, i) => {
     const kind = file.type.startsWith('audio') ? 'audio' : 'video'
     const label = `${kind}${files.length > 1 ? ` ${i + 1}` : ''}`
     const poster = posters.get(file.url)

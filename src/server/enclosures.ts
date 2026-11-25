@@ -1,3 +1,4 @@
+import { isMediaFileUrl } from './media-file-url.js'
 import type { Enclosure } from '../shared/enclosures.js'
 import { MAX_ENCLOSURES, MAX_ENCLOSURE_URL_BYTES } from './enclosure-limits.js'
 
@@ -5,6 +6,7 @@ interface Candidate {
   url: string
   type?: unknown
   medium?: unknown
+  player?: boolean
   size?: unknown
   duration?: unknown
 }
@@ -33,9 +35,9 @@ export function mediaEnclosures<T>(files: T[], toCandidate: (file: T) => Candida
   let urlBytes = 0
   for (const file of files) {
     const candidate = toCandidate(file)
-    if (!candidate.url) continue
     const prior = media.get(candidate.url)
     if (!prior && media.size >= MAX_ENCLOSURES) continue
+    if (!isMediaFileUrl(candidate.url)) continue
     let type = typeof candidate.type === 'string' ? candidate.type.trim().toLowerCase() : ''
     if (!type || type === 'application/octet-stream' || type === 'audio' || type === 'video') {
       const medium = String(candidate.medium || type)
@@ -43,6 +45,7 @@ export function mediaEnclosures<T>(files: T[], toCandidate: (file: T) => Candida
       const inferred = extension && Object.hasOwn(mediaTypes, extension) && mediaTypes[extension]
       type = inferred && (!medium || medium === 'application/octet-stream' || inferred.startsWith(medium + '/')) ? inferred : medium
     }
+    if (candidate.player && (type === 'video' || type === 'audio')) continue
     if (!/^(audio|video)(?:\/[\w.+-]+(?:\s*;[^\r\n]*)?)?$/.test(type)) continue
     const size = nonnegativeNumber(candidate.size)
     const duration = durationSeconds(candidate.duration)

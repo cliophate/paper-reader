@@ -19,6 +19,22 @@ describe('feed parsing', () => {
     expect(feed.entries[0].contentHtml).not.toMatch(/script|onerror|bad\(\)/)
     expect(feed.entries[1]).toMatchObject({ publishedAt: '', externalId: undefined, thumbnailUrl: 'https://example.test/cover.jpg' })
   })
+  it('skips video player pages and keeps direct video enclosures', () => {
+    const pages = [
+      'https://www.youtube.com/embed/synthetic', 'https://www.youtube-nocookie.com/embed/synthetic',
+      'https://youtu.be/synthetic', 'https://m.youtube.com/watch?v=synthetic',
+      'https://player.vimeo.com/video/123', 'https://vimeo.com/123', 'https://example.test/player.html',
+    ]
+    const files = ['https://example.test/stream', 'https://media.example.test/clip.mp4',
+      'https://player.vimeo.com/progressive_redirect/playback/123/clip.mp4']
+    const xml = rss(`<item xmlns:media="http://search.yahoo.com/mrss/">
+      ${pages.map(url => `<media:content url="${url}" medium="video"/>`).join('')}
+      <media:content url="/player/123" medium="video"><media:player url="/player/123"/></media:content>
+      <media:player url="https://media.example.test/clip.mp4"/>
+      ${files.map(url => `<media:content url="${url}" medium="video"/>`).join('')}
+    </item>`)
+    expect(parseFeed(xml, base).entries[0].enclosures.map(file => file.url)).toEqual(files)
+  })
   it.each([['65', 65], ['02:05', 125], ['0:60:01', undefined]])('reads an iTunes duration of %s', (raw, duration) => {
     const xml = rss(`<item xmlns:i="http://www.itunes.com/dtds/podcast-1.0.dtd">
       <i:duration>${raw}</i:duration><enclosure url="one.mp3" length="-1"/>

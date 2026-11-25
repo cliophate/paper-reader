@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PaperDatabase } from '../src/server/db.js'
 import { ingestFeed, successfulFeedFetch, type FeedEndpoint } from '../src/server/feed-ingestion.js'
+import { explicit } from '../src/server/greader-query.js'
 import { StandaloneBackend } from '../src/server/standalone-backend.js'
 import { escapeHtml } from '../src/server/text.js'
 
@@ -75,6 +76,17 @@ describe('repeatable feed ingestion', () => {
     expect(db.savePlaybackPosition(id, b, 65, 102)).toEqual({ position: 65, updatedAt: 102 })
     expect(db.savePlaybackPosition(id, b, 20, 102)).toEqual({ position: 65, updatedAt: 102 })
     expect(db.localEntry(id)!.enclosures![1]).toMatchObject({ url: b, position: 65, updatedAt: 102 })
+  })
+
+  it('hides previously stored player pages and rejects playback updates for them', () => {
+    const id = resolvedId(ingest())
+    const player = 'https://player.vimeo.com/video/123'
+    sql(c => c.prepare("INSERT INTO article_enclosures(entry_id, url, type, ordinal) VALUES (?, ?, 'video', 0)").run(id, player))
+    const entry = db.localEntry(id)!
+    expect(entry.enclosures).toBeUndefined()
+    const [readerItem] = explicit(db.greaderDatabase, backend.id, [String(entry.linkNumber)], 'ASC')
+    expect(readerItem).not.toHaveProperty('enclosure')
+    expect(db.savePlaybackPosition(id, player, 12, 100)).toBeUndefined()
   })
 
   it('caps a future playback timestamp at five minutes past the server clock', () => {

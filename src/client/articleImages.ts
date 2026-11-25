@@ -18,28 +18,45 @@ export function removeBrokenArticleImage(image: HTMLImageElement): void {
   else image.remove()
 }
 
-export function shouldShowArticleLeadImage(thumbnailUrl: string, contentHtml: string): boolean {
-  const thumbnailKey = imageKey(thumbnailUrl)
+export function shouldShowArticleLeadImage(thumbnailUrl: string, contentHtml: string, baseUrl?: string): boolean {
+  const thumbnailKey = imageKey(thumbnailUrl, baseUrl)
   if (!thumbnailKey) return false
-
-  const imageTags = contentHtml.match(/<img\b[^>]*>/gi) || []
-  for (const tag of imageTags) {
-    const attributes = [...tag.matchAll(/\b(?:src|srcset)=["']([^"']+)["']/gi)]
-    for (const attribute of attributes) {
-      const candidates = attribute[0].toLowerCase().startsWith('srcset')
-        ? attribute[1].split(',').map(value => value.trim().split(/\s+/)[0])
-        : [attribute[1]]
-      if (candidates.some(candidate => imageKey(candidate) === thumbnailKey)) return false
-    }
-  }
-  return true
+  if (!/<img\b/i.test(contentHtml)) return true
+  const template = document.createElement('template')
+  template.innerHTML = contentHtml
+  return !opensWithImage(template.content) && !articleBodyImageKeys(template.content, baseUrl).has(thumbnailKey)
 }
 
-function imageKey(value: string): string {
+function opensWithImage(body: DocumentFragment): boolean {
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT)
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (node.textContent?.trim()) return false
+    } else if (node.nodeName === 'IMG') {
+      const image = node as HTMLImageElement
+      return Boolean(image.getAttribute('src') || image.getAttribute('srcset') || image.closest('picture')?.querySelector('source[srcset]'))
+    } else if (!['A', 'ARTICLE', 'DIV', 'FIGURE', 'P', 'PICTURE', 'SOURCE', 'SPAN'].includes(node.nodeName)) return false
+  }
+  return false
+}
+
+export function articleBodyImageKeys(body: DocumentFragment, baseUrl?: string): Set<string> {
+  const keys = new Set<string>()
+  for (const image of body.querySelectorAll('img, picture > source[srcset]')) {
+    const candidates = (image.getAttribute('srcset') || '').split(',').map(value => value.trim().split(/\s+/)[0])
+    for (const src of [image.getAttribute('src'), ...candidates]) {
+      if (src) keys.add(imageKey(src, baseUrl))
+    }
+  }
+  return keys
+}
+
+export function imageKey(value: string, baseUrl?: string): string {
+  if (!value.trim()) return ''
   let decoded = value.trim()
   for (let pass = 0; pass < 3 && decoded.includes('&amp;'); pass += 1) decoded = decoded.replace(/&amp;/g, '&')
   try {
-    const url = new URL(decoded)
+    const url = new URL(decoded, baseUrl || undefined)
     if (!['http:', 'https:'].includes(url.protocol)) return ''
     const pathname = decodeURIComponent(url.pathname)
       .replace(/-\d{2,4}x\d{2,4}(?=\.(?:avif|gif|jpe?g|png|webp)$)/i, '')

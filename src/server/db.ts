@@ -6,6 +6,7 @@ import { displayFeedUrl, displayFeedTitle } from './feed-url-display.js'
 import { migrateFeedMaintenance } from './feed-maintenance.js'
 import { privateFeedRef } from './subscription-url.js'
 import { FeedOverrideStore, migrateFeedOverrides } from './feed-overrides.js'
+import { isMediaFileUrl } from './media-file-url.js'
 import { ENCLOSURE_SCHEMA_VERSION, entryEnclosures, migrateEnclosures, replaceEnclosures } from './enclosure-store.js'
 import { ReadingPreferenceStore, migrateReadingPreferences, READING_PREFERENCES_VERSION } from './reading-preference-store.js'
 import { AI_ACTIVITY_VERSION, AiActivityStore, migrateAiActivity } from './ai-activity.js'
@@ -1773,6 +1774,7 @@ export class PaperDatabase {
   }
 
   savePlaybackPosition(id: string, url: string, position: number, updatedAt: number) {
+    if (!isMediaFileUrl(url)) return
     const timestamp = Math.min(updatedAt, Date.now() + 5 * 60_000)
     const saved = this.db.prepare(`UPDATE article_enclosures SET position = ?, updated_at = ?
       WHERE entry_id = ? AND url = ? AND ordinal IS NOT NULL AND updated_at < ?`).run(position, timestamp, id, url, timestamp)

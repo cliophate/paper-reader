@@ -1,9 +1,11 @@
-import { JSDOM } from 'jsdom'
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import { removeBrokenArticleImage, shouldShowArticleLeadImage } from '../src/client/articleImages'
 
 function documentWith(html: string): Document {
-  return new JSDOM(html).window.document
+  const doc = document.implementation.createHTMLDocument()
+  doc.body.innerHTML = html
+  return doc
 }
 
 describe('broken article images', () => {
@@ -38,24 +40,33 @@ describe('article lead images', () => {
     )).toBe(true)
   })
 
+  it.each([
+    '<img src="cover_og.jpg">',
+    '<p><a href="/cover"><picture><source srcset="cover.webp"><img src="cover.jpg"></picture></a></p>',
+    '<figure><img src="cover_og.jpg"><figcaption>Cover credit</figcaption></figure>',
+  ])('uses the opening body image in %s', opening => {
+    expect(shouldShowArticleLeadImage('https://example.test/cover.webp', opening + '<p>Story.</p>')).toBe(false)
+    expect(shouldShowArticleLeadImage('https://example.test/cover.webp', '<p>Intro.</p>' + opening)).toBe(true)
+  })
+
   it('does not duplicate the thumbnail when the body has another size of it', () => {
     expect(shouldShowArticleLeadImage(
       'https://images.example.test/lead.jpg?width=600',
-      '<img src="https://images.example.test/lead.jpg?width=1200">',
+      '<p>Intro.</p><img src="https://images.example.test/lead.jpg?width=1200">',
     )).toBe(false)
   })
 
   it('recognises WordPress filename size variants as the same image', () => {
     expect(shouldShowArticleLeadImage(
       'https://example.test/uploads/hero-150x84.jpg',
-      '<img src="https://example.test/uploads/hero.jpg">',
+      '<p>Intro.</p><img src="https://example.test/uploads/hero.jpg">',
     )).toBe(false)
   })
 
   it('checks responsive image candidates and rejects invalid thumbnails', () => {
     expect(shouldShowArticleLeadImage(
       'https://images.example.test/lead.jpg',
-      '<img src="fallback.jpg" srcset="https://images.example.test/lead.jpg?width=600 600w, https://images.example.test/lead.jpg?width=1200 1200w">',
+      '<p>Intro.</p><img src="fallback.jpg" srcset="https://images.example.test/lead.jpg?width=600 600w, https://images.example.test/lead.jpg?width=1200 1200w">',
     )).toBe(false)
     expect(shouldShowArticleLeadImage('', '<p>Article text.</p>')).toBe(false)
   })

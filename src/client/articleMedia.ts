@@ -1,3 +1,5 @@
+import { isMediaFileUrl } from '../server/media-file-url'
+import { articleBodyImageKeys, imageKey } from './articleImages'
 import { MAX_ENCLOSURES } from '../server/enclosure-limits'
 import { formatInstagramHtml, formatThreadsHtml, formatXPostHtml, formatYoutubeHtml } from './socialHtml'
 import type { Entry } from './types'
@@ -16,7 +18,7 @@ export function prepareArticleMedia(entry: Pick<Entry, 'kind' | 'url' | 'content
     : entry.kind === 'threads' ? formatThreadsHtml(entry.contentHtml)
     : entry.kind === 'youtube' ? formatYoutubeHtml(entry.contentHtml)
     : entry.contentHtml
-  const files = entry.enclosures?.slice(0, MAX_ENCLOSURES) ?? []
+  const files = entry.enclosures?.filter(file => isMediaFileUrl(file.url)).slice(0, MAX_ENCLOSURES) ?? []
   const byUrl = new Map(files.map(file => [file.url, file]))
   const posters = new Map<string, string>()
   const thumbnail = mediaUrl(entry.thumbnailUrl, entry.url)
@@ -26,7 +28,7 @@ export function prepareArticleMedia(entry: Pick<Entry, 'kind' | 'url' | 'content
     }
   }
   const social = entry.kind !== 'article'
-  if (!/<video\b/i.test(html) && !(social && posters.size && /<img\b/i.test(html))) return { html, posters }
+  if (!/<video\b/i.test(html) && !(posters.size && /<img\b/i.test(html))) return { html, files, posters }
 
   // Parse inertly so embedded copies cannot preload before we remove them.
   const template = document.createElement('template')
@@ -38,7 +40,7 @@ export function prepareArticleMedia(entry: Pick<Entry, 'kind' | 'url' | 'content
       const src = source.getAttribute('src')
       if (src === null) continue
       const url = mediaUrl(src, entry.url)
-      if (url && !byUrl.has(url)) {
+      if (url && isMediaFileUrl(url) && !byUrl.has(url)) {
         source.setAttribute('src', url)
         continue
       }
@@ -49,7 +51,12 @@ export function prepareArticleMedia(entry: Pick<Entry, 'kind' | 'url' | 'content
     }
     if (removed && !media.hasAttribute('src') && !media.querySelector('source[src]')) media.remove()
   }
-  if (social && posters.size) {
+  if (!social && posters.size) {
+    const bodyImages = articleBodyImageKeys(template.content, entry.url)
+    for (const [url, poster] of posters) {
+      if (bodyImages.has(imageKey(poster))) posters.delete(url)
+    }
+  } else if (posters.size) {
     const used = new Set(posters.values())
     for (const image of template.content.querySelectorAll('img[src]')) {
       const url = mediaUrl(image.getAttribute('src'), entry.url)
@@ -60,5 +67,5 @@ export function prepareArticleMedia(entry: Pick<Entry, 'kind' | 'url' | 'content
       if (link && !link.childElementCount && !link.textContent?.trim()) link.remove()
     }
   }
-  return { html: template.innerHTML, posters }
+  return { html: template.innerHTML, files, posters }
 }
