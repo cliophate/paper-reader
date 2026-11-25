@@ -1,3 +1,4 @@
+import { isMediaFileUrl } from './media-file-url.js'
 import { advanceReaderClock } from './greader-schema.js'
 import type { DatabaseSync } from 'node:sqlite'
 import type { Enclosure } from '../shared/enclosures.js'
@@ -22,15 +23,19 @@ export function migrateEnclosures(db: DatabaseSync) {
   })
 }
 
-export function entryEnclosures(db: DatabaseSync, id: string): Enclosure[] {
+function storedEnclosures(db: DatabaseSync, id: string): Enclosure[] {
   return db.prepare('SELECT url, type, size, duration, position, updated_at FROM article_enclosures WHERE entry_id = ? AND ordinal IS NOT NULL ORDER BY ordinal').all(id)
     .map(row => ({ url: String(row.url), type: String(row.type), size: row.size === null ? undefined : Number(row.size),
       duration: row.duration === null ? undefined : Number(row.duration), position: Number(row.position), updatedAt: Number(row.updated_at) }))
 }
 
+export function entryEnclosures(db: DatabaseSync, id: string): Enclosure[] {
+  return storedEnclosures(db, id).filter(file => isMediaFileUrl(file.url))
+}
+
 // The caller owns the article import transaction. A repeated delivery keeps the listener's place.
 export function replaceEnclosures(db: DatabaseSync, id: string, files: Enclosure[]) {
-  const saved = entryEnclosures(db, id)
+  const saved = storedEnclosures(db, id)
   const same = files.length === saved.length && files.every((file, i) => {
     const prior = saved[i]
     return prior.url === file.url && prior.type === file.type && prior.size === file.size && prior.duration === file.duration

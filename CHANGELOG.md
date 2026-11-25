@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Articles no longer repeat the opening photo or use a body image as a video preview.
+  Paper skips YouTube and Vimeo player pages when listing video attachments.
+
 ## 0.2.0-alpha.4
 
 An alpha release with changes since [0.2.0-alpha.3](https://github.com/cliophate/paper-reader/releases/tag/v0.2.0-alpha.3).

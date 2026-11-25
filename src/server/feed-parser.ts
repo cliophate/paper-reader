@@ -208,18 +208,22 @@ function atomAuthor(node: Node): string { return value(child(node, 'author', ATO
 
 function xmlEnclosures(item: Node): Enclosure[] {
   const duration = durationSeconds(value(item, 'duration', ITUNES))
+  const groups = children(item, 'group', MEDIA)
+  const content = [item, ...groups].flatMap(parent => children(parent, 'content', MEDIA))
+  const players = new Set([item, ...groups, ...content].flatMap(parent => children(parent, 'player', MEDIA))
+    .map(player => feedUrl(attribute(player, 'url'), player.base)))
   const files = [
     ...children(item, 'enclosure'),
     ...children(item, 'link', ATOM).filter(link => attribute(link, 'rel') === 'enclosure'),
-    ...children(item, 'content', MEDIA),
-    ...children(item, 'group', MEDIA).flatMap(group => children(group, 'content', MEDIA)),
+    ...content,
   ]
-  return mediaEnclosures(files, node => ({
-    url: feedUrl(attribute(node, node.name === 'link' ? 'href' : 'url'), node.base),
-    type: attribute(node, 'type'), medium: attribute(node, 'medium'),
-    size: attribute(node, node.ns === MEDIA ? 'fileSize' : 'length'),
-    duration: attribute(node, 'duration'),
-  })).map(file => ({ ...file, duration: file.duration ?? duration }))
+  return mediaEnclosures(files, node => {
+    const url = feedUrl(attribute(node, node.name === 'link' ? 'href' : 'url'), node.base)
+    return {
+      url, player: players.has(url), type: attribute(node, 'type'), medium: attribute(node, 'medium'),
+      size: attribute(node, node.ns === MEDIA ? 'fileSize' : 'length'), duration: attribute(node, 'duration'),
+    }
+  }).map(file => ({ ...file, duration: file.duration ?? duration }))
 }
 
 export function parseFeed(xml: string, responseUrl: string, rules?: ExtractionRules): ParsedFeed {

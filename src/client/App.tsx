@@ -2283,22 +2283,23 @@ function selectedTextWithin(root: HTMLElement): string {
 
 function ArticleDocument({ entry, feedIconUrl, showPlayers }: { entry: Entry; feedIconUrl: string; showPlayers: boolean }) {
   const { contentHtml, kind, url, enclosures, thumbnailUrl } = entry
-  const { html, posters } = useMemo(() => prepareArticleMedia({ contentHtml, kind, url, enclosures, thumbnailUrl }),
+  const { html, files, posters } = useMemo(() => prepareArticleMedia({ contentHtml, kind, url, enclosures, thumbnailUrl }),
     [contentHtml, kind, url, enclosures, thumbnailUrl])
-  const players = showPlayers && <EnclosurePlayers entry={entry} posters={posters} />
+  const players = showPlayers && <EnclosurePlayers entry={entry} files={files} posters={posters} />
   if (kind !== 'article') return <SocialArticle entry={entry} feedIconUrl={feedIconUrl} html={html}>{players}</SocialArticle>
   return <div className="article-column">
     <ArticleHeader entry={entry} feedIconUrl={feedIconUrl} />
     {players}
-    {!(showPlayers && [...posters.values()].includes(thumbnailUrl)) && <ArticleLeadImage entry={entry} />}
+    {!(showPlayers && [...posters.values()].includes(thumbnailUrl)) && <ArticleLeadImage entry={entry} html={html} />}
     <ArticleBody html={html} />
   </div>
 }
 
-function ArticleLeadImage({ entry }: { entry: Entry }) {
+function ArticleLeadImage({ entry, html }: { entry: Entry; html: string }) {
   const [failed, setFailed] = useState(false)
   useEffect(() => setFailed(false), [entry.id, entry.thumbnailUrl])
-  if (failed || !articleImageSource(entry) || !shouldShowArticleLeadImage(entry.thumbnailUrl, entry.contentHtml)) return null
+  const show = useMemo(() => shouldShowArticleLeadImage(entry.thumbnailUrl, html, entry.url), [entry.thumbnailUrl, html, entry.url])
+  if (failed || !articleImageSource(entry) || !show) return null
   return <figure className="article-lead-image"><img src={articleImageSource(entry)} alt="" onError={() => setFailed(true)} /></figure>
 }
 

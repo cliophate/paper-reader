@@ -17,7 +17,7 @@ it('sets the resume position before play, saves seeks and pauses, and resets at 
   const entry = { id: 'episode', title: 'Episode', enclosures: [file] } as Entry
   const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined)
   try {
-    await act(() => root.render(<EnclosurePlayers entry={entry} posters={new Map()} />))
+    await act(() => root.render(<EnclosurePlayers entry={entry} files={[file]} posters={new Map()} />))
     const audio = container.querySelector('audio')!
     expect(audio.hasAttribute('src')).toBe(false)
     audio.dispatchEvent(new Event('pause'))
