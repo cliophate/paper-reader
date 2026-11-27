@@ -1,3 +1,4 @@
+import { navigationWithFeeds } from './fixtures/navigation.js'
 import { parseSearch } from '../src/server/search-query.js'
 import { Worker } from 'node:worker_threads'
 import * as regex from '../src/server/rule-regex.js'
@@ -52,6 +53,8 @@ beforeEach(() => { directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-work
 afterEach(() => { db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
 
 describe('reading across changing lists', () => {
+  beforeEach(() => db.replaceNavigation(navigationWithFeeds('feed/1', 'feed/2', 'feed/other')))
+
   it.each(['title', 'content', 'any'] as const)('uses the same Unicode mute matching for preview, backfill and ingestion in %s', async scope => {
     const fields = scope === 'title' ? { title: 'ÉCOLE' } : scope === 'content' ? { contentHtml: '<p>ÉCOLE</p>' } : { author: 'ÉCOLE' }
     db.upsertEntries([article(1, fields), article(2, { ...fields, feedId: 'feed/other' }), article(3)])

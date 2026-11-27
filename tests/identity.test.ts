@@ -284,14 +284,15 @@ describe('FreshRSS identity binding', () => {
     expect(db.identities.checkpoint(backend.id, 'backfill_continuation')).toBe('')
   })
 
-  it('adopts legacy IDs including orphan feeds without changing references or parity order', () => {
+  it('keeps orphan articles and their starred sync order when adopting legacy IDs', () => {
     const ids = ['tag:google.com,2005:reader/item/0000000000000002', 'tag:google.com,2005:reader/item/0000000000000001']
     db.upsertEntries(ids.map(id => ({ ...content, id, feedId: 'feed/orphan', read: true, starred: true })))
     db.saveReadingProgress(ids[0], 0.5)
     db.setSyncValue('backfill_complete', 'true')
     const source = freshRssIdentity('https://example.test', 'fixture')
     db.bindBackend(source)
-    expect(db.syncEntryIds(all)).toEqual(ids)
+    expect(db.syncEntryIds(all)).toEqual([])
+    expect(db.syncEntryIds({ kind: 'starred', id: 'starred', title: 'Starred' })).toEqual(ids)
     expect(db.localEntry(ids[0])).toMatchObject({ readingPosition: 0.5, read: true, starred: true })
     expect(db.identities.article(ids[0])).toEqual({ backendId: source.id, subscriptionId: 'feed/orphan' })
     expect(db.identities.resolve(source.id, 'feed/orphan', { externalId: ids[0] })).toMatchObject({ status: 'resolved', id: ids[0], created: false })
@@ -299,7 +300,8 @@ describe('FreshRSS identity binding', () => {
     reopen()
     db.bindBackend(source)
     expect(db.entryCount()).toBe(2)
-    expect(db.syncEntryIds(all)).toEqual(ids)
+    expect(db.syncEntryIds(all)).toEqual([])
+    expect(db.syncEntryIds({ kind: 'starred', id: 'starred', title: 'Starred' })).toEqual(ids)
   })
 
   it('does not silently adopt existing FreshRSS content as standalone', () => {
@@ -368,7 +370,7 @@ describe('v7 migration recovery', () => {
     db.bindBackend(source)
     expect(db.localEntry(id)).toMatchObject({ read: true, starred: true, readingPosition: 0.6, readwiseSavedAt: expect.any(String) })
     expect(db.discussion(id)?.entryId).toBe(id)
-    expect(db.syncEntryIds(all)).toEqual([id])
+    expect(db.syncEntryIds({ kind: 'starred', id: 'starred', title: 'Starred' })).toEqual([id])
     reopen()
     expect(sql(c => c.prepare('PRAGMA user_version').get()?.user_version)).toBe(DATABASE_VERSION)
     expect(sql(c => c.prepare('SELECT COUNT(*) AS n FROM article_arrivals').get()?.n)).toBe(1)

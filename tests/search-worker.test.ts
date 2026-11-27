@@ -1,3 +1,4 @@
+import { navigationWithFeeds } from './fixtures/navigation.js'
 import { DATABASE_VERSION } from '../src/server/auth-schema.js'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -211,6 +212,7 @@ it('uses the current read and star state for a saved view', async () => {
 })
 
 it('coalesces sidebar counts and gives searches and bulk previews the next worker slot', async () => {
+  database.replaceNavigation(navigationWithFeeds('feed'))
   for (let n = 0; n < 12; n++) database.savedViews.save({ title: 'View ' + n, query: 'synthetic' })
   const dispatch = vi.spyOn(Worker.prototype, 'postMessage')
   const batches = Array.from({ length: 10 }, () => service.savedViewCounts())
