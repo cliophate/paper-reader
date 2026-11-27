@@ -921,7 +921,8 @@ app.post('/api/streams/confirm-read', asyncRoute(async (request, response) => {
     if (view) database.savedViews.get(view.stream.id, view.revision)
     if (view || (localReadsActive && !standalone)) {
       const stream = view?.stream ?? { kind: 'all', id: 'all', title: 'All' }
-      const options = view?.options ?? { includeMuted: true }
+      // Search previews can include unsubscribed feeds. Recheck those IDs across the archive.
+      const options = view?.options ?? { includeMuted: true, includeInactive: true }
       ids = (await withRequestSignal(request, response, signal => search.select(stream, options,
         { kind: 'preview', withRevisions: false, ids }, signal))).ids
     }

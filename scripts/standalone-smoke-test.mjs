@@ -227,8 +227,11 @@ try {
   const afterRepair = (await request('/api/entries/item', { id: entry.id })).data.entry
   assert(afterRepair.starred && !afterRepair.read); assert.equal(afterRepair.readingPosition, 0.42)
   assert.equal((await request('/api/organization/commands', { expectedRevision: (await request('/api/organization')).data.revision, commands: [{ type: 'unsubscribe', feedId }] })).data.results[0].status, 'applied')
-  assert.equal((await request('/api/entries/item', { id: entry.id })).data.entry.id, entry.id)
-  assert.equal((await request('/api/entries?kind=all&id=all&unread=0')).data.items.length, 2)
+  assert.equal((await request('/api/entries?kind=all&id=all&unread=0')).data.items.length, 0)
+  assert.equal((await request('/api/streams/mark-read', { kind: 'all', id: 'all' })).data.count, 0)
+  const retained = (await request('/api/entries/item', { id: entry.id })).data.entry
+  assert.equal(retained.id, entry.id)
+  assert(retained.starred && !retained.read)
   slowIcons = true
   assert.equal((await request('/api/feeds', { url: feedOrigin + '/slow.xml', title: 'Slow synthetic feed' })).status, 201)
   await until(() => slowStarted && slowIconStarted)

@@ -37,6 +37,12 @@ function sql<T>(run: (connection: DatabaseSync) => T): T {
 }
 function reopen() { db.close(); db = new PaperDatabase(file) }
 
+const content: Omit<Entry, 'id' | 'feedId' | 'read' | 'starred' | 'sourceOrder'> = {
+  title: 'Fixture article', feedTitle: 'Feed', feedUrl: 'https://example.test/feed', url: 'https://example.test/article',
+  author: '', contentHtml: '<p>Fixture</p>', excerpt: 'Fixture', publishedAt: '2026-10-01T00:00:00Z',
+  timestamp: 1, readingMinutes: 1, thumbnailUrl: '', kind: 'article',
+}
+
 describe('standalone organization', () => {
   it('persists empty folders and opaque identities through rename, ordering and reopen', () => {
     const a = folder('Writers')
@@ -131,15 +137,49 @@ describe('standalone organization', () => {
     expect(snapshot().navigation.uncategorized).toHaveLength(2)
   })
 
+  it('keeps unread articles from unsubscribed feeds out of All articles', async () => {
+    const writers = folder('Writers')
+    const [one, two, removed] = ['One', 'Two', 'Removed'].map(feed)
+    for (const feedId of [one, two, removed]) apply({ type: 'add-membership', feedId, folderId: writers })
+    function article(feedId: string, title: string) {
+      const [result] = db.importSourceEntries(backend.id, feedId, [{ identity: { externalId: title }, entry: { ...content, title } }])
+      if (result.status !== 'resolved') throw new Error('Expected article')
+      return result.id
+    }
+    const first = article(one, 'First')
+    const second = article(two, 'Second')
+    article(two, 'Hidden')
+    const archived = article(removed, 'Archived')
+    db.commitLocalEntryState(backend.id, [archived], 'star')
+    await db.createMuteFilter('Hidden', 'title')
+    await db.backfillMuteFilters()
+    apply({ type: 'unsubscribe', feedId: removed })
+
+    for (const includeMuted of [false, true]) {
+      const nav = db.localNavigation(includeMuted)
+      expect(nav.unread).toBe(includeMuted ? 3 : 2)
+      expect(nav.unread).toBe(nav.folders.reduce((sum, folder) => sum + folder.unread, 0))
+      expect(nav.starred).toBe(1)
+    }
+    const all = { kind: 'all' as const, id: 'all', title: 'All articles' }
+    for (const unreadOnly of [false, true]) {
+      const page = db.localEntriesPage(all, { unreadOnly, limit: 2 })
+      expect(page.continuation).toBe('')
+      expect(page.items.map(item => item.id).sort()).toEqual([first, second].sort())
+    }
+    expect(db.previewUnread(all, {}, false).ids.sort()).toEqual([first, second].sort())
+    expect(db.localEntryIds(all, true).sort()).toEqual([first, second].sort())
+
+    const starred = { kind: 'starred' as const, id: 'starred', title: 'Starred' }
+    expect(db.localEntriesPage(starred).items).toMatchObject([{ id: archived, read: false }])
+    expect(db.localEntriesPage(all, { query: 'Archived' }).items.map(item => item.id)).toEqual([archived])
+    expect(db.localEntriesPage({ kind: 'feed', id: removed, title: 'Removed' }).items.map(item => item.id)).toEqual([archived])
+  })
+
   it('retains article history and subscription identity on folder removal and explicit unsubscribe', () => {
     const f = feed('Feed')
     const a = folder('A')
     apply({ type: 'add-membership', feedId: f, folderId: a })
-    const content: Omit<Entry, 'id' | 'feedId' | 'read' | 'starred' | 'sourceOrder'> = {
-      title: 'Fixture article', feedTitle: 'Feed', feedUrl: 'https://example.test/feed', url: 'https://example.test/article',
-      author: '', contentHtml: '<p>Fixture</p>', excerpt: 'Fixture', publishedAt: '2026-10-01T00:00:00Z',
-      timestamp: 1, readingMinutes: 1, thumbnailUrl: '', kind: 'article',
-    }
     const organizationRevision = snapshot().revision
     const imported = db.importSourceEntries(backend.id, f, [{ identity: { externalId: 'fixture' }, entry: content }])[0]
     expect(snapshot().revision).toBe(organizationRevision)

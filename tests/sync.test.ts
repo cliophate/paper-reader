@@ -57,6 +57,21 @@ describe('Backend synchronization', () => {
     expect((await sync.parity()).ready).toBe(true)
   })
 
+  it('matches remote navigation after a subscription disappears', async () => {
+    const previousFeed = { ...navigation.uncategorized[0], id: 'feed/previous' }
+    database.replaceNavigation({ ...navigation, uncategorized: [...navigation.uncategorized, previousFeed] })
+    const active = entry()
+    const archived = entry({ id: 'archived', feedId: previousFeed.id, starred: true })
+    database.upsertEntries([active, archived, entry({ id: 'orphan', feedId: 'feed/missing' })])
+    database.replaceNavigation(navigation)
+    database.setSyncValue('backfill_complete', 'true')
+
+    const source = new FakeBackend([active, active, archived].map(item => ({ items: [item], continuation: '' })))
+    source.navigation = async () => ({ ...navigation, unread: 1, starred: 1 })
+    const result = await new BackendSynchronizer(database, source, true, [28, 58]).parity()
+    expect(result.ready).toBe(true)
+  })
+
   it('still reports a missing arrival when total unread and starred counts agree', async () => {
     database.replaceNavigation(navigation)
     database.upsertEntries([entry({ id: 'local-only' })])
@@ -420,6 +435,7 @@ function deferred() {
 it('invalidates unread counts after a regex rule commits new hidden matches', async () => {
   const sync = new BackendSynchronizer(database, new FakeBackend([]), true, [28, 58])
   await database.rules.save({ query: 'author~/Ada/', actions: ['hide'] })
+  database.replaceNavigation(navigation)
   const changed = vi.fn(() => ({
     unread: database.localNavigation().unread,
     inTransaction: database.greaderDatabase.isTransaction,

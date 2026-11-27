@@ -109,6 +109,7 @@ export interface PageOptions {
   query?: string
   continuation?: string
   includeMuted?: boolean
+  includeInactive?: boolean
   after?: string
   before?: string
 }
@@ -1548,12 +1549,9 @@ export class PaperDatabase {
     })
     const uncategorized = [...feeds.values()]
       .filter(feed => !(folderIdsByFeed.get(feed.id) || []).length)
-    const counts = this.db.prepare(`
-      SELECT
-        (SELECT COUNT(*) FROM entry_state WHERE read = 0 ${visibleState}) AS unread,
-        (SELECT COUNT(*) FROM entry_state WHERE starred = 1) AS starred
-    `).get() as { unread: number | null; starred: number | null }
-    return this.numberNavigation({ unread: Number(counts.unread || 0), starred: Number(counts.starred || 0), folders, uncategorized })
+    const unread = feedRows.reduce((sum, row) => sum + Number(row.unread), 0)
+    const starred = Number(this.db.prepare('SELECT COUNT(*) AS n FROM entry_state WHERE starred = 1').get()!.n)
+    return this.numberNavigation({ unread, starred, folders, uncategorized })
   }
 
   private pageScope(stream: StreamRef, options: PageOptions, ranked = false, now = Date.now(), withState = false) {
@@ -1563,6 +1561,7 @@ export class PaperDatabase {
     const filterState = Boolean(options.unreadOnly) || stream.kind === 'starred'
     const joinedState = filterState || withState
     const scopeTable = filterState ? 'entry_state' : 'entries'
+    if (stream.kind === 'all' && !options.query?.trim() && !options.includeInactive) clauses.push(activeFeedClause(scopeTable))
     if (stream.kind === 'starred') clauses.push('entry_state.starred = 1')
     if (stream.kind === 'feed') { clauses.push(`${scopeTable}.feed_id = ?`); parameters.push(stream.id) }
     if (stream.kind === 'category') {
@@ -1996,6 +1995,7 @@ export class PaperDatabase {
   localEntryIds(stream: StreamRef, unreadOnly = false, includeMuted = false): string[] {
     const clauses: string[] = []
     const parameters: string[] = []
+    if (stream.kind === 'all') clauses.push(activeFeedClause('entry_state'))
     if (stream.kind === 'starred') clauses.push('starred = 1')
     if (stream.kind === 'feed') { clauses.push('feed_id = ?'); parameters.push(stream.id) }
     if (stream.kind === 'category') {
@@ -2694,6 +2694,11 @@ function normalizeUrl(value: string): string {
   } catch {
     return value
   }
+}
+
+function activeFeedClause(table: 'entries' | 'entry_state'): string {
+  // Check membership by feed ID so a page can still scan in publication order.
+  return `EXISTS (SELECT 1 FROM feeds WHERE feeds.id = ${table}.feed_id AND feeds.active = 1)`
 }
 
 function visibleEntryClause(idColumn: string): string {

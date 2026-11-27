@@ -1,3 +1,4 @@
+import { navigationWithFeeds } from './fixtures/navigation.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
@@ -771,6 +772,7 @@ describe('manual story choices', () => {
   })
 
   it('keeps visits and feed state through a mute, a snooze, new arrivals and expiry with grouping paused', () => {
+    db.replaceNavigation(navigationWithFeeds('feed/one', 'feed/two'))
     save(['1', '2', '3'].map(id => article(id)))
     const pulse = new PulseService(db, vi.fn(), false, () => now)
     pulse.visit('collection-one', 2)
